@@ -33,6 +33,7 @@ This file is the agent-agnostic version of `CLAUDE.md`. Both are kept in sync. D
 - Linting: **Biome 2** at the root + **oxlint** as a CI speed gate. No Prettier, no ESLint.
 - Type checking: **tsgo** (TypeScript 7 Go-based preview) via `@typescript/native-preview`.
 - Rust: `cargo clippy --all-targets -- -D warnings`, `cargo deny check`. License allow-list in each workspace's `deny.toml` (mirrored from `apps/cli/deny.toml`).
+- Skill schema drift: `apps/tolkin-cli/scripts/check-skill-schemas.ts` asserts every JSON key documented in `distribution/skills/*/SKILL.md` exists in live `--json` output and that skill versions match Cargo.toml. Runs in tolkin-ci; run it locally after changing any skill or JSON output shape.
 - WASM build: `wasm-pack build --target web` produces `pkg/`, consumed as a workspace dependency by `apps/tolkin-web`.
 
 ## Tracking convention
