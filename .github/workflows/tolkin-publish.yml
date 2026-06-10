@@ -195,11 +195,10 @@ jobs:
           node npm/tolkin/bin/tolkin.js --version
           echo "hello world" | node npm/tolkin/bin/tolkin.js count
 
-      # All six packages were first-published manually on 2026-06-10; OIDC
-      # trusted publishing takes over once each package's trusted publisher
-      # points at this workflow file. Wrapper and darwin are strict; the
-      # linux and win32 legs stay warning-only until their trusted-publisher
-      # configs are confirmed.
+      # All six packages were first-published manually on 2026-06-10 and the
+      # owner configured trusted publishers for all six against this workflow
+      # file, so every publish step is strict. The only tolerated absence is
+      # linux-arm64 when its runner was unavailable (handled in-script).
       - name: Publish tolkin-darwin-arm64
         run: |
           V="${{ needs.gate.outputs.local }}"
@@ -218,12 +217,7 @@ jobs:
             (cd npm/tolkin-darwin-x64 && npm publish)
           fi
 
-      # The linux packages are new; npm may require a first publish before
-      # a trusted publisher can be configured for them. Tolerate failure so
-      # the wrapper still ships; configure the trusted publishers and re-run
-      # once the packages exist.
       - name: Publish tolkin-linux-x64
-        continue-on-error: true
         run: |
           V="${{ needs.gate.outputs.local }}"
           if npm view "tolkin-linux-x64@$V" version > /dev/null 2>&1; then
@@ -233,7 +227,6 @@ jobs:
           fi
 
       - name: Publish tolkin-linux-arm64 (skips when the arm build was unavailable)
-        continue-on-error: true
         run: |
           V="${{ needs.gate.outputs.local }}"
           if [ ! -f npm/tolkin-linux-arm64/bin/tolkin ]; then
@@ -244,10 +237,7 @@ jobs:
             (cd npm/tolkin-linux-arm64 && npm publish)
           fi
 
-      # tolkin-win32-x64 is a new package; npm requires a manual first publish
-      # before a trusted publisher can be configured on its settings page.
       - name: Publish tolkin-win32-x64
-        continue-on-error: true
         run: |
           V="${{ needs.gate.outputs.local }}"
           if [ ! -f npm/tolkin-win32-x64/bin/tolkin.exe ]; then
@@ -269,15 +259,15 @@ jobs:
             [ "$GOT" = "$V" ] && break
             sleep 5
           done
-          # The wrapper and the darwin packages are required; a miss fails the run.
+          # Five packages are hard-required; a miss fails the run.
           npm view tolkin-cli version
-          npm view "tolkin-darwin-arm64@$V" version
-          npm view "tolkin-darwin-x64@$V" version
-          # Warning-only until their trusted publishers are confirmed.
-          for pkg in tolkin-linux-x64 tolkin-linux-arm64 tolkin-win32-x64; do
-            if npm view "$pkg@$V" version > /dev/null 2>&1; then
-              echo "$pkg@$V verified."
-            else
-              echo "::warning::$pkg@$V is not on the registry. First publish must be manual: stage the CI binary, npm publish from npm/$pkg, then configure its trusted publisher."
-            fi
+          for pkg in tolkin-darwin-arm64 tolkin-darwin-x64 tolkin-linux-x64 tolkin-win32-x64; do
+            npm view "$pkg@$V" version
           done
+          # linux-arm64 stays warning-only: its runner availability varies by
+          # plan, and an unavailable runner means a legitimately absent leg.
+          if npm view "tolkin-linux-arm64@$V" version > /dev/null 2>&1; then
+            echo "tolkin-linux-arm64@$V verified."
+          else
+            echo "::warning::tolkin-linux-arm64@$V is not on the registry (arm runner unavailable this run, or its publish failed)."
+          fi
