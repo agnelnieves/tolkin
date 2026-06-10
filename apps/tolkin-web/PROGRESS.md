@@ -847,3 +847,7 @@ When no output token count is supplied, the calculator now bills zero output, se
 | Browser verification | SSR curl on the dev server: cost panel renders the new default note, toggle label, and "input only" placeholder; /bench renders the catalog-estimate labels and unchanged numbers. The toggle's interactive reflow was not visually exercised (no browser tooling in session); the wiring is covered by unit tests and the rendered DOM copy. |
 
 Incident recorded in LESSONS.md: the orchestrator's shell cwd drifted into completed agent worktrees twice, landing one merge on the wrong branch (recovered by SHA-merging from the main checkout; no work lost). Bumped 0.9.0 -> 0.9.1.
+
+### 2026-06-10: 0.9.1 shipped; audit workflow proven live on a real PR
+
+The wave 0 merge published 0.9.1 across all six packages via trusted publishing with every leg strict (run 27311934160), the first release needing zero owner action. tolkin-ci green on main including the skill schema drift lint's first CI execution. The P0-1 proof landed: PR 26 (a real docs change adding the drift lint to CLAUDE.md/AGENTS.md) triggered the repaired tolkin-audit workflow, which ran green and posted the sticky comment with the per-file token table (both changed files at ~1K tokens, zero findings) and the repo load profile (always 7,453 / on-invocation 32,336). Registry verified: tolkin-cli@0.9.1, tolkin-darwin-arm64@0.9.1, tolkin-win32-x64@0.9.1. PR 26 merged; wave 0 closed. Wave 1 (`tolkin cache` slice 1) is in flight.
