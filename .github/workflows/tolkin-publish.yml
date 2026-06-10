@@ -195,14 +195,12 @@ jobs:
           node npm/tolkin/bin/tolkin.js --version
           echo "hello world" | node npm/tolkin/bin/tolkin.js count
 
-      # RENAME TRANSITION: every tolkin package is brand new, and a first
-      # publish cannot use OIDC trusted publishing. All publish steps tolerate
-      # failure and the verify step is warning-only until the owner first
-      # publishes the six packages manually and configures their trusted
-      # publishers (workflow filename: tolkin-publish.yml). Re-tighten the
-      # wrapper and darwin steps afterwards.
+      # All six packages were first-published manually on 2026-06-10; OIDC
+      # trusted publishing takes over once each package's trusted publisher
+      # points at this workflow file. Wrapper and darwin are strict; the
+      # linux and win32 legs stay warning-only until their trusted-publisher
+      # configs are confirmed.
       - name: Publish tolkin-darwin-arm64
-        continue-on-error: true
         run: |
           V="${{ needs.gate.outputs.local }}"
           if npm view "tolkin-darwin-arm64@$V" version > /dev/null 2>&1; then
@@ -212,7 +210,6 @@ jobs:
           fi
 
       - name: Publish tolkin-darwin-x64
-        continue-on-error: true
         run: |
           V="${{ needs.gate.outputs.local }}"
           if npm view "tolkin-darwin-x64@$V" version > /dev/null 2>&1; then
@@ -262,7 +259,6 @@ jobs:
           fi
 
       - name: Publish tolkin-cli (wrapper, last)
-        continue-on-error: true
         run: (cd npm/tolkin && npm publish)
 
       - name: Verify from the registry
@@ -273,10 +269,12 @@ jobs:
             [ "$GOT" = "$V" ] && break
             sleep 5
           done
-          # RENAME TRANSITION: all six packages are warning-only until their
-          # one-time manual first publishes land; then make the wrapper and
-          # darwin packages strict again.
-          for pkg in tolkin-cli tolkin-darwin-arm64 tolkin-darwin-x64 tolkin-linux-x64 tolkin-linux-arm64 tolkin-win32-x64; do
+          # The wrapper and the darwin packages are required; a miss fails the run.
+          npm view tolkin-cli version
+          npm view "tolkin-darwin-arm64@$V" version
+          npm view "tolkin-darwin-x64@$V" version
+          # Warning-only until their trusted publishers are confirmed.
+          for pkg in tolkin-linux-x64 tolkin-linux-arm64 tolkin-win32-x64; do
             if npm view "$pkg@$V" version > /dev/null 2>&1; then
               echo "$pkg@$V verified."
             else
