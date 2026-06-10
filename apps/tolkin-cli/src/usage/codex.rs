@@ -236,6 +236,12 @@ pub fn parse_file(
         totals,
         by_model,
         by_day,
+        // No per-request retention for Codex: rollout events carry fresh
+        // input and cached input but none of the cache-write fields the
+        // churn and TTL analyses are built on (OpenAI's automatic caching
+        // exposes no write events and no TTL choice). Cache analysis is
+        // Claude-Code-sourced for now; see usage::types::SessionUsage.
+        requests: Vec::new(),
     })
 }
 

@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
 
+mod cache_analysis;
 mod cli;
 mod commands;
 mod input;

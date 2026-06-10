@@ -597,6 +597,7 @@ mod tests {
             totals: UsageTotals::default(),
             by_model: BTreeMap::new(),
             by_day: BTreeMap::new(),
+            requests: Vec::new(),
         }
     }
 
@@ -619,6 +620,7 @@ mod tests {
             totals,
             by_model,
             by_day: BTreeMap::new(),
+            requests: Vec::new(),
         }
     }
 

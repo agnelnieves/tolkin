@@ -82,6 +82,17 @@ pub fn run(args: StatsArgs) -> Result<()> {
     };
 
     if args.json {
+        // Additive cache block: the measured tier gains a `cache` object
+        // carrying the prompt-cache health report. Strictly additive; no
+        // existing key moves or renames (the skill schema lint enforces the
+        // documented keys). Injected at the JSON layer so the TierReport
+        // struct and its consumers stay untouched.
+        let mut tiers_value = serde_json::to_value(&report)?;
+        if !tiers_value["measured"].is_null() {
+            if let Some(cache_report) = snapshot.compute_cache(scope_project) {
+                tiers_value["measured"]["cache"] = serde_json::to_value(&cache_report)?;
+            }
+        }
         let out = json!({
             "scope": if args.global { "global" } else { "project" },
             "project_key": scope_project,
@@ -98,7 +109,7 @@ pub fn run(args: StatsArgs) -> Result<()> {
                 "skipped_lines": snapshot.usage_data.as_ref().map(|d| d.skipped_lines),
                 "skipped_files": snapshot.usage_data.as_ref().map(|d| d.skipped_files),
             },
-            "tiers": report,
+            "tiers": tiers_value,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());

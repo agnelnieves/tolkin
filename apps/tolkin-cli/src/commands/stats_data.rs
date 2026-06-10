@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tolkin_core::pricing;
 use tolkin_core::Provider;
 
+use crate::cache_analysis;
 use crate::ledger::{self, Config, LedgerRecord};
 use crate::tiers::{self, TierReport};
 use crate::usage::{self, cost, types::UsageData};
@@ -110,6 +111,22 @@ impl StatsSnapshot {
             cost_fn: &cost::cost_usd,
             now: self.now,
         })
+    }
+
+    /// Cache health report for the given scope (`None` = global). `None` is
+    /// returned exactly when ingestion is off (no usage data was read), so
+    /// every surface gates the cache section on the same condition the
+    /// measured tier already uses.
+    pub fn compute_cache(
+        &self,
+        scope_project: Option<&str>,
+    ) -> Option<cache_analysis::CacheReport> {
+        let usage = self.usage_data.as_ref()?;
+        Some(cache_analysis::analyze(&cache_analysis::CacheInputs {
+            scope_project,
+            sessions: &usage.sessions,
+            rate_fn: &cost::cache_rates,
+        }))
     }
 }
 

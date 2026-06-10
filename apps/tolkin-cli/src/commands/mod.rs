@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod cache;
 pub mod compare;
 pub mod cost;
 pub mod count;

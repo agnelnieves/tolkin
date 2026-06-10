@@ -75,6 +75,7 @@ fn render_setup_only() -> Result<String> {
             global_projects: &[],
             spend_days: &[],
             spend_models: &[],
+            cache: None,
             ingestion_on: false,
             setup_needed: true,
             rate_model_display: "",
@@ -105,6 +106,8 @@ fn render_static_frame(snapshot: &StatsSnapshot, w: u16, h: u16) -> Result<Strin
     let today = data::day_string(snapshot.now);
     let spend_days = data::spend_day_bars(snapshot, &today);
     let spend_models = data::top_model_rows(&global_report);
+    // The Spend tab is global scope, so its cache health row is too.
+    let cache_report = snapshot.compute_cache(None);
 
     // Static frame: try the project scan inline (the compact frame is a
     // one-shot snapshot, no background thread). If it fails for any reason we
@@ -125,6 +128,7 @@ fn render_static_frame(snapshot: &StatsSnapshot, w: u16, h: u16) -> Result<Strin
             global_projects: &machine,
             spend_days: &spend_days,
             spend_models: &spend_models,
+            cache: cache_report.as_ref(),
             ingestion_on: snapshot.ingestion_on,
             setup_needed,
             rate_model_display: snapshot.rate_model_display,
@@ -228,6 +232,8 @@ fn draw_with_state(
             let today = data::day_string(s.now);
             let spend_days = data::spend_day_bars(s, &today);
             let spend_models = data::top_model_rows(&global_report);
+            // The Spend tab is global scope, so its cache health row is too.
+            let cache_report = s.compute_cache(None);
             let setup_needed = s.config.is_none() && s.records.is_empty();
             let view = DashboardView {
                 tab,
@@ -239,6 +245,7 @@ fn draw_with_state(
                 global_projects: &machine,
                 spend_days: &spend_days,
                 spend_models: &spend_models,
+                cache: cache_report.as_ref(),
                 ingestion_on: s.ingestion_on,
                 setup_needed,
                 rate_model_display: s.rate_model_display,
@@ -257,6 +264,7 @@ fn draw_with_state(
                 global_projects: &[],
                 spend_days: &[],
                 spend_models: &[],
+                cache: None,
                 ingestion_on: false,
                 setup_needed: true,
                 rate_model_display: "",
