@@ -1,0 +1,44 @@
+Storefront weekly sync, 2026-06-10, 10:00 to 10:45 Pacific
+Attendees: Priya (TL), Marco (backend), Lina (frontend), Devon (platform), Sasha (PM), Iris (data)
+Note taker: Sasha
+Apologies: Theo (on PTO until next Tuesday)
+
+Agenda
+1. Last week recap and current sprint status.
+2. Catalog cutover readiness review.
+3. Risks and open questions.
+4. Decisions and owners.
+
+Last week recap
+Priya opened with the standard recap. The catalog service shipped to staging on Wednesday and ran through a full eight hour soak test with synthetic traffic at three times peak. No regressions surfaced. Marco said the soak revealed a subtle issue with the connection pool sizing under burst traffic, and he opened a follow up ticket that is already half done. Lina confirmed the new browse pages render under one second on the standard mid range phone test rig, which is the target the team agreed to last quarter. Devon reported that the tracing proof of concept is ready to demo and will be the first agenda item next week.
+
+Current sprint status
+The current sprint runs through end of day Friday. Of the twelve tickets in the sprint, ten are done, one is in review, and one is still in progress but on track. Sasha reminded the team to update the burndown chart by end of day so the demo deck is accurate. Iris flagged that the dashboards for the catalog service still show the staging environment by default, and she will fix that today.
+
+Catalog cutover readiness
+This was the bulk of the meeting. Priya walked the team through the cutover checklist one item at a time. The contract test suite has reached eighty two percent coverage, above the agreed seventy percent bar. The fallback path that routes traffic back to the monolith has been exercised in staging twice with no errors. The on call runbook has been reviewed by Devon and updated with the new alert paths. The new dashboards are live in staging and will be promoted to production at cutover.
+
+Lina raised a concern about cache warming during the first few minutes after cutover. The current plan does a cold start that may produce a brief latency spike for browse traffic. Marco said the spike will be on the order of a few hundred milliseconds for under a minute, which is within the agreed budget for cutover events. The team agreed to instrument the warm up window explicitly so it is visible in the postmortem if anything goes wrong.
+
+Risks
+Sasha asked the team to name the top three risks. Marco named the cache warm up window already discussed. Devon named the tracing pipeline, which has been stable in staging but has never carried production traffic; the plan is to keep traces sampled at five percent for the first day. Iris named the data dashboards; she has not yet validated that the new catalog metrics flow into the same warehouse table the leadership team reads on Monday mornings.
+
+Open questions
+There were three open questions. First, do we cut over during the standard low traffic window on Tuesday morning, or do we use the slightly lower Sunday night window? Priya leaned Tuesday because the team is on hand if something goes wrong. The team agreed. Second, do we hold the release of the new browse experience for one week after cutover to isolate any regressions? Lina argued yes, and the team agreed. Third, do we announce the cutover to the wider engineering org? Sasha said yes and will draft a short note for the engineering channel.
+
+Decisions
+1. Catalog cutover proceeds Tuesday at 09:30 Pacific.
+2. The new browse experience ships one week after cutover, behind a feature flag.
+3. Sasha sends a heads up to the wider engineering channel by end of day Friday.
+4. Devon owns the tracing pipeline through cutover plus seventy two hours.
+5. Iris validates the data warehouse pipeline by end of day Monday.
+
+Action items
+Marco: finalize connection pool sizing fix and merge by Thursday.
+Lina: instrument the cache warm up window and add a panel to the cutover dashboard.
+Devon: walk the on call rotation through the runbook on Friday afternoon.
+Iris: validate the warehouse pipeline and confirm by Monday end of day.
+Sasha: draft the engineering channel announcement and circulate for review.
+Priya: own the cutover go no go call on Tuesday morning.
+
+Next meeting: Tuesday post cutover, 14:00 Pacific. Standard sync resumes the following Monday.

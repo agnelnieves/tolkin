@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // build-report.mjs
-// Dependency-free Node.js script that reads a tokler project --json report
+// Dependency-free Node.js script that reads a tolkin project --json report
 // and emits a markdown comment suitable for a GitHub PR comment or step summary.
 //
 // Usage: node build-report.mjs <input.json> <output.md>
 //
 // Local override for testing:
-//   TOKLER_BIN=/path/to/tokler node build-report.mjs report.json out.md
+//   TOLKIN_BIN=/path/to/tolkin node build-report.mjs report.json out.md
 
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -21,7 +21,7 @@ let r;
 try {
   r = JSON.parse(raw);
 } catch (err) {
-  console.error("Failed to parse tokler JSON output:", err.message);
+  console.error("Failed to parse tolkin JSON output:", err.message);
   process.exit(1);
 }
 
@@ -36,8 +36,8 @@ function rangeStr(min, max) {
 
 const lines = [];
 
-lines.push("<!-- tokler-report -->");
-lines.push("## Tokler agent-context audit");
+lines.push("<!-- tolkin-report -->");
+lines.push("## Tolkin agent-context audit");
 lines.push("");
 
 // Load profile table

@@ -1,0 +1,24 @@
+[package]
+name = "tolkin-core-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WebAssembly bindings for tolkin-core"
+license = "MIT"
+# Ships via wasm-pack pkg/ output, not crates.io. Flip at OSS extraction.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tolkin-core = { path = "../core" }
+wasm-bindgen = "0.2"
+serde_json = "1"
+
+# Modern rustc emits bulk-memory ops and saturating float-to-int casts
+# (i64.trunc_sat_f64_u, used by the cost calculator). The wasm-opt bundled with
+# wasm-pack does not enable these by default, so opt them in explicitly. Both are
+# baseline features in every browser we target.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-O', '--enable-bulk-memory', '--enable-nontrapping-float-to-int']

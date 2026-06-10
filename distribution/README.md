@@ -1,8 +1,8 @@
-# Tokler
+# Tolkin
 
 Privacy-first AI token analyzer for agent workflows.
 
-Tokler measures what your agent-context files actually cost: CLAUDE.md, AGENTS.md,
+Tolkin measures what your agent-context files actually cost: CLAUDE.md, AGENTS.md,
 skills, MCP configs, commands, and anything else loaded into the model on your behalf.
 It runs entirely on your machine. No telemetry, no uploads, no network calls except
 an optional BYOK tokenizer verification you control.
@@ -14,19 +14,19 @@ has not been measured.
 
 ```sh
 # Count tokens in a file
-npx tokler-cli scan
+npx tolkin-cli scan
 
 # Audit one file for token waste
-npx tokler-cli audit CLAUDE.md
+npx tolkin-cli audit CLAUDE.md
 
 # Repo-wide audit with load profiles
-npx tokler-cli project .
+npx tolkin-cli project .
 
 # Stats (local ledger summary)
-npx tokler-cli stats
+npx tolkin-cli stats
 ```
 
-All commands accept `--json` for machine-readable output. `bunx tokler-cli` works
+All commands accept `--json` for machine-readable output. `bunx tolkin-cli` works
 identically everywhere `npx` does.
 
 ## Install paths
@@ -37,27 +37,27 @@ Works with Claude Code, Cursor, Windsurf, Codex, and ~71 other agents that suppo
 the `skills/<name>/SKILL.md` layout.
 
 ```sh
-npx skills add <public-repo> --skill tokler-audit
-npx skills add <public-repo> --skill tokler-slim
-npx skills add <public-repo> --skill tokler-optimize
+npx skills add <public-repo> --skill tolkin-audit
+npx skills add <public-repo> --skill tolkin-slim
+npx skills add <public-repo> --skill tolkin-optimize
 ```
 
 Three skills are available:
 
 | Skill | What it does |
 | :--- | :--- |
-| `tokler-audit` | Repo-wide audit: run `tokler project`, interpret findings, prioritize by severity, propose concrete edits |
-| `tokler-slim` | MCP analysis: apply slim snippets to your MCP config, verify the delta, report realized vs identified savings |
-| `tokler-optimize` | Full loop: audit, apply safe fixes (with your confirmation), re-measure, summarize with tier labels |
+| `tolkin-audit` | Repo-wide audit: run `tolkin project`, interpret findings, prioritize by severity, propose concrete edits |
+| `tolkin-slim` | MCP analysis: apply slim snippets to your MCP config, verify the delta, report realized vs identified savings |
+| `tolkin-optimize` | Full loop: audit, apply safe fixes (with your confirmation), re-measure, summarize with tier labels |
 
 ### 2. Claude Code plugin
 
-Installs all three skills namespaced as `/tokler:tokler-audit`, `/tokler:tokler-slim`,
-and `/tokler:tokler-optimize`.
+Installs all three skills namespaced as `/tolkin:tolkin-audit`, `/tolkin:tolkin-slim`,
+and `/tolkin:tolkin-optimize`.
 
 ```sh
 /plugin marketplace add <public-repo>
-/plugin install tokler@tokler
+/plugin install tolkin@tolkin
 ```
 
 ### 3. GitHub Action
@@ -67,8 +67,8 @@ heaviest files, findings, and identified savings on every pull request that touc
 agent-context files.
 
 ```yaml
-# .github/workflows/tokler-audit.yml
-name: Tokler audit
+# .github/workflows/tolkin-audit.yml
+name: Tolkin audit
 
 on:
   pull_request:
@@ -87,7 +87,7 @@ jobs:
         with:
           fail-on: none        # none | low | medium | high
           comment-mode: sticky # sticky | new | off
-          version: "0.7.0"
+          version: "0.9.0"
 ```
 
 #### Action inputs
@@ -97,7 +97,7 @@ jobs:
 | `fail-on` | `none` | Exit 2 when findings at or above this severity exist. `none` always succeeds. |
 | `working-directory` | `.` | Directory to audit. |
 | `comment-mode` | `sticky` | `sticky`: upsert one comment per PR. `new`: always post fresh. `off`: no comment. |
-| `version` | `0.7.0` | tokler-cli version pinned for this action. |
+| `version` | `0.9.0` | tolkin-cli version pinned for this action. |
 
 The `permissions: pull-requests: write` block is required for `sticky` and `new`
 comment modes. For `comment-mode: off` or non-PR events, `contents: read` is sufficient.
@@ -105,13 +105,13 @@ comment modes. For `comment-mode: off` or non-PR events, `contents: read` is suf
 On non-pull_request events the action writes the same report to the GitHub Actions
 step summary instead of a PR comment.
 
-**Local binary override:** set `TOKLER_BIN=/path/to/tokler` to skip `npx` entirely.
-Useful in CI environments where you build the binary from source (see `tokler-action-dryrun.yml`
+**Local binary override:** set `TOLKIN_BIN=/path/to/tolkin` to skip `npx` entirely.
+Useful in CI environments where you build the binary from source (see `tolkin-action-dryrun.yml`
 in the calling repo for an example).
 
 ## Savings tier vocabulary
 
-Every number Tokler surfaces belongs to exactly one tier, always labeled:
+Every number Tolkin surfaces belongs to exactly one tier, always labeled:
 
 | Tier | Name | Definition |
 | :--- | :--- | :--- |

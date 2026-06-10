@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+html,
+body {
+  height: 100%;
+}
+
+/* Token-chip palette for the visualizer. Six muted zinc/indigo tones tuned for
+   the dark theme; chips cycle through them by token index so adjacent token
+   boundaries stay visually distinct without shouting. Defined as plain classes
+   so the set is static (no dynamic Tailwind class generation). */
+.tok-chip {
+  display: inline;
+  border-radius: 3px;
+  padding-top: 0.5px;
+  padding-bottom: 0.5px;
+  white-space: pre-wrap;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.tok-chip-0 {
+  background-color: rgba(63, 63, 70, 0.55);
+}
+.tok-chip-1 {
+  background-color: rgba(99, 102, 241, 0.22);
+}
+.tok-chip-2 {
+  background-color: rgba(82, 82, 91, 0.55);
+}
+.tok-chip-3 {
+  background-color: rgba(79, 70, 229, 0.26);
+}
+.tok-chip-4 {
+  background-color: rgba(113, 113, 122, 0.45);
+}
+.tok-chip-5 {
+  background-color: rgba(67, 56, 202, 0.3);
+}
+
+/* Faint dot standing in for a space inside a chip, and the small return glyph
+   shown before a real line wrap. Both are muted so the underlying text stays
+   the focus. */
+.tok-space {
+  color: rgba(161, 161, 170, 0.55);
+}
+.tok-newline {
+  color: rgba(129, 140, 248, 0.65);
+}

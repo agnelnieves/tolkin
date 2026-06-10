@@ -1,0 +1,46 @@
+name: tolkin drift watchdog
+
+# Weekly check that the local cl100k-based Claude token approximation has
+# not drifted from Anthropic's count_tokens ground truth.
+#
+# Required secret: ANTHROPIC_API_KEY (an Anthropic API key; count_tokens is
+# free, and the CLI redacts fixture text before sending it). If the secret
+# is missing the script fails with a clear message, and that failure IS the
+# alert that setup is incomplete. On any failure GitHub notifies the repo
+# owner; there is no extra issue-creation machinery.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+# Node 20 action runtimes are deprecated; opt into the Node 24 default
+# ahead of the 2026-06-16 flip so incompatibilities surface in CI now.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Claude approximation vs count_tokens
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/tolkin-cli
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tolkin-cli
+
+      - name: cargo build (release)
+        run: cargo build --release
+
+      - name: Run drift check
+        run: bash scripts/drift-check.sh
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

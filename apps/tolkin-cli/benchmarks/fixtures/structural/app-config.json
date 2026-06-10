@@ -1,0 +1,162 @@
+{
+  "service": {
+    "name": "orderly-api",
+    "version": "2.14.3",
+    "description": "Public-facing storefront API for the Orderly retail platform",
+    "owner": {
+      "team": "platform-storefront",
+      "contact": "platform@orderly.example",
+      "oncall": "https://oncall.example/services/orderly-api"
+    },
+    "lifecycle": "general-availability",
+    "tier": "tier-1"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8443,
+    "shutdown_grace_seconds": 25,
+    "request_timeout_ms": 15000,
+    "max_body_bytes": 4194304,
+    "compression": {
+      "enabled": true,
+      "algorithms": ["br", "gzip"],
+      "min_size_bytes": 1024,
+      "level": 5
+    },
+    "tls": {
+      "min_version": "TLS1.3",
+      "cipher_suites": [
+        "TLS_AES_128_GCM_SHA256",
+        "TLS_AES_256_GCM_SHA384",
+        "TLS_CHACHA20_POLY1305_SHA256"
+      ],
+      "client_auth": "optional",
+      "ocsp_stapling": true,
+      "hsts": {
+        "enabled": true,
+        "max_age_seconds": 63072000,
+        "include_subdomains": true,
+        "preload": true
+      }
+    },
+    "trusted_proxies": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+  },
+  "database": {
+    "primary": {
+      "engine": "postgres",
+      "host": "primary.db.internal",
+      "port": 5432,
+      "database": "orderly",
+      "schema": "storefront",
+      "pool": {
+        "min": 4,
+        "max": 32,
+        "acquire_timeout_ms": 5000,
+        "idle_timeout_ms": 30000,
+        "max_lifetime_ms": 1800000
+      },
+      "ssl": {
+        "mode": "require",
+        "verify_full": true,
+        "root_cert_path": "/etc/orderly/pg-root.crt"
+      },
+      "statement_timeout_ms": 8000
+    },
+    "replicas": [
+      {
+        "label": "read-replica-a",
+        "host": "replica-a.db.internal",
+        "port": 5432,
+        "weight": 60,
+        "max_lag_seconds": 2
+      },
+      {
+        "label": "read-replica-b",
+        "host": "replica-b.db.internal",
+        "port": 5432,
+        "weight": 40,
+        "max_lag_seconds": 2
+      }
+    ]
+  },
+  "cache": {
+    "engine": "redis-cluster",
+    "endpoints": [
+      "redis-shard-1.cache.internal:6379",
+      "redis-shard-2.cache.internal:6379",
+      "redis-shard-3.cache.internal:6379"
+    ],
+    "key_prefix": "orderly:storefront:",
+    "default_ttl_seconds": 300,
+    "tls": true,
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "recovery_seconds": 30,
+      "half_open_probes": 3
+    }
+  },
+  "auth": {
+    "issuer": "https://auth.orderly.example",
+    "audiences": ["storefront-web", "storefront-mobile"],
+    "jwks_uri": "https://auth.orderly.example/.well-known/jwks.json",
+    "leeway_seconds": 30,
+    "scopes_required": ["catalog.read", "checkout.write"],
+    "rotation": {
+      "mode": "scheduled",
+      "interval_hours": 168,
+      "overlap_hours": 24
+    }
+  },
+  "rate_limits": {
+    "anonymous_rps": 30,
+    "authenticated_rps": 200,
+    "burst_multiplier": 4,
+    "key_by": "ip_or_subject",
+    "exempt_routes": ["/livez", "/readyz", "/metrics"]
+  },
+  "observability": {
+    "logging": {
+      "format": "json",
+      "level": "info",
+      "sampling": {
+        "info_per_second": 200,
+        "warn_per_second": 50,
+        "error_per_second": -1
+      },
+      "redact_fields": ["password", "token", "card_number", "cvv"]
+    },
+    "metrics": {
+      "exporter": "prometheus",
+      "endpoint": "/metrics",
+      "histograms": {
+        "request_duration_seconds_buckets": [
+          0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
+        ]
+      }
+    },
+    "tracing": {
+      "exporter": "otlp",
+      "endpoint": "https://otel-collector.observability.internal:4318",
+      "sample_ratio": 0.05,
+      "propagators": ["tracecontext", "baggage"]
+    }
+  },
+  "features": {
+    "personalized_homepage": true,
+    "inventory_reservation": true,
+    "guest_checkout": true,
+    "wishlist_v2": false,
+    "ai_recommendations": {
+      "enabled": true,
+      "model": "embeddings-v3",
+      "fallback_model": "embeddings-v2",
+      "cache_seconds": 600
+    }
+  },
+  "compliance": {
+    "data_residency": "us-east",
+    "pii_retention_days": 365,
+    "audit_log_retention_days": 1825,
+    "gdpr_subject_request_sla_hours": 72
+  }
+}

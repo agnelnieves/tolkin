@@ -1,0 +1,14 @@
+{
+  "name": "tolkin-cli",
+  "version": "0.9.0",
+  "private": true,
+  "scripts": {
+    "build": "cargo build --release",
+    "build:npm": "bash npm/build.sh",
+    "bump": "bash scripts/bump-version.sh",
+    "dev": "cargo run",
+    "lint": "cargo clippy --all-targets -- -D warnings",
+    "lint:rust": "cargo clippy --all-targets -- -D warnings",
+    "test": "cargo test"
+  }
+}

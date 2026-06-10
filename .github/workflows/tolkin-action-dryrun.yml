@@ -1,0 +1,45 @@
+name: Tolkin action dry-run
+
+# Proves the composite action in distribution/action executes end to end
+# against this repo. No PR comment is posted (comment-mode: off).
+# Uses the local release binary if available to avoid redundant npx installs
+# in the same CI environment where tolkin was just built.
+
+on:
+  workflow_dispatch:
+
+# Node 20 action runtimes are deprecated; opt into the Node 24 default
+# ahead of the 2026-06-16 flip so incompatibilities surface in CI now.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  dryrun:
+    name: Action dry-run (step summary only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tolkin-cli
+
+      - name: Build tolkin (release)
+        working-directory: apps/tolkin-cli
+        run: cargo build --release
+
+      - name: Run local action (comment-mode off, fail-on none)
+        uses: ./distribution/action
+        with:
+          comment-mode: off
+          fail-on: none
+          version: "0.7.0"
+        env:
+          TOLKIN_BIN: ${{ github.workspace }}/apps/tolkin-cli/target/release/tolkin

@@ -1,0 +1,166 @@
+name: tolkin CI
+
+# CI for the three Tolkin workspaces: the core Cargo workspace, the CLI
+# binary, and the Next.js web app (which consumes the wasm pkg).
+on:
+  push:
+    branches: [main, feat/tokenly]
+    paths:
+      - "apps/tolkin-cli/**"
+      - "packages/tolkin-core/**"
+      - "apps/tolkin-web/**"
+      - ".github/workflows/tolkin-ci.yml"
+  pull_request:
+    paths:
+      - "apps/tolkin-cli/**"
+      - "packages/tolkin-core/**"
+      - "apps/tolkin-web/**"
+      - ".github/workflows/tolkin-ci.yml"
+  workflow_dispatch:
+
+# Node 20 action runtimes are deprecated; opt into the Node 24 default
+# ahead of the 2026-06-16 flip so incompatibilities surface in CI now.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: tolkin-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: tolkin-core (clippy + fmt + test + deny)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: packages/tolkin-core
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/tolkin-core
+
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Two-crate workspace (core + wasm), so fmt needs --all.
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo test
+        run: cargo test
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: packages/tolkin-core/Cargo.toml
+
+  cli:
+    name: tolkin-cli (clippy + fmt + test + deny)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/tolkin-cli
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tolkin-cli
+
+      # The tokenizers crate compiles C/C++ (onig, esaxx); the runner's
+      # stock build-essential covers it, no extra setup steps needed.
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo test
+        run: cargo test
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: apps/tolkin-cli/Cargo.toml
+
+  # Proves the CLI compiles and tests pass under MSVC; clippy/fmt/deny run on the linux job above.
+  cli-windows:
+    name: tolkin-cli (windows compile + test)
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: apps/tolkin-cli
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tolkin-cli
+
+      - name: cargo test
+        run: cargo test
+
+  web:
+    name: tolkin-web (wasm pkg + oxlint + biome + tsgo + next build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/tolkin-core
+
+      # taiki-e/install-action pulls a prebuilt wasm-pack binary, which is
+      # faster than the curl installer and pinned by the action's manifest.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      # The web app imports tolkin-core-wasm from pkg/, so the wasm build
+      # must land before bun install resolves the workspace dependency.
+      # Release profile is required: package.json points at the pkg/ output.
+      - name: Build wasm pkg
+        working-directory: packages/tolkin-core
+        run: wasm-pack build crates/wasm --target web --out-dir ../../pkg --release
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install (frozen lockfile, postinstalls blocked by bunfig)
+        run: bun install --frozen-lockfile
+
+      - name: oxlint (CI speed gate)
+        run: bun run --filter=tolkin-web lint:fast
+
+      - name: biome check
+        run: bun run --filter=tolkin-web lint
+
+      - name: typecheck
+        run: bun run --filter=tolkin-web typecheck
+
+      - name: next build (Turbopack)
+        run: bun run --filter=tolkin-web build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"

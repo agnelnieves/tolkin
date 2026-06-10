@@ -1,0 +1,21 @@
+SUMMARY OF DESIGN REVIEW NOTES
+
+Below are the notes captured during the architecture review of the storefront migration plan. The same observations were sent to the team in three different threads, and rather than trim the duplicates the assistant has been asked to summarize every thread. The text is intentionally repetitive so the deduper has work to do.
+
+The migration plan moves the storefront from a single monolith to a small set of services along clear domain boundaries: catalog, cart, checkout, and orders. Each service owns its own data, exposes a typed contract, and is owned by a single team. Cross service communication uses an async event log for state changes and synchronous calls only for queries that need consistent reads. The migration is expected to take about two quarters.
+
+The plan addresses three known pain points in the current monolith. First, deploys are slow because every change ships the whole codebase, which costs the team about one engineer day per week in waiting and rolling back. Second, catalog reads compete with checkout writes on the same database tier, which causes p99 latency spikes during flash sales. Third, the cart service is tightly coupled to the legacy session store, which makes it hard to support guest checkout cleanly.
+
+The migration plan moves the storefront from a single monolith to a small set of services along clear domain boundaries: catalog, cart, checkout, and orders. Each service owns its own data, exposes a typed contract, and is owned by a single team. Cross service communication uses an async event log for state changes and synchronous calls only for queries that need consistent reads. The migration is expected to take about two quarters.
+
+The risks the team flagged in the review are mostly about operational maturity, not architecture. The new event log requires a dedicated topic per domain plus a contract test suite that runs in CI before any producer ships. The team has not run distributed traces in production before, so a short proof of concept with the chosen tracing backend is on the critical path before the catalog service is cut over.
+
+The plan addresses three known pain points in the current monolith. First, deploys are slow because every change ships the whole codebase, which costs the team about one engineer day per week in waiting and rolling back. Second, catalog reads compete with checkout writes on the same database tier, which causes p99 latency spikes during flash sales. Third, the cart service is tightly coupled to the legacy session store, which makes it hard to support guest checkout cleanly.
+
+The success criteria are concrete and measurable. Deploy frequency for the catalog service should reach one merge per business day within the first month after cutover. The p99 latency for catalog reads should stay under two hundred milliseconds during the largest flash sale of the year. Guest checkout should ship behind a feature flag and reach all customers within thirty days of the cart service going live.
+
+The migration plan moves the storefront from a single monolith to a small set of services along clear domain boundaries: catalog, cart, checkout, and orders. Each service owns its own data, exposes a typed contract, and is owned by a single team. Cross service communication uses an async event log for state changes and synchronous calls only for queries that need consistent reads. The migration is expected to take about two quarters.
+
+Decision: proceed with the catalog cutover in week three, gated on the tracing proof of concept landing and the contract test suite reaching the agreed coverage bar. The cart and checkout cutovers will be planned individually once catalog has been stable in production for four weeks.
+
+The plan addresses three known pain points in the current monolith. First, deploys are slow because every change ships the whole codebase, which costs the team about one engineer day per week in waiting and rolling back. Second, catalog reads compete with checkout writes on the same database tier, which causes p99 latency spikes during flash sales. Third, the cart service is tightly coupled to the legacy session store, which makes it hard to support guest checkout cleanly.

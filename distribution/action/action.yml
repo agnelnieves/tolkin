@@ -1,6 +1,6 @@
-name: Tokler Agent-Context Audit
+name: Tolkin Agent-Context Audit
 description: >
-  Runs tokler project --json in your repository, builds a markdown report
+  Runs tolkin project --json in your repository, builds a markdown report
   (load-profile totals, top heavy files, findings count, identified savings
   with tier labels and the input-token honesty footer), then upserts a sticky
   PR comment on pull_request events or writes to the step summary otherwise.
@@ -27,9 +27,9 @@ inputs:
     required: false
     default: sticky
   version:
-    description: tokler-cli version to install via npx. Pin to a known-good release.
+    description: tolkin-cli version to install via npx. Pin to a known-good release.
     required: false
-    default: "0.7.0"
+    default: "0.9.0"
 
 # Required caller permissions for PR comment mode:
 #
@@ -48,28 +48,28 @@ runs:
       with:
         node-version: "20"
 
-    - name: Run tokler and build report
-      id: tokler
+    - name: Run tolkin and build report
+      id: tolkin
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        TOKLER_VERSION: ${{ inputs.version }}
-        TOKLER_NO_LEDGER: "1"
+        TOLKIN_VERSION: ${{ inputs.version }}
+        TOLKIN_NO_LEDGER: "1"
       run: |
         set -euo pipefail
 
         # Allow a local binary override for dry-runs and testing.
-        # Set TOKLER_BIN=/path/to/tokler to skip npx entirely.
-        if [ -n "${TOKLER_BIN:-}" ] && [ -x "$TOKLER_BIN" ]; then
-          TOKLER="$TOKLER_BIN"
+        # Set TOLKIN_BIN=/path/to/tolkin to skip npx entirely.
+        if [ -n "${TOLKIN_BIN:-}" ] && [ -x "$TOLKIN_BIN" ]; then
+          TOLKIN="$TOLKIN_BIN"
         else
-          TOKLER="npx --yes tokler-cli@${TOKLER_VERSION}"
+          TOLKIN="npx --yes tolkin-cli@${TOLKIN_VERSION}"
         fi
 
         REPORT_JSON="$(mktemp)"
         REPORT_MD="$(mktemp)"
 
-        $TOKLER project . --json > "$REPORT_JSON"
+        $TOLKIN project . --json > "$REPORT_JSON"
 
         node "${{ github.action_path }}/build-report.mjs" \
           "$REPORT_JSON" "$REPORT_MD"
@@ -77,12 +77,12 @@ runs:
         echo "report_md=$REPORT_MD" >> "$GITHUB_OUTPUT"
         echo "report_json=$REPORT_JSON" >> "$GITHUB_OUTPUT"
 
-        echo "--- Tokler report preview ---"
+        echo "--- Tolkin report preview ---"
         head -20 "$REPORT_MD"
 
     - name: Write step summary
       shell: bash
-      run: cat "${{ steps.tokler.outputs.report_md }}" >> "$GITHUB_STEP_SUMMARY"
+      run: cat "${{ steps.tolkin.outputs.report_md }}" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upsert sticky PR comment
       if: >-
@@ -96,8 +96,8 @@ runs:
         set -euo pipefail
         REPO="${{ github.repository }}"
         PR="${{ github.event.pull_request.number }}"
-        REPORT_MD="${{ steps.tokler.outputs.report_md }}"
-        MARKER='<!-- tokler-report -->'
+        REPORT_MD="${{ steps.tolkin.outputs.report_md }}"
+        MARKER='<!-- tolkin-report -->'
 
         if [ "$COMMENT_MODE" = "sticky" ]; then
           CID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
@@ -122,13 +122,13 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        TOKLER_VERSION: ${{ inputs.version }}
-        TOKLER_NO_LEDGER: "1"
+        TOLKIN_VERSION: ${{ inputs.version }}
+        TOLKIN_NO_LEDGER: "1"
       run: |
         set -euo pipefail
-        if [ -n "${TOKLER_BIN:-}" ] && [ -x "$TOKLER_BIN" ]; then
-          TOKLER="$TOKLER_BIN"
+        if [ -n "${TOLKIN_BIN:-}" ] && [ -x "$TOLKIN_BIN" ]; then
+          TOLKIN="$TOLKIN_BIN"
         else
-          TOKLER="npx --yes tokler-cli@${TOKLER_VERSION}"
+          TOLKIN="npx --yes tolkin-cli@${TOLKIN_VERSION}"
         fi
-        $TOKLER project . --fail-on "${{ inputs.fail-on }}"
+        $TOLKIN project . --fail-on "${{ inputs.fail-on }}"

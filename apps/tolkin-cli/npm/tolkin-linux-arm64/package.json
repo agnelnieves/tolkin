@@ -1,0 +1,17 @@
+{
+  "name": "tolkin-linux-arm64",
+  "version": "0.9.0",
+  "description": "Tolkin CLI binary for Linux arm64.",
+  "license": "MIT",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/tolkin",
+    "README.md",
+    "LICENSE"
+  ]
+}

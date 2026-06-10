@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Orderly is a retail platform for independent merchants. Storefront, inventory, payments, and analytics in one place." />
+  <title>Orderly Retail Platform</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.example" />
+  <link rel="stylesheet" href="/static/app.css" />
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; color: #111; background: #fff; }
+    header, footer { padding: 16px 24px; }
+    nav a { margin-right: 16px; color: #2a4365; text-decoration: none; }
+    main { max-width: 880px; margin: 0 auto; padding: 32px 24px; }
+    .cta { display: inline-block; padding: 12px 20px; border-radius: 8px; background: #2a4365; color: white; }
+  </style>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag("js", new Date());
+    gtag("config", "G-TRACKING-PLACEHOLDER");
+  </script>
+  <script src="https://analytics.example/loader.js" async></script>
+</head>
+<body>
+  <header>
+    <nav aria-label="primary">
+      <a href="/">Home</a>
+      <a href="/product">Product</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/customers">Customers</a>
+      <a href="/docs">Docs</a>
+      <a href="/blog">Blog</a>
+      <a href="/login">Sign in</a>
+      <a class="cta" href="/signup">Start free</a>
+    </nav>
+  </header>
+  <main>
+    <article>
+      <h1>Run the storefront, not the spreadsheet</h1>
+      <p>Orderly gives independent retailers the tools that big chains spend millions to build. One platform handles your storefront, inventory, payments, and analytics, so you can spend your time on the things that actually move the business forward.</p>
+      <h2>What you get on day one</h2>
+      <ul>
+        <li><strong>A storefront that loads fast.</strong> Pages render in under a second on a mid-range phone, even with a full catalog of products and high-resolution imagery.</li>
+        <li><strong>Inventory that stays accurate.</strong> Stock counts are atomic. When two shoppers race for the last unit, exactly one wins, and the other sees the truth immediately.</li>
+        <li><strong>Payments that just work.</strong> Cards, bank transfers, and digital wallets are wired in by default. Refunds, chargebacks, and disputes are handled in the same dashboard you already use.</li>
+        <li><strong>Analytics that answer the next question.</strong> Revenue, conversion, and basket size are one click away. Click a number to see the customers, products, and sessions behind it.</li>
+      </ul>
+      <h2>Why retailers move to Orderly</h2>
+      <p>Most platforms ask you to choose between flexibility and ease. The legacy options are deep but require an engineering team to keep them running. The lightweight options ship fast but hit a ceiling once you cross a few hundred orders a day.</p>
+      <p>Orderly takes a different shape. The defaults are good enough to launch in an afternoon, and every piece can be replaced when you outgrow it. The same platform powers shops doing thirty orders a week and shops doing thirty thousand.</p>
+      <h2>What the team is shipping next</h2>
+      <p>The next release brings live inventory across multiple physical locations, granular tax rules per region, and a redesigned checkout that improves mobile conversion by a measurable amount on every test cohort we have run.</p>
+      <p>If you would like a closer look at the roadmap, <a href="/contact">talk to us</a>. We share a detailed version with every retailer that signs a starter contract.</p>
+    </article>
+  </main>
+  <footer>
+    <p>Orderly is a registered trademark of Orderly Retail, Inc. Read our <a href="/privacy">privacy policy</a>, <a href="/terms">terms of service</a>, and <a href="/security">security overview</a>.</p>
+    <p>Contact: support@orderly.example. Press: press@orderly.example. Careers: careers@orderly.example.</p>
+  </footer>
+  <script src="https://cdn.example/orderly-widget.js" defer></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("/sw.js");
+      });
+    }
+  </script>
+</body>
+</html>

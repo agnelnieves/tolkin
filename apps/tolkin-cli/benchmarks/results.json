@@ -1,0 +1,279 @@
+{
+  "v": 1,
+  "generated_at": "2026-06-10T19:08:52.697Z",
+  "tolkin_version": "0.9.0",
+  "prices_observed": "2026-06",
+  "runs": 3,
+  "environment": {
+    "runner": "bun + tolkin CLI",
+    "os": "darwin",
+    "tokenizers": {
+      "openai": "o200k_base (exact, via tolkin count --json --model openai)",
+      "anthropic": "cl100k_base proxy, labeled estimate (+/-10%)",
+      "gemini": "Gemma SPM (exact)"
+    }
+  },
+  "methodology_md": "## Why this benchmark exists\n\nToken-savings claims usually arrive as a single number, and that number can come from three different places: output-side advice (instructions that make a model answer more tersely), input-side rewriting (compressing the text before it is sent), and structural or configuration measurement (removing tokens from files and tool definitions without changing meaning). These are different operations with different risks and different baselines. Collapsing them into one headline percent is how this space lies to itself.\n\nThe cautionary example is public. A viral output-side skill (JuliusBrussee/caveman) claimed a 65 percent average output reduction. An independent 72-run benchmark measured 9-21 percent against a fair baseline. The gap was not fabrication; it was baseline choice. The lesson is baselines, not villains, and this benchmark is designed so the baseline question can never be left open.\n\nThe design answer is separation. Every number below belongs to exactly one of three tracks (structural, configuration, lossy), each with its own fidelity contract, and numbers are never blended across tracks into a combined figure.\n\n## The rules\n\n**Declared baselines.** Every comparison states exactly what the before is: a named fixture in the repository, byte for byte, never an implied or reconstructed one.\n\n**Real tokenizer counts.** Each number names the tokenizer that produced it: o200k_base counts are exact, while Anthropic counts via the cl100k proxy are labeled estimates, carry a plus or minus 10 percent band, and never appear in headline rows.\n\n**Injection overhead counted.** Any technique that requires runtime prompt instructions has those instruction tokens charged against its savings.\n\n**N runs with variance.** Every case runs N times and publishes min and max; deterministic transforms must show zero variance, and the harness fails loudly if one does not.\n\n**Date-stamped pricing.** Every dollar figure carries the PRICES_OBSERVED date it was computed under, because prices move and an undated cost cannot be checked.\n\n**Everything in the repository.** Fixtures, runner, and results are versioned together, and a single command regenerates all of them.\n\n**Input-token bounded.** A pre-registered randomized trial (arXiv 2603.23525) found that moderate compression (ratio 0.5) cut total cost 27.9 percent while aggressive compression (ratio 0.2) increased total cost 1.8 percent because outputs grew; every number here is therefore input-side only and says so wherever it appears.\n\n## Track 1: structural (lossless)\n\nThis track measures transforms that cannot change meaning: minification, exact-duplicate removal, and format transforms, applied to fixtures shaped like real working material (pretty-printed JSON configuration, HTML documents, prompts with repeated boilerplate, stack-trace logs). Because the transforms are lossless by construction, there is no quality question to answer, and the before and after counts are exact properties of the fixtures under the named tokenizer. This is measurement, not estimation.\n\n## Track 2: configuration (MCP)\n\nEvery MCP server in a client configuration contributes its tool definitions to every request, whether or not the conversation uses them. This track counts that weight against a catalog of real, public server manifests: cold totals for configurations as found, slim deltas for reduced tool profiles, swap deltas for replacing a server with a CLI equivalent, and the share of a 200K context window each configuration consumes. Only the configuration changes; conversation content is untouched. Comparable middleware (caveman-shrink) runs on the same manifests where it can be run headlessly.\n\n## Track 3: lossy (compression)\n\nThe caveat leads this track: the randomized trial cited above showed that aggressive input compression can grow outputs enough to increase total cost, so no lossy result here is a total-cost claim. The technique measured is LLMLingua-2 at declared target ratios, and every case publishes both the target ratio and the achieved ratio. Quality scoring exists as an extraction-QA harness (questions with verifiable answers, checked automatically) that runs only with the user's own API key and is off by default; published results state whether scoring ran, and no quality claim is made without it. Comparable public rewriters (wilpel/caveman-compression) run on the same fixtures under the same rules where they can be run headlessly.\n\n## What this benchmark does not claim\n\nNo total-cost claims: every figure is input tokens, and total cost depends on output behavior this harness does not measure. No output-side claims: nothing here measures how a model answers. No quality claims without the scored flag: a compression ratio is not a quality result, and results state explicitly whether the extraction-QA harness ran. No numeric comparisons against tools that cannot be run headlessly on the same inputs: those tools appear in the results with a status and a reason instead of numbers, because a figure produced under different conditions is not a comparison.\n\n## Reproducing the results\n\nClone the repository, run `bun install` at the root, build the release `tolkin` binary (`cargo build --release` in `apps/tolkin-cli`), and run the benchmark harness in `apps/tolkin-cli/benchmarks/`; it regenerates `results.json` and `RESULTS.md` from the fixtures in the same directory. Then run it a second time and diff the two outputs: the only field permitted to differ between runs on the same tree is the `generated_at` timestamp. Anything else is a determinism failure, and the harness treats it as one.",
+  "tracks": {
+    "structural": {
+      "fidelity": "lossless",
+      "cases": [
+        {
+          "id": "structural/json-minify",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/structural/app-config.json",
+          "technique": "JSON.parse / JSON.stringify (compact)",
+          "tokenizer": "o200k_base (exact)",
+          "before_tokens": 1305,
+          "after_tokens": 882,
+          "savings_tokens": 423,
+          "savings_pct": 32.41,
+          "injection_overhead_tokens": 0,
+          "variance": {
+            "runs": 3,
+            "min": 882,
+            "max": 882
+          },
+          "notes": "Strict JSON in, compact JSON out via JSON.parse(text); JSON.stringify(value). Lossless by construction (no key reorder beyond V8 insertion order). Mirrors tolkin-core::format::json_minify."
+        },
+        {
+          "id": "structural/html-to-markdown",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/structural/marketing-page.html",
+          "technique": "HTML -> Markdown (audit preview rules)",
+          "tokenizer": "o200k_base (exact)",
+          "before_tokens": 1111,
+          "after_tokens": 539,
+          "savings_tokens": 572,
+          "savings_pct": 51.49,
+          "injection_overhead_tokens": 0,
+          "variance": {
+            "runs": 3,
+            "min": 539,
+            "max": 539
+          },
+          "notes": "Reproduces tolkin-core::format::html_to_markdown rules in TS so the artifact is not capped at the audit preview's 8 KB limit. Attribute data and layout semantics are dropped (near-lossless)."
+        },
+        {
+          "id": "structural/paragraph-dedup",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/structural/duplicated-paragraphs.txt",
+          "technique": "exact-text paragraph dedup (first-occurrence kept)",
+          "tokenizer": "o200k_base (exact)",
+          "before_tokens": 793,
+          "after_tokens": 441,
+          "savings_tokens": 352,
+          "savings_pct": 44.39,
+          "injection_overhead_tokens": 0,
+          "variance": {
+            "runs": 3,
+            "min": 441,
+            "max": 441
+          },
+          "notes": "Split on blank lines; drop blocks whose trimmed text matches a prior block byte-for-byte. Lossless when duplicates are verbatim, which is the case the fixture exercises."
+        },
+        {
+          "id": "structural/stack-trace-dedup",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/structural/stack-trace.log",
+          "technique": "stack-trace dump dedup (replace identical body with marker)",
+          "tokenizer": "o200k_base (exact)",
+          "before_tokens": 2022,
+          "after_tokens": 1442,
+          "savings_tokens": 580,
+          "savings_pct": 28.68,
+          "injection_overhead_tokens": 0,
+          "variance": {
+            "runs": 3,
+            "min": 1442,
+            "max": 1442
+          },
+          "notes": "Split on JVM error-header lines; when two dumps share an identical post-header body, replace the second body with a one-line marker pointing at the first dump's timestamp. Lossless for the message text and structure preserved."
+        }
+      ]
+    },
+    "configuration": {
+      "fidelity": "lossless-configuration",
+      "cases": [
+        {
+          "id": "configuration/mcp-heavy",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/configuration/mcp-heavy.json",
+          "client_shape": "Claude Desktop mcpServers (4 servers)",
+          "tokenizer": "o200k_base via tolkin mcp (anthropic provider math)",
+          "servers": 4,
+          "cold_tokens": 86250,
+          "swap_savings_tokens": 69000,
+          "slim_savings_tokens": 35750,
+          "pct_of_200k_window": 43.13,
+          "notes": "Heavy multi-server config exercising the github + slack + postgres + filesystem catalog entries. Numbers come from tolkin-core's MCP analyzer (anthropic cache math)."
+        },
+        {
+          "id": "configuration/vscode-settings",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/configuration/vscode-settings.json",
+          "client_shape": "VS Code settings.json mcp.servers (3 servers)",
+          "tokenizer": "o200k_base via tolkin mcp (anthropic provider math)",
+          "servers": 3,
+          "cold_tokens": 60000,
+          "swap_savings_tokens": 48000,
+          "slim_savings_tokens": 20000,
+          "pct_of_200k_window": 30,
+          "notes": "VS Code settings shape where MCP servers live under mcp.servers; same analyzer, different host config. The non-MCP keys (editor.fontSize and friends) are ignored by the analyzer."
+        },
+        {
+          "id": "configuration/mcp-slimmed",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/configuration/mcp-slimmed.json",
+          "client_shape": "Claude Desktop mcpServers (1 server, already slimmed)",
+          "tokenizer": "o200k_base via tolkin mcp (anthropic provider math)",
+          "servers": 1,
+          "cold_tokens": 25000,
+          "swap_savings_tokens": 20000,
+          "slim_savings_tokens": 0,
+          "pct_of_200k_window": 12.5,
+          "notes": "GITHUB_TOOLSETS env present, so the catalog scales the cold estimate and reports already-slimmed. Exercises the no-double-counting path."
+        }
+      ],
+      "comparisons": [
+        {
+          "name": "caveman-shrink (JuliusBrussee/caveman, src/mcp-servers/caveman-shrink/compress.js)",
+          "status": "not-comparable",
+          "reason": "caveman-shrink is a runtime proxy that mutates description fields inside live tools/list responses; tolkin's MCP track measures the cold cost of registering tools from a static client config file, which has no description payload to shrink. The fixtures do not share a unit. caveman-shrink is runnable headlessly (MIT, pure Node, vendored at benchmarks/external/caveman-shrink-compress.js) and is exercised on the lossy track instead."
+        },
+        {
+          "name": "wilpel/caveman-compression (NLP method)",
+          "status": "not-runnable-headless",
+          "reason": "MIT-licensed and exposes a Python CLI (caveman_compress_nlp.py) that runs offline, but it requires a Python virtual environment plus the spaCy en_core_web_sm model (~50 MB) which this bun-only harness does not provision. Comparable measurements can be added by running caveman_compress_nlp.py on the same MCP fixtures externally and amending this file."
+        }
+      ]
+    },
+    "lossy": {
+      "fidelity": "lossy",
+      "rct_caveat": "Aggressive compression can increase total cost because outputs grow; every number here is input-token bounded.",
+      "quality_scoring": {
+        "scored": false,
+        "method": "BYOK extraction-QA harness, off by default"
+      },
+      "cases": [
+        {
+          "id": "lossy/technical-explainer@rate=0.7",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/lossy/technical-explainer.txt",
+          "technique": "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
+          "tokenizer": "o200k_base (exact)",
+          "target_ratio": 0.7,
+          "before_tokens": 809,
+          "after_tokens": 543,
+          "achieved_ratio": 0.6712,
+          "savings_pct": 32.88,
+          "notes": "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable."
+        },
+        {
+          "id": "lossy/technical-explainer@rate=0.5",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/lossy/technical-explainer.txt",
+          "technique": "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
+          "tokenizer": "o200k_base (exact)",
+          "target_ratio": 0.5,
+          "before_tokens": 809,
+          "after_tokens": 388,
+          "achieved_ratio": 0.4796,
+          "savings_pct": 52.04,
+          "notes": "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable."
+        },
+        {
+          "id": "lossy/technical-explainer@rate=0.33",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/lossy/technical-explainer.txt",
+          "technique": "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
+          "tokenizer": "o200k_base (exact)",
+          "target_ratio": 0.33,
+          "before_tokens": 809,
+          "after_tokens": 252,
+          "achieved_ratio": 0.3115,
+          "savings_pct": 68.85,
+          "notes": "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable."
+        },
+        {
+          "id": "lossy/meeting-notes@rate=0.7",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/lossy/meeting-notes.txt",
+          "technique": "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
+          "tokenizer": "o200k_base (exact)",
+          "target_ratio": 0.7,
+          "before_tokens": 906,
+          "after_tokens": 633,
+          "achieved_ratio": 0.6987,
+          "savings_pct": 30.13,
+          "notes": "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable."
+        },
+        {
+          "id": "lossy/meeting-notes@rate=0.5",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/lossy/meeting-notes.txt",
+          "technique": "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
+          "tokenizer": "o200k_base (exact)",
+          "target_ratio": 0.5,
+          "before_tokens": 906,
+          "after_tokens": 458,
+          "achieved_ratio": 0.5055,
+          "savings_pct": 49.45,
+          "notes": "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable."
+        },
+        {
+          "id": "lossy/meeting-notes@rate=0.33",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/lossy/meeting-notes.txt",
+          "technique": "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
+          "tokenizer": "o200k_base (exact)",
+          "target_ratio": 0.33,
+          "before_tokens": 906,
+          "after_tokens": 312,
+          "achieved_ratio": 0.3444,
+          "savings_pct": 65.56,
+          "notes": "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable."
+        },
+        {
+          "id": "lossy/verbose-instructions@rate=0.7",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/lossy/verbose-instructions.txt",
+          "technique": "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
+          "tokenizer": "o200k_base (exact)",
+          "target_ratio": 0.7,
+          "before_tokens": 922,
+          "after_tokens": 622,
+          "achieved_ratio": 0.6746,
+          "savings_pct": 32.54,
+          "notes": "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable."
+        },
+        {
+          "id": "lossy/verbose-instructions@rate=0.5",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/lossy/verbose-instructions.txt",
+          "technique": "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
+          "tokenizer": "o200k_base (exact)",
+          "target_ratio": 0.5,
+          "before_tokens": 922,
+          "after_tokens": 440,
+          "achieved_ratio": 0.4772,
+          "savings_pct": 52.28,
+          "notes": "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable."
+        },
+        {
+          "id": "lossy/verbose-instructions@rate=0.33",
+          "fixture": "apps/tolkin-cli/benchmarks/fixtures/lossy/verbose-instructions.txt",
+          "technique": "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
+          "tokenizer": "o200k_base (exact)",
+          "target_ratio": 0.33,
+          "before_tokens": 922,
+          "after_tokens": 292,
+          "achieved_ratio": 0.3167,
+          "savings_pct": 68.33,
+          "notes": "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable."
+        }
+      ],
+      "comparisons": [
+        {
+          "name": "caveman-shrink (JuliusBrussee/caveman, src/mcp-servers/caveman-shrink/compress.js)",
+          "status": "measured",
+          "reason": "MIT-licensed, pure-Node prose compressor with no rate knob. Vendored at benchmarks/external/caveman-shrink-compress.js and run on the same three lossy fixtures the LLMLingua-2 cases use. Sum of before/after tokens reported across the three prose fixtures (o200k_base).",
+          "before_tokens": 2637,
+          "after_tokens": 2328,
+          "savings_pct": 11.72,
+          "notes": "Single fixed-rule pass per fixture; no model, no API key, no training data. The methodology section explains why this number is not directly comparable to LLMLingua-2's rate-targeted runs."
+        },
+        {
+          "name": "wilpel/caveman-compression (NLP method)",
+          "status": "not-runnable-headless",
+          "reason": "MIT-licensed and exposes a Python CLI (caveman_compress_nlp.py) that runs offline, but it requires a Python virtual environment plus the spaCy en_core_web_sm model (~50 MB) which this bun-only harness does not provision. Comparable measurements can be added by running caveman_compress_nlp.py on the lossy fixtures externally and amending this file."
+        }
+      ]
+    }
+  }
+}

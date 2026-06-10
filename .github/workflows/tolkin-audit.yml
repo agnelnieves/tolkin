@@ -1,0 +1,163 @@
+name: tolkin audit
+
+# Audits agent-context files (CLAUDE.md, AGENTS.md, skills, MCP configs,
+# and friends) changed by a pull request and upserts a single PR comment
+# with per-file token weight, findings, and the repo-level load profile.
+# Report-only by default; see TOLKIN_FAIL_ON below for the opt-in gate.
+# No paths filter on purpose: agent-context files can live anywhere.
+on:
+  pull_request:
+    branches: [main]
+
+# Node 20 action runtimes are deprecated; opt into the Node 24 default
+# ahead of the 2026-06-16 flip so incompatibilities surface in CI now.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: tolkin-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  # Report-only by default: the job always succeeds and only comments.
+  # Set to high, medium, or low to make the final step run
+  # `tolkin project . --fail-on <severity>`, which exits 2 when any
+  # finding at or above that severity exists anywhere in the repo.
+  TOLKIN_FAIL_ON: ""
+
+jobs:
+  audit:
+    name: Audit agent-context changes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tolkin-cli
+
+      - name: Build tolkin (release)
+        working-directory: apps/tolkin-cli
+        run: cargo build --release
+
+      - name: Put tolkin on PATH
+        run: echo "$GITHUB_WORKSPACE/apps/tolkin-cli/target/release" >> "$GITHUB_PATH"
+
+      - name: Determine changed agent-context files
+        id: changed
+        run: |
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > /tmp/changed-all.txt
+
+          # Agent-context candidates: well-known instruction files anywhere
+          # in the tree, anything under .claude/ or .cursor/rules/, the
+          # Copilot instructions file, MCP configs, and *.md at repo root.
+          is_agent_context() {
+            case "$(basename "$1")" in
+              CLAUDE.md|AGENTS.md|GEMINI.md|.cursorrules|SKILL.md|.mcp.json) return 0 ;;
+            esac
+            case "$1" in
+              .github/copilot-instructions.md) return 0 ;;
+              .cursor/rules/*|*/.cursor/rules/*) return 0 ;;
+              .claude/*|*/.claude/*) return 0 ;;
+            esac
+            case "$1" in
+              */*) return 1 ;;
+              *.md) return 0 ;;
+            esac
+            return 1
+          }
+
+          : > /tmp/changed-context.txt
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            if is_agent_context "$f"; then
+              echo "$f" >> /tmp/changed-context.txt
+            fi
+          done < /tmp/changed-all.txt
+
+          if [ -s /tmp/changed-context.txt ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            echo "Agent-context files changed:"
+            cat /tmp/changed-context.txt
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "no agent-context changes"
+          fi
+
+      - name: Run tolkin and assemble the comment
+        if: steps.changed.outputs.any == 'true'
+        run: |
+          tolkin project . --json > /tmp/project.json
+
+          {
+            echo '<!-- tolkin-audit -->'
+            echo '## Tolkin audit'
+            echo ''
+            echo 'Agent-context files changed in this PR:'
+            echo ''
+            echo '| File | Tokens | Findings | Reclaimable (input tokens) |'
+            echo '| --- | ---: | ---: | ---: |'
+            while IFS= read -r f; do
+              if [ -f "$f" ]; then
+                TOKENS=$(tolkin count "$f" --json 2>/dev/null | jq -r '.tokens' || true)
+                TOKENS=${TOKENS:-n/a}
+                REPORT=$(tolkin audit "$f" --json 2>/dev/null || echo '{}')
+                FINDINGS=$(jq -r '.findings | length' <<< "$REPORT" 2>/dev/null || echo "n/a")
+                SMIN=$(jq -r '.total_savings_min // 0' <<< "$REPORT" 2>/dev/null || echo 0)
+                SMAX=$(jq -r '.total_savings_max // 0' <<< "$REPORT" 2>/dev/null || echo 0)
+                echo "| \`$f\` | $TOKENS | $FINDINGS | $SMIN to $SMAX |"
+              else
+                echo "| \`$f\` | removed in this PR | - | - |"
+              fi
+            done < /tmp/changed-context.txt
+            echo ''
+            echo '### Repo context load profile'
+            echo ''
+            echo '| Profile | Tokens |'
+            echo '| --- | ---: |'
+            jq -r '
+              "| Always loaded | \(.profiles.always.tokens) |",
+              "| On invocation | \(.profiles.on_invocation.tokens) |",
+              "| On demand | \(.profiles.on_demand.tokens) |",
+              "| Docs | \(.profiles.docs.tokens) |"
+            ' /tmp/project.json
+            echo ''
+            jq -r '
+              "Totals: \(.totals.context_files) context files, \(.totals.context_tokens) tokens in agent context, \(.totals.savings_min) to \(.totals.savings_max) tokens reclaimable."
+            ' /tmp/project.json
+            echo ''
+            echo 'Input-token estimates; output may vary.'
+          } > /tmp/comment.md
+
+          echo "Comment preview:"
+          cat /tmp/comment.md
+
+      - name: Upsert the PR comment
+        if: steps.changed.outputs.any == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          PR="${{ github.event.pull_request.number }}"
+          MARKER='<!-- tolkin-audit -->'
+          CID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -n 1)
+          if [ -n "$CID" ]; then
+            echo "Updating existing comment $CID"
+            gh api -X PATCH "repos/$REPO/issues/comments/$CID" -F body=@/tmp/comment.md > /dev/null
+          else
+            echo "Creating a new comment"
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@/tmp/comment.md > /dev/null
+          fi
+
+      - name: Severity gate (off unless TOLKIN_FAIL_ON is set)
+        if: env.TOLKIN_FAIL_ON != ''
+        run: tolkin project . --fail-on "$TOLKIN_FAIL_ON"

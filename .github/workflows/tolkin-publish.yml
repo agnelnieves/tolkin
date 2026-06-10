@@ -1,0 +1,285 @@
+name: tolkin publish
+
+# Publishes the tolkin npm packages when a version bump lands on main.
+# Gated: if the wrapper version in the tree is already on the registry,
+# the run is a no-op. Publish order matters: platform packages first,
+# wrapper last, so its optionalDependencies resolve at install time.
+#
+# Structure: a version gate, then a build matrix (one leg per host),
+# then a single publish job that downloads every binary artifact and
+# stages it into its npm platform package.
+#
+# Auth is npm Trusted Publishing (OIDC): each package on npmjs.com has
+# this repo + this workflow filename configured as its trusted
+# publisher, so no token secret is stored or rotated. Requires
+# npm >= 11.5.1 (node 24 bundles it) and the id-token permission below.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/tolkin-cli/**"
+      - "packages/tolkin-core/**"
+      - ".github/workflows/tolkin-publish.yml"
+
+# Node 20 action runtimes are deprecated; opt into the Node 24 default
+# ahead of the 2026-06-16 flip so incompatibilities surface in CI now.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: tolkin-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  gate:
+    name: Gate on version (skip when already published)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/tolkin-cli
+    outputs:
+      skip: ${{ steps.gate.outputs.skip }}
+      local: ${{ steps.gate.outputs.local }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Compare tree version against the registry
+        id: gate
+        run: |
+          LOCAL=$(node -p "require('./npm/tolkin/package.json').version")
+          PUBLISHED=$(npm view tolkin-cli version 2>/dev/null || echo "none")
+          echo "local=$LOCAL" >> "$GITHUB_OUTPUT"
+          if [ "$LOCAL" = "$PUBLISHED" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "tolkin-cli@$LOCAL already on the registry; nothing to publish."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Will publish $LOCAL (registry has $PUBLISHED)."
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: gate
+    if: needs.gate.outputs.skip == 'false'
+    runs-on: ${{ matrix.runner }}
+    # The arm64 Linux leg may not be available on every plan; let it fail
+    # visibly without blocking the rest of the release. The publish job
+    # tolerates its missing artifact.
+    continue-on-error: ${{ matrix.runner == 'ubuntu-24.04-arm' }}
+    defaults:
+      run:
+        working-directory: apps/tolkin-cli
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 runners are arm64; the x64 binary cross-compiles on
+          # the same host (extra_target), exactly as npm/build.sh does.
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            extra_target: x86_64-apple-darwin
+          # The linux legs build natively. The tokenizers crate (onig +
+          # esaxx_fast features) compiles C and C++ sources, so a system
+          # toolchain is required; GitHub's Ubuntu runners ship
+          # build-essential by default, no extra step needed.
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          # The windows leg targets MSVC x64 (the stable-x86_64-pc-windows-msvc
+          # toolchain ships on windows-2022 by default). tolkin-ci.yml already
+          # proves the CLI compiles and tests clean under MSVC.
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.extra_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tolkin-cli
+          key: ${{ matrix.target }}
+
+      - name: Build (native)
+        run: cargo build --release
+
+      - name: Smoke the native binary (unix)
+        if: runner.os != 'Windows'
+        run: ./target/release/tolkin --version
+
+      - name: Smoke the native binary (windows)
+        if: runner.os == 'Windows'
+        run: .\target\release\tolkin.exe --version
+
+      - uses: actions/upload-artifact@v7
+        if: runner.os != 'Windows'
+        with:
+          name: tolkin-${{ matrix.target }}
+          path: apps/tolkin-cli/target/release/tolkin
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          name: tolkin-${{ matrix.target }}
+          path: apps/tolkin-cli/target/release/tolkin.exe
+          if-no-files-found: error
+
+      # The darwin-x64 cross build cannot be smoked on the arm64 host.
+      - name: Build (cross, darwin-x64)
+        if: matrix.extra_target != ''
+        run: cargo build --release --target "${{ matrix.extra_target }}"
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.extra_target != ''
+        with:
+          name: tolkin-${{ matrix.extra_target }}
+          path: apps/tolkin-cli/target/${{ matrix.extra_target }}/release/tolkin
+          if-no-files-found: error
+
+  publish:
+    name: Stage binaries and publish to npm
+    needs: [gate, build]
+    if: needs.gate.outputs.skip == 'false'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/tolkin-cli
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Confirm npm supports trusted publishing (>= 11.5.1)
+        run: npm --version
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: apps/tolkin-cli/artifacts
+
+      - name: Stage binaries into npm platform packages
+        run: |
+          stage() {
+            SRC="artifacts/tolkin-$1/$2"
+            DEST="npm/tolkin-$3/bin/$2"
+            if [ -f "$SRC" ]; then
+              mkdir -p "$(dirname "$DEST")"
+              cp "$SRC" "$DEST"
+              chmod +x "$DEST"
+              echo "staged $3"
+            else
+              echo "no artifact for $3 ($SRC absent)"
+            fi
+          }
+          stage aarch64-apple-darwin tolkin darwin-arm64
+          stage x86_64-apple-darwin tolkin darwin-x64
+          stage x86_64-unknown-linux-gnu tolkin linux-x64
+          stage aarch64-unknown-linux-gnu tolkin linux-arm64
+          stage x86_64-pc-windows-msvc tolkin.exe win32-x64
+
+      - name: Smoke the staged launcher (linux-x64 binary on this host)
+        run: |
+          node npm/tolkin/bin/tolkin.js --version
+          echo "hello world" | node npm/tolkin/bin/tolkin.js count
+
+      # RENAME TRANSITION: every tolkin package is brand new, and a first
+      # publish cannot use OIDC trusted publishing. All publish steps tolerate
+      # failure and the verify step is warning-only until the owner first
+      # publishes the six packages manually and configures their trusted
+      # publishers (workflow filename: tolkin-publish.yml). Re-tighten the
+      # wrapper and darwin steps afterwards.
+      - name: Publish tolkin-darwin-arm64
+        continue-on-error: true
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          if npm view "tolkin-darwin-arm64@$V" version > /dev/null 2>&1; then
+            echo "tolkin-darwin-arm64@$V already published; skipping."
+          else
+            (cd npm/tolkin-darwin-arm64 && npm publish)
+          fi
+
+      - name: Publish tolkin-darwin-x64
+        continue-on-error: true
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          if npm view "tolkin-darwin-x64@$V" version > /dev/null 2>&1; then
+            echo "tolkin-darwin-x64@$V already published; skipping."
+          else
+            (cd npm/tolkin-darwin-x64 && npm publish)
+          fi
+
+      # The linux packages are new; npm may require a first publish before
+      # a trusted publisher can be configured for them. Tolerate failure so
+      # the wrapper still ships; configure the trusted publishers and re-run
+      # once the packages exist.
+      - name: Publish tolkin-linux-x64
+        continue-on-error: true
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          if npm view "tolkin-linux-x64@$V" version > /dev/null 2>&1; then
+            echo "tolkin-linux-x64@$V already published; skipping."
+          else
+            (cd npm/tolkin-linux-x64 && npm publish)
+          fi
+
+      - name: Publish tolkin-linux-arm64 (skips when the arm build was unavailable)
+        continue-on-error: true
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          if [ ! -f npm/tolkin-linux-arm64/bin/tolkin ]; then
+            echo "linux-arm64 binary artifact absent (arm runner unavailable or build failed); skipping tolkin-linux-arm64@$V."
+          elif npm view "tolkin-linux-arm64@$V" version > /dev/null 2>&1; then
+            echo "tolkin-linux-arm64@$V already published; skipping."
+          else
+            (cd npm/tolkin-linux-arm64 && npm publish)
+          fi
+
+      # tolkin-win32-x64 is a new package; npm requires a manual first publish
+      # before a trusted publisher can be configured on its settings page.
+      - name: Publish tolkin-win32-x64
+        continue-on-error: true
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          if [ ! -f npm/tolkin-win32-x64/bin/tolkin.exe ]; then
+            echo "win32-x64 binary artifact absent (windows build failed); skipping tolkin-win32-x64@$V."
+          elif npm view "tolkin-win32-x64@$V" version > /dev/null 2>&1; then
+            echo "tolkin-win32-x64@$V already published; skipping."
+          else
+            (cd npm/tolkin-win32-x64 && npm publish)
+          fi
+
+      - name: Publish tolkin-cli (wrapper, last)
+        continue-on-error: true
+        run: (cd npm/tolkin && npm publish)
+
+      - name: Verify from the registry
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          for i in 1 2 3 4 5; do
+            GOT=$(npm view tolkin-cli version 2>/dev/null || echo "none")
+            [ "$GOT" = "$V" ] && break
+            sleep 5
+          done
+          # RENAME TRANSITION: all six packages are warning-only until their
+          # one-time manual first publishes land; then make the wrapper and
+          # darwin packages strict again.
+          for pkg in tolkin-cli tolkin-darwin-arm64 tolkin-darwin-x64 tolkin-linux-x64 tolkin-linux-arm64 tolkin-win32-x64; do
+            if npm view "$pkg@$V" version > /dev/null 2>&1; then
+              echo "$pkg@$V verified."
+            else
+              echo "::warning::$pkg@$V is not on the registry. First publish must be manual: stage the CI binary, npm publish from npm/$pkg, then configure its trusted publisher."
+            fi
+          done

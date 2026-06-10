@@ -1,0 +1,18 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "outputs": ["pkg/**", "target/release/**"],
+      "inputs": ["$TURBO_DEFAULT$", "!target/**", "!pkg/**"]
+    },
+    "lint:rust": {
+      "outputs": [],
+      "inputs": ["$TURBO_DEFAULT$", "!target/**", "!pkg/**"]
+    },
+    "test": {
+      "outputs": [],
+      "inputs": ["$TURBO_DEFAULT$", "!target/**", "!pkg/**"]
+    }
+  }
+}

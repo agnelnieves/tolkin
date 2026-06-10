@@ -1,0 +1,21 @@
+{
+  "name": "tolkin-core-wasm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./pkg/tolkin_core_wasm.js",
+  "types": "./pkg/tolkin_core_wasm.d.ts",
+  "exports": {
+    ".": {
+      "import": "./pkg/tolkin_core_wasm.js",
+      "types": "./pkg/tolkin_core_wasm.d.ts"
+    },
+    "./pkg/*": "./pkg/*"
+  },
+  "files": ["pkg"],
+  "scripts": {
+    "build": "wasm-pack build crates/wasm --target web --out-dir ../../pkg --release",
+    "lint:rust": "cargo clippy --all-targets -- -D warnings",
+    "test": "cargo test"
+  }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "tolkin-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core analysis library for Tolkin"
+license = "MIT"
+# Consumed by path deps and wasm-pack only. Flip at OSS extraction.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -1,0 +1,32 @@
+import functools
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class Interval:
+    lo: float
+    hi: float
+    tags: tuple = field(default_factory=tuple)
+
+    def overlaps(self, other: "Interval") -> bool:
+        return self.lo <= other.hi and other.lo <= self.hi
+
+
+def merge(intervals):
+    ordered = sorted(intervals, key=lambda iv: (iv.lo, iv.hi))
+    out = []
+    for iv in ordered:
+        if out and out[-1].overlaps(iv):
+            out[-1] = Interval(out[-1].lo, max(out[-1].hi, iv.hi))
+        else:
+            out.append(iv)
+    return out
+
+
+@functools.lru_cache(maxsize=None)
+def collatz(n: int) -> int:
+    return 1 if n == 1 else 1 + collatz(n // 2 if n % 2 == 0 else 3 * n + 1)
+
+
+if __name__ == "__main__":
+    print([collatz(k) for k in range(1, 13)])

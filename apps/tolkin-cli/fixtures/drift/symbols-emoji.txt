@@ -1,0 +1,17 @@
+# Release notes draft 🚀
+
+## Highlights ✨
+
+- Throughput improved by a factor of ~2.3x 📈
+- Error budget burn rate dropped below the alert line ✅
+- New approximation: f(x) ≈ ∑ aₙxⁿ for |x| ≤ 1, with error ε < 10⁻⁶
+- Geometry helpers now handle π, √2, ∞, and angles like 45° or θ = π/4
+- Set operations: A ∪ B, A ∩ B, x ∈ S, and S ⊆ T are all supported
+
+## Known issues 🐛
+
+1. The ÷ and × glyphs render oversized at small font sizes 🔍
+2. Currency cells mix € and ¥ when locales change mid-session 💱
+3. Arrows in tooltips (→, ⇒, ↺) occasionally clip on narrow screens 📱
+
+Thanks to everyone who filed reports this cycle 🙌 ❤️
