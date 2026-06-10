@@ -2,7 +2,7 @@
 
 Token-savings claims usually arrive as a single number, and that number can come from three different places: output-side advice (instructions that make a model answer more tersely), input-side rewriting (compressing the text before it is sent), and structural or configuration measurement (removing tokens from files and tool definitions without changing meaning). These are different operations with different risks and different baselines. Collapsing them into one headline percent is how this space lies to itself.
 
-The cautionary example is public. A viral output-side skill (JuliusBrussee/caveman) claimed a 65 percent average output reduction. An independent 72-run benchmark measured 9-21 percent against a fair baseline. The gap was not fabrication; it was baseline choice. The lesson is baselines, not villains, and this benchmark is designed so the baseline question can never be left open.
+The cautionary example is public. A viral output-side skill (JuliusBrussee/caveman) claimed a 65 percent average output reduction. An independent 72-run benchmark (Guzik, https://dev.to/jakguzik/i-benchmarked-the-viral-caveman-prompt-to-save-llm-tokens-then-my-6-line-version-beat-it-2o81) measured 9-21 percent output token reduction against a plain no-brevity-instruction baseline. The gap was not fabrication; it was baseline choice. The lesson is baselines, not villains, and this benchmark is designed so the baseline question can never be left open.
 
 The design answer is separation. Every number below belongs to exactly one of three tracks (structural, configuration, lossy), each with its own fidelity contract, and numbers are never blended across tracks into a combined figure.
 
@@ -28,7 +28,7 @@ This track measures transforms that cannot change meaning: minification, exact-d
 
 ## Track 2: configuration (MCP)
 
-Every MCP server in a client configuration contributes its tool definitions to every request, whether or not the conversation uses them. This track counts that weight against a catalog of real, public server manifests: cold totals for configurations as found, slim deltas for reduced tool profiles, swap deltas for replacing a server with a CLI equivalent, and the share of a 200K context window each configuration consumes. Only the configuration changes; conversation content is untouched. Comparable middleware (caveman-shrink) runs on the same manifests where it can be run headlessly.
+Every MCP server in a client configuration contributes its tool definitions to every request, whether or not the conversation uses them. This track reports that weight using representative catalog estimates from the tolkin MCP analyzer: cold totals for configurations as found, slim deltas for reduced tool profiles, swap deltas for replacing a server with a CLI equivalent, and the share of a 200K context window each configuration consumes. The numbers are curated representative estimates derived from the analyzer's catalog, not tokenized server manifests. They are refreshable when the catalog is updated. Only the configuration changes; conversation content is untouched. Comparable middleware (caveman-shrink) runs on the same manifests where it can be run headlessly.
 
 ## Track 3: lossy (compression)
 

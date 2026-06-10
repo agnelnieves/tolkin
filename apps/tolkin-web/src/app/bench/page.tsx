@@ -17,21 +17,21 @@ const results = rawResults as BenchResults;
 export const metadata: Metadata = {
   title: "Benchmark",
   description:
-    "Measured, reproducible input-token savings for Tolkin's lossless, configuration, and lossy compression techniques. Methodology and raw numbers included.",
+    "Measured, reproducible input-token savings for Tolkin's lossless and lossy techniques. Configuration track uses catalog estimates. Methodology and raw numbers included.",
   alternates: {
     canonical: "/bench",
   },
   openGraph: {
     title: "Benchmark",
     description:
-      "Measured, reproducible input-token savings for Tolkin's lossless, configuration, and lossy compression techniques. Methodology and raw numbers included.",
+      "Measured, reproducible input-token savings for Tolkin's lossless and lossy techniques. Configuration track uses catalog estimates. Methodology and raw numbers included.",
     url: "/bench",
   },
   twitter: {
     card: "summary_large_image",
     title: "Benchmark",
     description:
-      "Measured, reproducible input-token savings for Tolkin's lossless, configuration, and lossy compression techniques. Methodology and raw numbers included.",
+      "Measured, reproducible input-token savings for Tolkin's lossless and lossy techniques. Configuration track uses catalog estimates. Methodology and raw numbers included.",
   },
 };
 
@@ -330,7 +330,7 @@ export default function BenchPage() {
         <header className="space-y-3">
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Benchmark</h1>
           <p className="text-sm text-zinc-400 sm:text-base">
-            Measured, reproducible, input-token bounded.
+            Measured, reproducible, input-token bounded. Configuration track uses catalog estimates.
           </p>
           <p className="text-xs font-mono text-zinc-600">
             {isPending ? (
@@ -403,7 +403,8 @@ export default function BenchPage() {
           </div>
           <p className="text-xs text-zinc-500">
             MCP server and agent config analysis: cold-session token cost, CLI swap savings, and
-            slim-profile savings per fixture.
+            slim-profile savings per fixture. Numbers are representative catalog estimates, not
+            tokenized manifests. Refreshable when the catalog is updated.
           </p>
           <ConfigurationSection cases={tracks.configuration.cases} />
           <ExternalComparisons comparisons={tracks.configuration.comparisons} />
