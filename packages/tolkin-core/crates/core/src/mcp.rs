@@ -147,7 +147,7 @@ static CATALOG: &[CatalogEntry] = &[
         cold_tokens: 40_000,
         cli_alternative: Some("gh"),
         recommendation: Recommendation::Replace,
-        note: "The agent already knows gh. Replacing reclaims roughly 26K to 55K tokens; behind Tool Search this drops to about 8.7K.",
+        note: "The agent already knows gh. Replacing reclaims roughly 26K to 55K tokens (external Scalekit benchmark range); see the Tool Search column for the catalog's own defer-loaded figure.",
         slim: Some(SlimSpec {
             mechanism: "GITHUB_TOOLSETS env var",
             snippet: r#""env": { "GITHUB_TOOLSETS": "repos,issues" }"#,
@@ -750,14 +750,14 @@ pub fn analyze(config_text: &str, provider: Provider) -> Result<McpAnalysis, Str
 }
 
 fn scenarios(provider: Provider, tools: u32, cold: u32) -> Scenarios {
-    // Cold write surcharge and warm read discount, per PLAN section 9.
-    let (cold_mult, warm_mult) = match provider {
-        Provider::Anthropic => (1.25, 0.10),
-        Provider::OpenAi => (1.0, 0.50),
-        Provider::Gemini => (1.0, 0.25),
-    };
-    let cold_t = (cold as f64 * cold_mult).round() as u64;
-    let warm_t = (cold as f64 * warm_mult).round() as u64;
+    // Cold and warm multipliers derive from the pricing table so this surface
+    // stays in sync with the cost calculator. Cold is the first-turn cache
+    // write surcharge (cache_write_5m / input, 1.0 when the provider does
+    // not bill a write); warm is the subsequent-turn cached read discount
+    // (cache_read / input, 1.0 when the provider publishes no discount).
+    let (cold_mult, warm_mult) = cache_multipliers(provider);
+    let cold_t = (f64::from(cold) * cold_mult).round() as u64;
+    let warm_t = (f64::from(cold) * warm_mult).round() as u64;
     // Tool Search: a ~500-token search stub plus up to 5 tools loaded on demand
     // at ~600 tokens each.
     let tool_search = 500 + u64::from(tools.min(5)) * 600;
@@ -767,6 +767,16 @@ fn scenarios(provider: Provider, tools: u32, cold: u32) -> Scenarios {
         tool_search,
         capacity: u64::from(cold),
     }
+}
+
+/// Cold (cache write) and warm (cache read) multipliers for `provider`,
+/// derived from the provider's default model in the pricing table. Returns
+/// 1.0 in either slot when the provider publishes no separate rate.
+fn cache_multipliers(provider: Provider) -> (f64, f64) {
+    let m = pricing::default_for(provider);
+    let cold = m.cache_write_5m.map_or(1.0, |w| w / m.input);
+    let warm = m.cache_read.map_or(1.0, |r| r / m.input);
+    (cold, warm)
 }
 
 /// Find the servers map under any known client key and return a human label.
@@ -995,8 +1005,12 @@ mod tests {
             .unwrap();
         let sc = gh.scenarios.as_ref().unwrap();
         assert_eq!(sc.capacity, 40_000);
-        assert_eq!(sc.cold, 50_000); // 40000 * 1.25
-        assert_eq!(sc.warm, 4_000); // 40000 * 0.10
+        // Derive the expected cold/warm from the pricing table rather than
+        // hardcoding 1.25/0.10 so a future Anthropic rate change does not
+        // silently break this assertion.
+        let (cold_mult, warm_mult) = cache_multipliers(Provider::Anthropic);
+        assert_eq!(sc.cold, (40_000.0 * cold_mult).round() as u64);
+        assert_eq!(sc.warm, (40_000.0 * warm_mult).round() as u64);
         assert_eq!(sc.tool_search, 500 + 5 * 600); // capped at 5 tools
     }
 
@@ -1006,10 +1020,10 @@ mod tests {
         let a = analyze(cfg, Provider::OpenAi).unwrap();
         assert!(a.client.contains("servers"));
         assert_eq!(a.totals.matched, 1);
-        // openai cold multiplier is 1.0
         let sc = a.servers[0].scenarios.as_ref().unwrap();
-        assert_eq!(sc.cold, 40_000);
-        assert_eq!(sc.warm, 20_000); // 40000 * 0.50
+        let (cold_mult, warm_mult) = cache_multipliers(Provider::OpenAi);
+        assert_eq!(sc.cold, (40_000.0 * cold_mult).round() as u64);
+        assert_eq!(sc.warm, (40_000.0 * warm_mult).round() as u64);
     }
 
     #[test]
@@ -1228,6 +1242,88 @@ mod tests {
         let brave_opt = &brave.slim.as_ref().unwrap().option;
         assert!(brave_opt.snippet.contains("BRAVE_MCP_ENABLED_TOOLS"));
         assert!(brave_opt.note.contains("Space separated"));
+    }
+
+    #[test]
+    fn cache_multipliers_derive_from_pricing_table() {
+        // Anthropic: cache_write_5m / input and cache_read / input from the
+        // default model (Sonnet 4.6: 3.75 / 3.0 = 1.25, 0.30 / 3.0 = 0.10).
+        let anth_default = pricing::default_for(Provider::Anthropic);
+        let expected_anth_cold = anth_default.cache_write_5m.unwrap() / anth_default.input;
+        let expected_anth_warm = anth_default.cache_read.unwrap() / anth_default.input;
+        let (anth_cold, anth_warm) = cache_multipliers(Provider::Anthropic);
+        assert!((anth_cold - expected_anth_cold).abs() < 1e-12);
+        assert!((anth_warm - expected_anth_warm).abs() < 1e-12);
+        assert!((anth_cold - 1.25).abs() < 1e-12);
+        assert!((anth_warm - 0.10).abs() < 1e-12);
+
+        // OpenAI: no cache_write rate published (defaults to 1.0); cache_read
+        // is 10% of base across the GPT-5 family. Default model is gpt-5.4.
+        let oai_default = pricing::default_for(Provider::OpenAi);
+        assert!(oai_default.cache_write_5m.is_none());
+        let expected_oai_warm = oai_default.cache_read.unwrap() / oai_default.input;
+        let (oai_cold, oai_warm) = cache_multipliers(Provider::OpenAi);
+        assert!((oai_cold - 1.0).abs() < 1e-12);
+        assert!((oai_warm - expected_oai_warm).abs() < 1e-12);
+        assert!((oai_warm - 0.10).abs() < 1e-12);
+
+        // Gemini: cached tokens bill at 10% of base input on the 2.5 family;
+        // no cache_write rate is modeled. Default model is gemini-2.5-pro.
+        let gem_default = pricing::default_for(Provider::Gemini);
+        assert!(gem_default.cache_write_5m.is_none());
+        let expected_gem_warm = gem_default.cache_read.unwrap() / gem_default.input;
+        let (gem_cold, gem_warm) = cache_multipliers(Provider::Gemini);
+        assert!((gem_cold - 1.0).abs() < 1e-12);
+        assert!((gem_warm - expected_gem_warm).abs() < 1e-12);
+        assert!((gem_warm - 0.10).abs() < 1e-12);
+    }
+
+    #[test]
+    fn warm_cold_scenarios_match_pricing_derived_values() {
+        // Same 40_000-cold github fixture, each provider. Expectations are
+        // derived from the pricing table at runtime, never hardcoded.
+        for p in [Provider::Anthropic, Provider::OpenAi, Provider::Gemini] {
+            let a = analyze(CLAUDE_DESKTOP, p).unwrap();
+            let gh = a
+                .servers
+                .iter()
+                .find(|s| s.matched_id.as_deref() == Some("github"))
+                .unwrap();
+            let sc = gh.scenarios.as_ref().unwrap();
+            let (cold_mult, warm_mult) = cache_multipliers(p);
+            assert_eq!(sc.capacity, 40_000, "{p:?}");
+            assert_eq!(sc.cold, (40_000.0 * cold_mult).round() as u64, "{p:?}");
+            assert_eq!(sc.warm, (40_000.0 * warm_mult).round() as u64, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn github_note_does_not_contradict_tool_search_figure() {
+        // P1-5 alignment: the catalog note must not carry a Tool-Search
+        // figure that disagrees with the computed `tool_search` scenario.
+        // Option (b) at landing time: keep the generic stub+tools formula
+        // and rewrite the note to point readers at the scenario column.
+        let a = analyze(CLAUDE_DESKTOP, Provider::Anthropic).unwrap();
+        let gh = a
+            .servers
+            .iter()
+            .find(|s| s.matched_id.as_deref() == Some("github"))
+            .unwrap();
+        // No bare Tool-Search dollar/token figure in the note.
+        assert!(
+            !gh.note.contains("8.7K") && !gh.note.contains("8.7k"),
+            "stale 8.7K Tool Search figure leaked into github note: {}",
+            gh.note
+        );
+        // The retained external range is now explicitly attributed.
+        assert!(
+            gh.note.contains("Scalekit"),
+            "external benchmark attribution missing: {}",
+            gh.note
+        );
+        // The computed Tool Search scenario stays the canonical figure.
+        let sc = gh.scenarios.as_ref().unwrap();
+        assert_eq!(sc.tool_search, 500 + 5 * 600);
     }
 
     #[test]

@@ -319,12 +319,14 @@ Five-step algorithm, implemented in `packages/tolkin-core::mcp`:
 
 4. **Produce three scenarios per server:**
 
-| Scenario | Anthropic math | OpenAI math |
-|---|---|---|
-| Cold cache (first turn) | `tokens × 1.25` (write surcharge) | `tokens × 1.0` |
-| Warm cache (subsequent turn) | `tokens × 0.10` (90% off) | `tokens × 0.50` |
-| With Tool Search defer-loading | `~500` (search stub) `+ ~3-5 tools × 600` on-demand | Same |
-| Capacity cost (always) | `tokens` (attention slots) | `tokens` (attention slots) |
+All cache multipliers below derive from the `tolkin-core::pricing` table at runtime (cold = `cache_write_5m / input`, warm = `cache_read / input`, both fall back to `1.0` when the provider publishes no separate rate). The table is the single source of truth; updating a pricing row updates the analyzer automatically.
+
+| Scenario | Anthropic math | OpenAI math | Gemini math |
+|---|---|---|---|
+| Cold cache (first turn) | `tokens × 1.25` (write surcharge, derived) | `tokens × 1.0` (no write surcharge published) | `tokens × 1.0` (no write surcharge published) |
+| Warm cache (subsequent turn) | `tokens × 0.10` (90% off, derived) | `tokens × 0.10` (cached input is 10% of base across GPT-5) | `tokens × 0.10` (Gemini 2.5 family cached at 10% of base, verified 2026-06) |
+| With Tool Search defer-loading | `~500` (search stub) `+ min(tools, 5) × 600` loaded on demand | Same | Same |
+| Capacity cost (always) | `tokens` (attention slots) | `tokens` (attention slots) | `tokens` (attention slots) |
 
 5. **Sum and report.** Per-server breakdown plus totals across cold session, warm session, Tool-Search session, and percent of 200K window consumed. Convert to $ at the user's monthly volume.
 
@@ -347,7 +349,7 @@ Five-step algorithm, implemented in `packages/tolkin-core::mcp`:
 
 **When to keep MCP (do not blanket-recommend CLI):** OAuth-gated APIs without a mature CLI (Notion, Figma), realtime / Socket Mode flows (Slack RTM), enterprise auth governance via MCP gateway, proprietary internal APIs the LLM was not trained on.
 
-**Tool Search awareness.** Anthropic shipped Tool Search Tool (defer-loading) in January 2026. With `defer_loading: true`, MCP cost drops to a ~500-token search stub plus 3-5 on-demand tools per task. Tolkin asks "Is your client on a Tool-Search-compatible version?" and shows a third scenario alongside cold/warm. Behind Tool Search, GitHub MCP drops from 26-55K to ~8.7K, narrowing the gap with `gh` to where the CLI is no longer a clear win.
+**Tool Search awareness.** Anthropic shipped Tool Search Tool (defer-loading) in January 2026. With `defer_loading: true`, MCP cost drops to a ~500-token search stub plus 3-5 on-demand tools per task. Tolkin asks "Is your client on a Tool-Search-compatible version?" and shows a third scenario alongside cold/warm, computed as `500 + min(tools, 5) × 600` so the analyzer never disagrees with itself between a per-server note and the column it ships. For the GitHub MCP that scenario lands around 3.5K (90 tools, 5 loaded on demand); external Scalekit benchmarks have reported figures closer to ~8.7K under different prompt shapes, which is why per-server notes attribute any external number explicitly rather than mixing it with the column.
 
 **Why this is the wedge.** No marketplace (Smithery, Glama) and no inspector (`@modelcontextprotocol/inspector`) currently quantifies token cost from a config file. Anthropic's own engineering blog reports tool definitions can consume 72% of a 200K window across just three servers, with $1,370 / dev / year overhead. Scalekit measured GitHub MCP at 1,365 vs 44,026 tokens (32x) versus `gh` for the same task with worse reliability (72% vs 100%). Tolkin is the first tool that walks a user from "paste your config" to "you can save $X / year by swapping these three servers for CLIs."
 
