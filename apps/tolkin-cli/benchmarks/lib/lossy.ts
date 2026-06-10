@@ -71,11 +71,18 @@ async function loadCompressor(): Promise<Compressor> {
   env.allowLocalModels = true;
   env.allowRemoteModels = true;
 
-  const tjsConfig = { device: "auto", dtype: "fp32" } as const;
+  // device must be cpu, not auto: auto asks onnxruntime-node for the CUDA
+  // execution provider on linux, whose shared library is absent on GPU-less
+  // CI runners (and irrelevant to a deterministic benchmark).
+  const tjsConfig = { device: "cpu", dtype: "fp32" } as const;
   const config = await AutoConfig.from_pretrained(MODEL_ID);
   const withConfig = { config: { ...config, "transformers.js_config": tjsConfig } };
   const tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID, withConfig);
-  const model = await BertForTokenClassification.from_pretrained(MODEL_ID, withConfig);
+  const model = await BertForTokenClassification.from_pretrained(MODEL_ID, {
+    ...withConfig,
+    device: "cpu",
+    dtype: "fp32",
+  });
 
   return new LLMLingua2.PromptCompressor(
     model,
