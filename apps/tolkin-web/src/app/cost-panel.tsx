@@ -24,7 +24,12 @@ type CountState = {
 
 type Toggles = {
   cacheHitRate: number;
-  outputTokens: string; // empty string means "estimate from ratio"
+  outputTokens: string; // empty string defers to estimateOutput below
+  // Off by default: with no output_tokens supplied and estimateOutput false the
+  // per-call total is input-side only. Toggling this on reproduces the legacy
+  // rough volume assumption (input times the provider output:input PRICE
+  // ratio); the UI labels every figure that depends on it.
+  estimateOutput: boolean;
   calls: string;
   batchFraction: number;
   cacheTtl: "5m" | "1h";
@@ -33,6 +38,7 @@ type Toggles = {
 const initialToggles: Toggles = {
   cacheHitRate: 0,
   outputTokens: "",
+  estimateOutput: false,
   calls: "1",
   batchFraction: 0,
   cacheTtl: "5m",
@@ -142,6 +148,7 @@ export function CostPanel({ text }: { text: string }) {
           model_id: m.id,
           input_tokens: inputTokens,
           output_tokens: outputTokens,
+          estimate_output: toggles.estimateOutput,
           calls,
           cache_hit_rate: toggles.cacheHitRate,
           batch_fraction: toggles.batchFraction,
@@ -211,13 +218,19 @@ export function CostPanel({ text }: { text: string }) {
           <p key={n}>{n}</p>
         ))}
       </div>
+
+      <p className="text-[11px] leading-5 text-zinc-500">
+        Default per-call total is input-side only. Turn on the output estimate or enter an output
+        token count to model your workload.
+      </p>
     </section>
   );
 }
 
 function Controls({ toggles, onChange }: { toggles: Toggles; onChange: (next: Toggles) => void }) {
+  const outputPlaceholder = toggles.estimateOutput ? "rough estimate" : "input only";
   return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 sm:grid-cols-3 lg:grid-cols-6">
       <Field label="Cache hit rate">
         <div className="flex items-center gap-2">
           <input
@@ -240,11 +253,23 @@ function Controls({ toggles, onChange }: { toggles: Toggles; onChange: (next: To
           type="number"
           min={0}
           inputMode="numeric"
-          placeholder="estimate"
+          placeholder={outputPlaceholder}
           value={toggles.outputTokens}
           onChange={(e) => onChange({ ...toggles, outputTokens: e.target.value })}
           className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs tabular-nums text-zinc-200 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
         />
+      </Field>
+
+      <Field label="Estimate output">
+        <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+          <input
+            type="checkbox"
+            checked={toggles.estimateOutput}
+            onChange={(e) => onChange({ ...toggles, estimateOutput: e.target.checked })}
+            className="size-3 accent-zinc-400"
+          />
+          <span>rough volume assumption</span>
+        </label>
       </Field>
 
       <Field label="Calls">

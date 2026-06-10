@@ -381,10 +381,12 @@ Five-step algorithm, implemented in `packages/tolkin-core::mcp`:
 - Audio (GPT-realtime-2 input audio) at 6.4x text input on the same model
 - Opus 4.7 tokenizer drift: stealth ~35% per-character price increase vs 4.6
 
-**Output:input ratios** (the biggest savings lever, because output is 5-8x more expensive than input):
+**Output:input PRICE ratios** (the biggest savings lever, because output is 5-8x more expensive than input per token):
 - Anthropic: 5x
 - OpenAI: 6x
 - Gemini Pro: 8x
+
+These figures describe price, not volume: a Sonnet output token costs 5x what a Sonnet input token costs. They are NOT an estimate of how many output tokens a typical response will contain. The calculator's default per-call total is therefore input-side only (output tokens 0, output cost 0). Passing an output token count or opting in to `estimate_output` (UI checkbox; CLI `--estimate-output`) reproduces the legacy rough-volume assumption (input times the price ratio) and labels every figure that depends on it as such. This keeps the headline number aligned with the product's input-token-bounded identity.
 
 ## 11. CLI surface and distribution
 

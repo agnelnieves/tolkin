@@ -1,8 +1,10 @@
 //! Cost calculator. Pure arithmetic over the `pricing` tables and a token count.
 //!
-//! Input-token-bounded by design: output token counts (and therefore output
-//! cost) are an explicit estimate unless the caller supplies them. Shared by the
-//! CLI and the web (via WASM). See PLAN.md section 10.
+//! Input-token-bounded by design: output tokens are zero by default, and the
+//! per-call total reports input-side cost only unless the caller either supplies
+//! `output_tokens` or sets `estimate_output: true` to opt into the rough
+//! volume assumption derived from the provider's output:input PRICE ratio.
+//! Shared by the CLI and the web (via WASM). See PLAN.md section 10.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,9 +31,16 @@ fn default_calls() -> u64 {
 pub struct CostRequest {
     pub model_id: String,
     pub input_tokens: u64,
-    /// Output tokens. `None` estimates from the provider output:input ratio.
+    /// Output tokens. `None` plus `estimate_output: false` bills zero output;
+    /// `None` plus `estimate_output: true` reproduces the legacy rough volume
+    /// assumption (input times the provider output:input price ratio).
     #[serde(default)]
     pub output_tokens: Option<u64>,
+    /// Opt in to the volume-from-price-ratio output estimate when
+    /// `output_tokens` is None. Defaults to false so the headline total stays
+    /// input-side and matches the product's input-token-bounded identity.
+    #[serde(default)]
+    pub estimate_output: bool,
     /// How many calls to multiply the per-call cost by (monthly volume, etc).
     #[serde(default = "default_calls")]
     pub calls: u64,
@@ -58,6 +67,7 @@ impl CostRequest {
             model_id: model_id.into(),
             input_tokens,
             output_tokens: None,
+            estimate_output: false,
             calls: 1,
             cache_hit_rate: 0.0,
             cache_write_tokens: 0,
@@ -129,7 +139,8 @@ pub fn estimate_with(model: &ModelPrice, req: &CostRequest) -> CostBreakdown {
     let ratio = model.output / model.input;
     let (output_tokens, output_estimated) = match req.output_tokens {
         Some(o) => (o, false),
-        None => ((input as f64 * ratio).round() as u64, true),
+        None if req.estimate_output => ((input as f64 * ratio).round() as u64, true),
+        None => (0, false),
     };
 
     let cached = (input as f64 * hit).round() as u64;
@@ -175,10 +186,18 @@ pub fn estimate_with(model: &ModelPrice, req: &CostRequest) -> CostBreakdown {
 
     let per_total = fresh_cost + cached_cost + output_cost + cache_write_cost;
 
-    notes.push(
-        "Input-token-bounded estimate. Output count is an estimate unless you set it; output cost varies by response."
-            .to_string(),
-    );
+    if req.output_tokens.is_none() {
+        if req.estimate_output {
+            notes.push(format!(
+                "Output volume is a rough assumption: input tokens times the {:.0}x output:input PRICE ratio for {}. Real responses vary widely; supply an output token count to model your workload.",
+                ratio, model.display
+            ));
+        } else {
+            notes
+                .push("Output not included; supply an output token count to model it.".to_string());
+        }
+    }
+    notes.push("Input-token-bounded. Output cost varies by response.".to_string());
     notes.push(format!(
         "Prices observed {}; verify against provider pricing pages before relying on dollar figures.",
         pricing::PRICES_OBSERVED
@@ -235,12 +254,59 @@ mod tests {
 
     #[test]
     fn sonnet_basic_no_cache() {
+        // Default path: output_tokens=None and estimate_output=false means the
+        // headline total is input-side only. The old behaviour (output billed
+        // as input times the output:input price ratio) is now opt-in.
         let b = estimate(&CostRequest::new("claude-sonnet-4.6", 1000)).unwrap();
-        assert_eq!(b.output_tokens, 5000); // 5x output:input ratio
-        assert!(b.output_estimated);
+        assert_eq!(b.output_tokens, 0);
+        assert!(!b.output_estimated);
         approx(b.per_call.fresh_input, 0.003);
-        approx(b.per_call.output, 0.075);
-        approx(b.per_call.total, 0.078);
+        approx(b.per_call.output, 0.0);
+        approx(b.per_call.total, 0.003);
+        assert!(b.notes.iter().any(|n| n.contains("Output not included")));
+    }
+
+    #[test]
+    fn default_output_is_zero_and_not_estimated() {
+        // Same shape as sonnet_basic_no_cache but on gpt-5.4 to prove this is
+        // not provider-specific. Asserts both the zero-cost outcome and the
+        // "output not included" honesty note.
+        let b = estimate(&CostRequest::new("gpt-5.4", 1001)).unwrap();
+        assert_eq!(b.output_tokens, 0);
+        assert!(!b.output_estimated);
+        approx(b.per_call.output, 0.0);
+        // Input-side cost is the whole per-call total: 1001 / 1e6 * $2.50.
+        approx(b.per_call.fresh_input, 1001.0 / 1_000_000.0 * 2.5);
+        approx(b.per_call.total, 1001.0 / 1_000_000.0 * 2.5);
+        assert!(b.notes.iter().any(|n| n.contains("Output not included")));
+    }
+
+    #[test]
+    fn opt_in_output_estimate_uses_price_ratio() {
+        // Independent confirmation of the money math: the opt-in estimate
+        // must reproduce input * (output_rate / input_rate) at the price
+        // table's actual numbers, not a hardcoded constant. This guards
+        // against silent drift if pricing changes.
+        let model = pricing::find("claude-sonnet-4.6").unwrap();
+        let mut req = CostRequest::new("claude-sonnet-4.6", 1000);
+        req.estimate_output = true;
+        let b = estimate(&req).unwrap();
+
+        let expected_output_tokens = (1000.0 * (model.output / model.input)).round() as u64;
+        let expected_output_cost = expected_output_tokens as f64 / 1_000_000.0 * model.output;
+        let expected_input_cost = 1000.0 / 1_000_000.0 * model.input;
+
+        assert_eq!(b.output_tokens, expected_output_tokens);
+        assert!(b.output_estimated);
+        approx(b.per_call.output, expected_output_cost);
+        approx(b.per_call.fresh_input, expected_input_cost);
+        approx(b.per_call.total, expected_input_cost + expected_output_cost);
+        // The disclosure note must label the basis (price ratio + rough volume
+        // assumption) so a reader knows the figure is not measurement.
+        assert!(b
+            .notes
+            .iter()
+            .any(|n| n.contains("rough assumption") && n.contains("PRICE ratio")));
     }
 
     #[test]
@@ -301,6 +367,23 @@ mod tests {
             serde_json::from_str(r#"{"model_id":"gpt-5.4","input_tokens":100}"#).unwrap();
         assert_eq!(req.calls, 1);
         assert_eq!(req.cache_ttl, CacheTtl::FiveMin);
+        // Backward-compatible JSON contract: callers that omit estimate_output
+        // get the new input-side default for free.
+        assert!(!req.estimate_output);
         assert!(estimate(&req).is_ok());
+    }
+
+    #[test]
+    fn json_can_opt_in_to_output_estimate() {
+        // Web (WASM) callers route through this exact JSON shape, so the
+        // field name has to land verbatim.
+        let req: CostRequest = serde_json::from_str(
+            r#"{"model_id":"gpt-5.4","input_tokens":1000,"estimate_output":true}"#,
+        )
+        .unwrap();
+        assert!(req.estimate_output);
+        let b = estimate(&req).unwrap();
+        assert!(b.output_estimated);
+        assert!(b.output_tokens > 0);
     }
 }
