@@ -9,10 +9,15 @@ on:
   pull_request:
     branches: [main]
 
-# Node 20 action runtimes are deprecated; opt into the Node 24 default
-# ahead of the 2026-06-16 flip so incompatibilities surface in CI now.
 env:
+  # Node 20 action runtimes are deprecated; opt into the Node 24 default
+  # ahead of the 2026-06-16 flip so incompatibilities surface in CI now.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Report-only by default: the job always succeeds and only comments.
+  # Set to high, medium, or low to make the final step run
+  # `tolkin project . --fail-on <severity>`, which exits 2 when any
+  # finding at or above that severity exists anywhere in the repo.
+  TOLKIN_FAIL_ON: ""
 
 concurrency:
   group: tolkin-audit-${{ github.ref }}
@@ -21,13 +26,6 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write
-
-env:
-  # Report-only by default: the job always succeeds and only comments.
-  # Set to high, medium, or low to make the final step run
-  # `tolkin project . --fail-on <severity>`, which exits 2 when any
-  # finding at or above that severity exists anywhere in the repo.
-  TOLKIN_FAIL_ON: ""
 
 jobs:
   audit:
