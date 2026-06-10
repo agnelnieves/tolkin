@@ -33,11 +33,15 @@ export interface RedactOptions {
 }
 
 // Input to cost(). Only model_id and input_tokens are required; everything else
-// falls back to a core default (see PLAN section 10).
+// falls back to a core default (see PLAN section 10). `estimate_output` is the
+// explicit opt-in for the rough output volume assumption (input times the
+// provider output:input PRICE ratio); when omitted the per-call total stays
+// input-side only.
 export interface CostRequest {
   model_id: string;
   input_tokens: number;
   output_tokens?: number;
+  estimate_output?: boolean;
   calls?: number;
   cache_hit_rate?: number;
   cache_write_tokens?: number;

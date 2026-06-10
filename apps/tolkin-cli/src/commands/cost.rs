@@ -18,9 +18,15 @@ pub struct CostArgs {
     #[arg(long)]
     pub model: Option<String>,
 
-    /// Output tokens. Omit to estimate from the provider output:input ratio.
+    /// Output tokens. Omit to bill input-side only (the default).
     #[arg(long)]
     pub output_tokens: Option<u64>,
+
+    /// Opt in to a rough output volume assumption: input times the provider
+    /// output:input PRICE ratio. Off by default so the headline total stays
+    /// input-token-bounded. Ignored when `--output-tokens` is set.
+    #[arg(long)]
+    pub estimate_output: bool,
 
     /// Number of calls to scale the total by (monthly volume, etc).
     #[arg(long, default_value_t = 1)]
@@ -76,6 +82,7 @@ pub fn run(args: CostArgs) -> Result<()> {
             model_id: m.id.to_string(),
             input_tokens,
             output_tokens: args.output_tokens,
+            estimate_output: args.estimate_output,
             calls: args.calls.max(1),
             cache_hit_rate: args.cache_hit_rate,
             cache_write_tokens: args.cache_write_tokens,
@@ -126,8 +133,16 @@ fn print_table(rows: &[cost::CostBreakdown]) {
         println!("Totals are for {} calls.", commas(calls));
     }
     println!(
-        "~ marks an estimate (Anthropic token count is a cl100k_base proxy; output is estimated unless set)."
+        "~ marks an estimate (Anthropic token count is a cl100k_base proxy; output is estimated only with --estimate-output)."
     );
+    let any_output_estimated = rows.iter().any(|r| r.output_estimated);
+    if any_output_estimated {
+        println!(
+            "Output volume from --estimate-output is a rough assumption (input times the output:input PRICE ratio)."
+        );
+    } else {
+        println!("Output not included; pass --output-tokens or --estimate-output to model it.");
+    }
     println!("Input-token-bounded. Output cost varies by response.");
     println!(
         "Prices observed {}; verify against provider pricing pages before relying on dollar figures.",
