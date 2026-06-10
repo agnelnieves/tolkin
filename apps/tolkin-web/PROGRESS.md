@@ -784,3 +784,9 @@ npm packages cannot be renamed; the cutover is new names plus deprecation:
 #### Verification
 
 CLI 135 unit + 10 integration tests, core 83, clippy + fmt + cargo-deny clean both workspaces, wasm pkg emits tolkin-core-wasm, lockfile regenerated, web gates all pass, bench determinism holds under the renamed binary, fresh onboarding smoke greets "Welcome to tolkin", old-env-var fallback verified, pre-rename ledger record parses. Bumped 0.8.0 -> 0.9.0.
+
+### 2026-06-10: Rename merged; bench harness proven end to end in CI
+
+tolkin-ci green on the rename (one rerun for a Docker Hub flake on the cargo-deny action, infrastructure not code). The transition-mode publish run (27300625236) built all five binaries and staged them as artifacts; all six publish steps failed softly on the OIDC first-publish gap exactly as designed. The action dry-run passed. The bench harness needed three environment fixes to go green on a CI runner, each found by an actual dispatch: bun's isolated linker does not hoist the web app's dependencies to the root (resolve @atjsh/llmlingua-2, @huggingface/transformers, and gpt-tokenizer from the web workspace's context), and transformers.js device "auto" requests the CUDA execution provider on linux, whose shared library does not exist on GPU-less runners (pinned to cpu; results byte-identical, macOS was already cpu). tolkin-bench now runs green on main.
+
+Note for the owner: until the six tolkin first publishes land, the version gate cannot find tolkin-cli on the registry, so every push to main re-runs the full publish matrix (fail-soft, ~15 minutes of CI each). The cutover ends that.
