@@ -147,7 +147,7 @@ static CATALOG: &[CatalogEntry] = &[
         cold_tokens: 40_000,
         cli_alternative: Some("gh"),
         recommendation: Recommendation::Replace,
-        note: "The agent already knows gh. Replacing reclaims roughly 26K to 55K tokens (external Scalekit benchmark range); see the Tool Search column for the catalog's own defer-loaded figure.",
+        note: "The agent already knows gh. Replacing reclaims roughly 26K to 55K tokens (externally reported range; varies by server version and enabled toolsets); see the Tool Search column for the catalog's own defer-loaded figure.",
         slim: Some(SlimSpec {
             mechanism: "GITHUB_TOOLSETS env var",
             snippet: r#""env": { "GITHUB_TOOLSETS": "repos,issues" }"#,
@@ -1315,10 +1315,11 @@ mod tests {
             "stale 8.7K Tool Search figure leaked into github note: {}",
             gh.note
         );
-        // The retained external range is now explicitly attributed.
+        // The retained external range is now explicitly labeled as external
+        // (it is a multi-source community range, not any single benchmark).
         assert!(
-            gh.note.contains("Scalekit"),
-            "external benchmark attribution missing: {}",
+            gh.note.contains("externally reported"),
+            "external range label missing: {}",
             gh.note
         );
         // The computed Tool Search scenario stays the canonical figure.
