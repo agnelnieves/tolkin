@@ -56,7 +56,7 @@ export async function runConfiguration(): Promise<ConfigurationCase[]> {
       id: spec.id,
       fixture: relative(REPO_ROOT, fixture),
       client_shape: spec.clientShape,
-      tokenizer: "o200k_base via tolkin mcp (anthropic provider math)",
+      tokenizer: "catalog estimate (representative, refreshable; not tokenized manifests)",
       servers: t.servers,
       cold_tokens: t.cold,
       swap_savings_tokens: t.savings_tokens,

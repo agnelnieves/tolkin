@@ -13,7 +13,7 @@ has not been measured.
 ## Quickstart
 
 ```sh
-# Count tokens in a file
+# Scan local agent configs (MCP, instruction files, shell) for token waste
 npx tolkin-cli scan
 
 # Audit one file for token waste
@@ -123,7 +123,7 @@ All savings figures are input-token bounded. Output tokens are not affected by
 context slimming.
 
 For methodology details and benchmark results, see `benchmarks/RESULTS.md` in this
-repository.
+repository or the live /bench page.
 
 ## Support matrix
 
@@ -133,7 +133,7 @@ repository.
 | macOS x64 (Intel) | Live |
 | Linux x64 | Live |
 | Linux arm64 | Live |
-| Windows x64 | Binary built; npm platform package pending first publish |
+| Windows x64 | Live |
 
 ## License
 

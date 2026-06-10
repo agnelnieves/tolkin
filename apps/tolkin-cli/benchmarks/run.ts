@@ -29,6 +29,7 @@ const RESULTS_JSON = resolve(BENCH_ROOT, "results.json");
 const RESULTS_MD = resolve(BENCH_ROOT, "RESULTS.md");
 const METHODOLOGY_MD = resolve(BENCH_ROOT, "methodology.md");
 const SYNCED_JSON = resolve(REPO_ROOT, "apps", "tolkin-web", "src", "data", "bench-results.json");
+const MIRROR_MD = resolve(REPO_ROOT, "distribution", "benchmarks", "RESULTS.md");
 
 const RUNS = 3;
 
@@ -101,6 +102,10 @@ function ensureDataDir(): void {
   mkdirSync(dirname(SYNCED_JSON), { recursive: true });
 }
 
+function ensureMirrorDir(): void {
+  mkdirSync(dirname(MIRROR_MD), { recursive: true });
+}
+
 function writeArtifacts(r: BenchResults): void {
   // Pretty-print with 2-space indent and a trailing newline so the file is
   // diff-friendly in git and reproducible across runs.
@@ -108,7 +113,14 @@ function writeArtifacts(r: BenchResults): void {
   writeFileSync(RESULTS_JSON, json);
   ensureDataDir();
   writeFileSync(SYNCED_JSON, json);
-  writeFileSync(RESULTS_MD, renderResults(r));
+  const md = renderResults(r);
+  writeFileSync(RESULTS_MD, md);
+  // Mirror RESULTS.md into the public companion repo staging area so the
+  // distribution copy never goes stale. The content is identical to RESULTS.md;
+  // any private-repo paths in the footer are already generic (bun run commands,
+  // not github.com paths).
+  ensureMirrorDir();
+  writeFileSync(MIRROR_MD, md);
 }
 
 interface DiffSummary {
@@ -179,7 +191,7 @@ async function main(): Promise<void> {
 
   const r = await buildResults(new Date().toISOString());
   writeArtifacts(r);
-  process.stdout.write(`wrote ${RESULTS_JSON}, ${RESULTS_MD}, and ${SYNCED_JSON}\n`);
+  process.stdout.write(`wrote ${RESULTS_JSON}, ${RESULTS_MD}, ${SYNCED_JSON}, and ${MIRROR_MD}\n`);
 }
 
 main().catch((e: unknown) => {
