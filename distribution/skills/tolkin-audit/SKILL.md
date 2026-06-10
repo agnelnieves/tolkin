@@ -7,7 +7,7 @@ description: |
   sent to the model on every session. Also triggers on: "how heavy is my context",
   "what is my token footprint", "audit my agent files", "tolkin project".
 metadata:
-  version: 0.7.0
+  version: 0.9.0
 ---
 
 # tolkin-audit
@@ -40,7 +40,8 @@ load profile, and emits a JSON report.
 
 Key fields from `tolkin project . --json`:
 
-```
+<!-- tolkin-schema: project --json -->
+```json
 {
   "root": "/abs/path/to/repo",
   "profiles": {
@@ -86,13 +87,25 @@ Load profile meanings:
 
 1. **Always-loaded tokens are the highest priority.** Every session pays this cost.
    Focus reduction efforts on `profiles.always.tokens` before anything else.
-2. **Check `secret_files`.** Any secrets in agent-context files reach the model on
-   every session. Flag these immediately; they must be removed, not just noted.
-3. **Rank `findings_by_rule` by `savings_max` descending.** Common rules:
+2. **Check `secret_files`.** Files listed here contain values that tolkin flagged as
+   potential secrets (high-entropy strings, key-like patterns). These are reported
+   under `secret_files`, not under `findings_by_rule`. Review each file and remove
+   or redact the values before they reach the model on every session.
+3. **Rank `findings_by_rule` by `savings_max` descending.** Rules that commonly fire:
    - `json-verbosity`: pretty-printed JSON in context; minify or externalize.
-   - `near-duplicate-paragraphs`: repeated blocks across files; consolidate.
-   - `oversized-skill-body`: a skill body larger than ~200 lines; split or trim.
-   - `shell-export-secret`: shell configs with exported secrets.
+   - `sub-cache-threshold`: a file too small to cross the prompt-cache threshold
+     (1024 tokens); consolidate with a peer file to unlock caching.
+   - `html-content`: raw HTML in a context file; convert to Markdown to cut tokens.
+   - `near-duplicate-paragraphs`: repeated blocks within the same file; deduplicate.
+     Note: the audit runs per-file. It does not detect duplication across different
+     files; cross-file consolidation requires manual review.
+   - `stack-trace-verbosity`: long stack traces; trim to the first 5 frames.
+   - `volatile-prefix`: a frequently-changing block early in the context that
+     prevents prompt-cache hits; move dynamic content toward the end.
+   Production-proven rules that also fire in some repos: `filler-phrases`,
+   `html-content`. Experimental rules (higher false-positive risk) include
+   `json-toon-candidate`, `repeated-instructions`, `verbose-role-description`,
+   `excessive-few-shot`, `markdown-overhead`, `lost-in-the-middle`.
 4. **Check `mcp_configs`** for high `cold_tokens`. If cold tokens are significant,
    recommend running `tolkin-slim` to get per-server slim snippets.
 

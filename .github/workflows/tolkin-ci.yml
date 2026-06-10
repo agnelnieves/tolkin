@@ -94,6 +94,16 @@ jobs:
         with:
           manifest-path: apps/tolkin-cli/Cargo.toml
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: skill schema drift lint
+        working-directory: ${{ github.workspace }}
+        run: |
+          TOLKIN_BIN=apps/tolkin-cli/target/debug/tolkin \
+          bun run apps/tolkin-cli/scripts/check-skill-schemas.ts
+
   # Proves the CLI compiles and tests pass under MSVC; clippy/fmt/deny run on the linux job above.
   cli-windows:
     name: tolkin-cli (windows compile + test)

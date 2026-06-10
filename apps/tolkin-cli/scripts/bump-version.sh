@@ -21,6 +21,9 @@ X64="npm/tolkin-darwin-x64/package.json"
 LINUX_X64="npm/tolkin-linux-x64/package.json"
 LINUX_ARM64="npm/tolkin-linux-arm64/package.json"
 WIN32_X64="npm/tolkin-win32-x64/package.json"
+SKILL_AUDIT="../../distribution/skills/tolkin-audit/SKILL.md"
+SKILL_OPTIMIZE="../../distribution/skills/tolkin-optimize/SKILL.md"
+SKILL_SLIM="../../distribution/skills/tolkin-slim/SKILL.md"
 
 current=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$WRAPPER" | head -1)
 if [[ ! "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -50,6 +53,10 @@ for f in "$WRAPPER" "$ARM64" "$X64" "$LINUX_X64" "$LINUX_ARM64" "$WIN32_X64" "pa
   CURRENT="$current" NEXT="$next" perl -pi -e \
     's/^  "version": "\Q$ENV{CURRENT}\E",$/  "version": "$ENV{NEXT}",/' "$f"
 done
+for f in "$SKILL_AUDIT" "$SKILL_OPTIMIZE" "$SKILL_SLIM"; do
+  CURRENT="$current" NEXT="$next" perl -pi -e \
+    's/^  version: \Q$ENV{CURRENT}\E$/  version: $ENV{NEXT}/' "$f"
+done
 for pkg in tolkin-darwin-arm64 tolkin-darwin-x64 tolkin-linux-x64 tolkin-linux-arm64 tolkin-win32-x64; do
   CURRENT="$current" NEXT="$next" PKG="$pkg" perl -pi -e \
     's/"\Q$ENV{PKG}\E": "\Q$ENV{CURRENT}\E"/"$ENV{PKG}": "$ENV{NEXT}"/' "$WRAPPER"
@@ -70,6 +77,9 @@ grep -q "\"version\": \"$next\"" "$WIN32_X64" || { echo "$WIN32_X64 did not upda
 for pkg in tolkin-darwin-arm64 tolkin-darwin-x64 tolkin-linux-x64 tolkin-linux-arm64 tolkin-win32-x64; do
   grep -q "\"$pkg\": \"$next\"" "$WRAPPER" || { echo "optionalDependencies $pkg pin did not update" >&2; fail=1; }
 done
+grep -q "^  version: $next$" "$SKILL_AUDIT" || { echo "$SKILL_AUDIT did not update" >&2; fail=1; }
+grep -q "^  version: $next$" "$SKILL_OPTIMIZE" || { echo "$SKILL_OPTIMIZE did not update" >&2; fail=1; }
+grep -q "^  version: $next$" "$SKILL_SLIM" || { echo "$SKILL_SLIM did not update" >&2; fail=1; }
 [ "$fail" -eq 0 ] || exit 1
 
 echo "Done. All carriers at $next."
