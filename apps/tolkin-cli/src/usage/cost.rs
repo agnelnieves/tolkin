@@ -152,9 +152,10 @@ mod tests {
     }
 
     #[test]
-    fn cost_falls_back_to_input_rate_when_cache_rate_missing() {
-        // Gemini 2.5 Flash has no published cache rate. We charge cache
-        // tokens at the base input rate (0.30 USD per 1M).
+    fn cost_uses_published_gemini_cache_rate() {
+        // Google publishes Gemini 2.5 Flash cache_read at 0.03 USD per 1M
+        // tokens (10% of base input, verified 2026-06). 1M input at 0.30 +
+        // 1M cache_read at 0.03 = 0.33 USD.
         let totals = UsageTotals {
             input_tokens: 1_000_000,
             cache_read_tokens: 1_000_000,
@@ -163,6 +164,39 @@ mod tests {
             cache_write_1h_tokens: 0,
         };
         let usd = cost_usd("gemini-2.5-flash", &totals).unwrap();
-        assert!((usd - 0.60).abs() < 1e-9, "got {usd}");
+        let m = pricing::find("gemini-2.5-flash").unwrap();
+        let expected = m.input + m.cache_read.unwrap();
+        assert!(
+            (usd - expected).abs() < 1e-9,
+            "got {usd}, expected {expected}"
+        );
+        assert!((usd - 0.33).abs() < 1e-9, "got {usd}");
+    }
+
+    #[test]
+    fn cost_falls_back_to_input_rate_when_cache_rate_missing() {
+        // Every catalog model now publishes cache rates, so this test
+        // documents the fallback contract directly: if a model had a None
+        // cache_read in the table, those tokens would bill at the input
+        // rate. We exercise that by patching a totals block such that the
+        // contract is observable through unit math on the catalog: for any
+        // model M with no cache_write_1h, 1M cache_write_1h tokens cost
+        // exactly 1M * M.input (the cache_write_1h fallback). gpt-5.4 has
+        // input 2.5 and cache_write_1h = None.
+        let m = pricing::find("gpt-5.4").unwrap();
+        assert!(m.cache_write_1h.is_none(), "fixture model invariant");
+        let totals = UsageTotals {
+            input_tokens: 0,
+            cache_read_tokens: 0,
+            output_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 1_000_000,
+        };
+        let usd = cost_usd("gpt-5.4", &totals).unwrap();
+        assert!(
+            (usd - m.input).abs() < 1e-9,
+            "got {usd}, expected {}",
+            m.input
+        );
     }
 }

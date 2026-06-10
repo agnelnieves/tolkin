@@ -138,15 +138,21 @@ static MODELS: &[ModelPrice] = &[
         long_context: None,
         is_default: false,
     },
-    // Gemini. 2.5 Pro has the 200K long-context cliff; no published cache-read
-    // discount is modeled here.
+    // Gemini. 2.5 Pro has the 200K long-context cliff. Cached tokens bill at
+    // 10% of base input (verified 2026-06). Explicit context caching also
+    // adds a per-hour storage fee (Pro $4.50, Flash/Flash-Lite $1.00 per MTok
+    // per hour) that this table does not model. Implicit caching is on by
+    // default on the 2.5 family and applies the cached rate automatically on
+    // a cache hit. The Pro long-context tier's cached rate ($0.25 over 200K)
+    // is not modeled either, matching the LongContext struct which carries
+    // input/output only.
     ModelPrice {
         id: "gemini-2.5-pro",
         provider: Provider::Gemini,
         display: "Gemini 2.5 Pro",
         input: 1.25,
         output: 10.0,
-        cache_read: None,
+        cache_read: Some(0.125),
         cache_write_5m: None,
         cache_write_1h: None,
         long_context: Some(LongContext {
@@ -162,7 +168,7 @@ static MODELS: &[ModelPrice] = &[
         display: "Gemini 2.5 Flash",
         input: 0.30,
         output: 2.5,
-        cache_read: None,
+        cache_read: Some(0.03),
         cache_write_5m: None,
         cache_write_1h: None,
         long_context: None,
@@ -174,7 +180,7 @@ static MODELS: &[ModelPrice] = &[
         display: "Gemini 2.5 Flash-Lite",
         input: 0.10,
         output: 0.40,
-        cache_read: None,
+        cache_read: Some(0.01),
         cache_write_5m: None,
         cache_write_1h: None,
         long_context: None,
@@ -228,5 +234,22 @@ mod tests {
         for m in all() {
             assert!(m.output >= m.input, "{}", m.id);
         }
+    }
+
+    #[test]
+    fn gemini_2_5_family_carries_cached_rates() {
+        // Google publishes cached-token prices at 10% of base input for the
+        // 2.5 family (verified 2026-06).
+        let pro = find("gemini-2.5-pro").unwrap();
+        assert_eq!(pro.cache_read, Some(0.125));
+        assert!((pro.cache_read.unwrap() - pro.input * 0.10).abs() < 1e-9);
+
+        let flash = find("gemini-2.5-flash").unwrap();
+        assert_eq!(flash.cache_read, Some(0.03));
+        assert!((flash.cache_read.unwrap() - flash.input * 0.10).abs() < 1e-9);
+
+        let lite = find("gemini-2.5-flash-lite").unwrap();
+        assert_eq!(lite.cache_read, Some(0.01));
+        assert!((lite.cache_read.unwrap() - lite.input * 0.10).abs() < 1e-9);
     }
 }
