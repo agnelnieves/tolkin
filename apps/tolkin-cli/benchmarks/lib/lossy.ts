@@ -62,7 +62,7 @@ async function loadCompressor(): Promise<Compressor> {
   const { LLMLingua2 } = await importFromWebWorkspace("@atjsh/llmlingua-2");
   const { AutoConfig, AutoTokenizer, BertForTokenClassification, env } =
     await importFromWebWorkspace("@huggingface/transformers");
-  const { encode } = await import("gpt-tokenizer/encoding/o200k_base");
+  const { encode } = await importFromWebWorkspace("gpt-tokenizer/encoding/o200k_base");
   const { makeLLMLingua2TokenizerAdapter } = await import("./tokenizer-adapter");
 
   // Node/Bun has no localStorage to cache models, so transformers.js writes
