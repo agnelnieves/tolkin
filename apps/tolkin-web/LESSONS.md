@@ -76,6 +76,13 @@ Append a new entry per incident. Format: ISO date + one-line summary, then a `Wh
 - **Fix:** npm packages cannot be renamed in place. The cutover is: publish six new tolkin packages (each needing the by-now-familiar manual first publish before OIDC trusted publishing can take over), then deprecate the five live tokler packages with a pointer message. Repo-side: git mv + ordered content rename with historical logs excluded, env vars renamed with old-name fallbacks, the data dir migrates itself on first run, and old ledger records keep parsing through a serde alias (record schema bumped to v2).
 - **Lesson:** Rename cost compounds with every distribution surface you ship. The same rename after the public repo, the action marketplace listing, and the blog post would have been a multi-week tail of redirects and stale docs. If a rename is coming, do it before the URLs escape. Also: one letter away from a famous trademark is a conscious risk, not an accident; it was flagged and accepted.
 
+## 2026-06-10: Orchestrator shell drifted into an agent worktree; merges landed on the wrong branch
+
+- **What happened:** During the Wave 0 review-hotfix session, worktree-isolated sub-agents finished their tasks and the orchestrator's persistent shell working directory silently ended up inside a completed agent's worktree. Two `git merge` commands then ran there: one reported "Already up to date" (merging a branch into itself) and the other created a merge commit on the agent's branch instead of feat/tokenly. It happened twice in one session.
+- **Why:** The shell working directory persists between commands, and the worktree machinery can leave it pointing at the last active worktree. Git happily operates wherever it stands; branch names in the command line do not anchor the checkout.
+- **Fix:** Returned to the main checkout, merged the agents' work commits by SHA, and left the stray merge commit unreachable (no unique content). Every subsequent repo-mutating command starts with an explicit `cd` to the main checkout plus a `git branch --show-current` check before merges.
+- **Lesson:** When sub-agents run in git worktrees, the orchestrator must treat its own cwd as untrusted state. Verify the checkout (pwd + current branch) before any merge, commit, or push; an unanchored git command is a wrong-branch commit waiting to happen.
+
 ## Reusable patterns to call out in the eventual post
 
 - The `<scope>-<package>` naming convention turns "name too similar" rejections into a non-event. Suffixes are not branding tax; they are insurance.

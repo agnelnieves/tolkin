@@ -19,13 +19,14 @@ This is the canonical work log for Tolkin. Every work unit (session, agent run, 
 | I3. TUI dashboard + Windows publish | completed | Ratatui dashboard (Project/Machine/Spend tabs, `--compact`), bare `tolkin` opens it in a TTY, windows-2022 publish leg + tolkin-win32-x64 package. 2026-06-10, 0.6.0 |
 | I4. Benchmark harness + results page | completed | three-track harness (structural, configuration, lossy), methodology doc, deterministic results.json + RESULTS.md, /bench page, tolkin-bench.yml. 2026-06-10, 0.7.0 |
 | I5. Distribution layer (skills, plugin, action, report) | completed | tolkin report --html, distribution/ staging (3 skills, plugin manifests, composite action, public README), action dry-run workflow. 2026-06-10, 0.8.0 |
+| I6-1. Review hotfixes (P0s + P1s) | completed | audit workflow un-parse-killed, cache multipliers derived from pricing (Gemini cached rates modeled), skills regenerated from live contracts + schema-drift lint in CI, distribution truth fixes + configuration-track honesty labels, input-first cost default. 2026-06-10, 0.9.1 |
 
 ## Workspace state
 
 | Workspace | Exists | Builds | Lints | Notes |
 |---|---|---|---|---|
-| packages/tolkin-core | yes | yes (cargo + wasm-pack) | yes (clippy + fmt) | Rust workspace with core (rlib) + wasm (cdylib). Modules: `pricing` (11 models + `PRICES_OBSERVED`), `cost` (cache/batch/long-context), `redact` (vendor catalog + entropy + ledger), `mcp` (client-agnostic config analyzer + CLI-swap catalog), `audit` (6 production-proven + 6 experimental rules, format previews), `format` (json-minify, json-to-toon, html-to-markdown). 74 unit tests. WASM bindings expose `redact`/`cost`/`models`/`analyze_mcp`/`audit`/`prices_observed`; artifact in pkg/ (gitignored). |
-| apps/tolkin-cli | yes | yes (cargo) | yes (clippy + fmt) | Rust binary. 12 subcommands plus the bare-`tolkin` Ratatui dashboard (Project/Machine/Spend tabs; `stats --tui`/`--compact`): `count` (with `--verify`), `compare`, `viz`, `redact`, `cost`, `mcp`, `audit`, `drift`, `scan` (per-OS catalog), `project`, `init`, `stats` (three-tier savings, `--global`/`--json`/`--reset`). Local savings ledger + opt-in usage-log ingestion (Claude Code, Codex; mtime+size parse cache). 130 unit + 8 integration tests. |
+| packages/tolkin-core | yes | yes (cargo + wasm-pack) | yes (clippy + fmt) | Rust workspace with core (rlib) + wasm (cdylib). Modules: `pricing` (11 models + `PRICES_OBSERVED`; Gemini 2.5 cached rates modeled), `cost` (cache/batch/long-context; input-side default, output estimate opt-in), `redact` (vendor catalog + entropy + ledger), `mcp` (client-agnostic config analyzer + CLI-swap catalog; cache multipliers derived from the pricing table), `audit` (6 production-proven + 6 experimental rules, format previews), `format` (json-minify, json-to-toon, html-to-markdown). 90 unit tests. WASM bindings expose `redact`/`cost`/`models`/`analyze_mcp`/`audit`/`prices_observed`; artifact in pkg/ (gitignored). |
+| apps/tolkin-cli | yes | yes (cargo) | yes (clippy + fmt) | Rust binary. 12 subcommands plus the bare-`tolkin` Ratatui dashboard (Project/Machine/Spend tabs; `stats --tui`/`--compact`): `count` (with `--verify`), `compare`, `viz`, `redact`, `cost`, `mcp`, `audit`, `drift`, `scan` (per-OS catalog), `project`, `init`, `stats` (three-tier savings, `--global`/`--json`/`--reset`). Local savings ledger + opt-in usage-log ingestion (Claude Code, Codex; mtime+size parse cache). Scripts: portable bump (carries the three skill versions), check-skill-schemas.ts (CI drift lint). 136 unit + 10 integration tests. |
 | apps/tolkin-web | yes | yes (Turbopack) | yes (Biome + oxlint) | Next.js 16 + Tailwind v4 + tsgo. Home page: shared-state textarea + file dropzone + redaction ledger + 3-provider count panel (with opt-in Verify with Anthropic on the Claude card) + token-chip visualizer + cost calculator (with prices-observed staleness note) + audit panel (Lighthouse-style ranked findings), plus the standalone MCP analyzer. Tokenization and the tolkin-core WASM each run in a dedicated Web Worker; parsers lazy-load. Redaction runs first and feeds every downstream view. The only sanctioned fetch lives in `src/lib/verify/anthropic.ts`. |
 
 ## Open questions
@@ -796,3 +797,53 @@ Note for the owner: until the six tolkin first publishes land, the version gate 
 All six tolkin packages first-published manually (OTP relay through the session): tolkin-darwin-arm64, tolkin-darwin-x64, tolkin-linux-x64, tolkin-linux-arm64, tolkin-win32-x64, and the tolkin-cli wrapper, all at 0.9.0. Windows ships for the first time in the project's history (tokler-win32-x64 never existed; tolkin-win32-x64 does). All five tokler packages deprecated with "renamed to tolkin-*" pointers; nothing unpublished, existing installs keep working. Clean-room verification: `npx tolkin-cli@latest --version` prints tolkin 0.9.0 from the live registry and `count - --all` returns the three-provider table.
 
 Publish workflow re-tightened out of transition mode: wrapper and darwin strict, linux and win32 warning-only until their trusted publishers are confirmed. Owner follow-ups now down to: configure six Trusted Publishers on npmjs.com (repo agnelnieves/agnelweb, workflow tolkin-publish.yml) and say the word so the remaining legs go strict; create the public repo from distribution/; ANTHROPIC_API_KEY secret; one human TUI pass.
+
+### 2026-06-10: Wave 0 review hotfixes (P0-1, P0-2, P1-1 through P1-5); 0.9.1
+
+First wave of the I6 engagement executing REVIEW-FINDINGS.md. Five fixes plus one research memo, run as four parallel worktree agents, one serial agent, and two orchestrator-inline fixes. Trusted publishers were confirmed before this wave (commit afe74aa), so this is the first version that publishes all six packages strictly with zero owner action.
+
+#### P0-1: tolkin-audit.yml un-parse-killed (orchestrator, inline)
+
+The two top-level `env:` mappings (introduced by the rename commit 168fe98) are merged into one carrying both `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` and `TOLKIN_FAIL_ON`. Verified: every tolkin workflow now has exactly one `env:` block and the file YAML-parses. Done inline rather than by agent: a two-line fix in a file already fully read. Live proof on a real PR follows the merge (entry below).
+
+#### Research memo (A-R1): three facts pinned with primary sources
+
+- Gemini 2.5 family cached-token pricing IS published, at 10 percent of base input: Pro $0.125/MTok (under 200K; $0.25 over), Flash $0.03, Flash-Lite $0.01, storage fee for explicit caching (Pro $4.50, others $1.00 per MTok per hour), implicit caching automatic on the family (ai.google.dev/gemini-api/docs/pricing, /docs/caching, read 2026-06-10).
+- The Guzik caveman benchmark (dev.to/jakguzik/i-benchmarked-the-viral-caveman-prompt-to-save-llm-tokens-then-my-6-line-version-beat-it-2o81) supports 9-21 percent as the full-study range (Opus full-prompt 9, Opus micro-prompt 21, Sonnet 13-14; plain no-brevity baseline; output-token metric). The researches' 14-21 percent is the micro-prompt slice. methodology.md's existing 9-21 citation was already correct; the source URL and the output-side precision were added.
+- Arcade.dev measured Anthropic Tool Search regex-variant retrieval at 56 percent (14/25 tasks, 4,027-tool corpus; BM25 64 percent) at arcade.dev/blog/anthropic-tool-search-4000-tools-test. Banked for the Tool-Search caveat task in a later wave.
+
+#### P0-2: cache discounts now derive from the pricing table (A2, opus + adversary-grade tests)
+
+`mcp::scenarios()` no longer hardcodes warm multipliers. A `cache_multipliers(provider)` helper derives cold (cache_write_5m over input, 1.0 when None) and warm (cache_read over input, 1.0 when None) from `pricing::default_for(provider)`, so the analyzer and the cost calculator can never disagree again. Effect: OpenAI warm 0.50 -> 0.10 (matching the GPT-5 family cache_read), Gemini warm 0.25 -> 0.10, Anthropic unchanged (1.25 cold, 0.10 warm). The Gemini rows in pricing.rs now carry the published cached rates above (the long-context tier's cached rate and the storage fee are documented as not modeled). Two-confirmation evidence: unit tests compute every expected multiplier from the pricing table at runtime (never hardcoded), and live release-binary smokes show warm = cold_tokens x 0.10 for all three providers plus `tolkin cost --model gemini-2.5-pro --cache-hit-rate 1` billing cached input at exactly $0.125/MTok with cost.rs untouched.
+
+#### P1-5: the GitHub report no longer disagrees with itself (A2 decision, option b)
+
+Kept the generic Tool Search formula (500 stub + min(tools,5) x 600; for GitHub 3,500) and removed the contradicting 8.7K claim from the catalog note. Reasoning recorded: the formula is uniform across the catalog and maps to how the Tool Search Tool works; scaling per-server from cold_tokens would propagate estimate uncertainty while adding no information; the 8.7K launch-era figure traces to the vendor-reported 85 percent reduction claim, so it belongs in attributed prose, not next to a computed column. A regression test pins the note against contradiction. Orchestrator correction on top: A2 had attributed the 26-55K range and the 8.7K figure to Scalekit; Scalekit actually published a single GitHub measurement (44,026 tokens) and the 65x Linear figure. The note now labels 26-55K an externally reported multi-source range and PLAN section 9 attributes 8.7K to the vendor claim.
+
+#### P1-1: skills regenerated from live contracts; drift now impossible (A3)
+
+The fabricated rule ids (`oversized-skill-body`, `shell-export-secret`) are gone; the audit skill names real, commonly-firing rules (the product ships 13: near-duplicate-paragraphs, json-verbosity, stack-trace-verbosity, volatile-prefix, sub-cache-threshold, html-content, filler-phrases, plus 6 experimental) and routes secrets guidance at the real `secret_files` field. The optimize skill's entirely fabricated `stats --json` schema was replaced with the real shape (scope, project_key, generated_at, prices_observed, realized_rate, ledger, ingestion, tiers) from a live seeded run. The slim skill's scan/mcp blocks gained the real keys. The cross-file near-duplicate overclaim is corrected to per-file truth. New gate: `apps/tolkin-cli/scripts/check-skill-schemas.ts` parses every `<!-- tolkin-schema: <cmd> -->`-annotated JSON block in the skills, runs the built binary in a seeded temp environment (temp HOME with synthetic logs, temp TOLKIN_DATA_DIR, both consents), and fails if any documented key is absent from live output or any skill version disagrees with Cargo.toml. Wired into tolkin-ci after cargo test (debug binary). Proven by reintroducing a fake key (lint fails naming it) and restoring (7/7 checks green). bump-version.sh now carries the three skill versions (round-tripped 0.9.0 -> 9.9.9 -> 0.9.0, all nine carriers agreeing).
+
+#### P1-2 + P1-3: distribution and benchmark truth (A4)
+
+README: Windows x64 row says Live (tolkin-win32-x64@0.9.0 is on the registry), the scan caption describes scan, and the benchmarks pointer resolves: `distribution/benchmarks/RESULTS.md` is now a generated mirror, synced by the bench runner on every run so it cannot go stale (orchestrator trimmed a dangling "/bench page" phrase; no public URL exists yet to anchor it). The action's setup-node is on Node 24. Track 2 honesty: methodology.md now states the configuration numbers are representative catalog estimates (not tokenized manifests), the runner writes "catalog estimate" instead of a tokenizer attribution on those rows, and the /bench page header, section copy, and metadata all carry the catalog-estimate label while structural and lossy stay measured. Artifacts regenerated; headline numbers unchanged (mcp-heavy 86,250 cold, 43.13 percent of a 200K window; HTML-to-Markdown 51.5 percent); determinism contract re-verified twice (the second time on the final merged tree, where the only artifact diff was generated_at, proving the A2 core change moved no benchmark number).
+
+#### P1-4: the cost default is input-side (A5, opus)
+
+When no output token count is supplied, the calculator now bills zero output, sets `output_estimated: false`, and prints "Output not included; supply an output token count to model it." The old behavior (output = input x the output:input PRICE ratio) is an explicit opt-in: `estimate_output` in the core request (serde default false, WASM-additive), `--estimate-output` on the CLI, an off-by-default toggle labeled a rough volume assumption on the web panel. Live smokes, both legs: default per-call total equals input-side cost exactly ($0.001075 for 430 gpt-5.4 tokens); opt-in reproduces the old number ($0.111185, output 97.3 percent of total) under its label. PLAN section 10 rewords the 5x/6x/8x figures as price ratios. The existing core tests that assumed the estimate were updated; new tests pin both paths, computing expectations from the pricing table.
+
+#### Verification (combined tree, run by the orchestrator)
+
+| Check | Result |
+|---|---|
+| cargo test (cli) | 136 unit + 10 integration pass (+2 ignored real-log probes) |
+| cargo test (core) | 90 pass |
+| clippy + fmt + cargo-deny, both workspaces | clean |
+| wasm-pack release build | pass |
+| web gates (lint, lint:fast, typecheck, build) | all pass |
+| skill schema drift lint | 7/7 green |
+| bench determinism | holds; artifacts differ only at generated_at vs committed |
+| dash scan / egress scan / bun pm untrusted | 0 / 0 / 0 |
+| Browser verification | SSR curl on the dev server: cost panel renders the new default note, toggle label, and "input only" placeholder; /bench renders the catalog-estimate labels and unchanged numbers. The toggle's interactive reflow was not visually exercised (no browser tooling in session); the wiring is covered by unit tests and the rendered DOM copy. |
+
+Incident recorded in LESSONS.md: the orchestrator's shell cwd drifted into completed agent worktrees twice, landing one merge on the wrong branch (recovered by SHA-merging from the main checkout; no work lost). Bumped 0.9.0 -> 0.9.1.
