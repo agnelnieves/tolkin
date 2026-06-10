@@ -1,0 +1,134 @@
+name: Tokler Agent-Context Audit
+description: >
+  Runs tokler project --json in your repository, builds a markdown report
+  (load-profile totals, top heavy files, findings count, identified savings
+  with tier labels and the input-token honesty footer), then upserts a sticky
+  PR comment on pull_request events or writes to the step summary otherwise.
+  Optional fail-on gate exits 2 when findings at or above a severity exist.
+
+inputs:
+  fail-on:
+    description: >
+      Severity threshold for a non-zero exit. One of: none, low, medium, high.
+      "none" (default) means the action always succeeds regardless of findings.
+    required: false
+    default: none
+  working-directory:
+    description: Directory to audit. Defaults to the repository root.
+    required: false
+    default: .
+  comment-mode:
+    description: >
+      sticky: upsert one comment per PR (update in-place, keyed on the marker).
+      new: always post a fresh comment.
+      off: never post a comment (useful for dry-runs and non-PR invocations).
+      On non-pull_request events, the step summary is always written regardless
+      of this setting.
+    required: false
+    default: sticky
+  version:
+    description: tokler-cli version to install via npx. Pin to a known-good release.
+    required: false
+    default: "0.7.0"
+
+# Required caller permissions for PR comment mode:
+#
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#
+# If comment-mode is "off" or you only need the step summary, "contents: read"
+# is sufficient.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node (for npx)
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Run tokler and build report
+      id: tokler
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TOKLER_VERSION: ${{ inputs.version }}
+        TOKLER_NO_LEDGER: "1"
+      run: |
+        set -euo pipefail
+
+        # Allow a local binary override for dry-runs and testing.
+        # Set TOKLER_BIN=/path/to/tokler to skip npx entirely.
+        if [ -n "${TOKLER_BIN:-}" ] && [ -x "$TOKLER_BIN" ]; then
+          TOKLER="$TOKLER_BIN"
+        else
+          TOKLER="npx --yes tokler-cli@${TOKLER_VERSION}"
+        fi
+
+        REPORT_JSON="$(mktemp)"
+        REPORT_MD="$(mktemp)"
+
+        $TOKLER project . --json > "$REPORT_JSON"
+
+        node "${{ github.action_path }}/build-report.mjs" \
+          "$REPORT_JSON" "$REPORT_MD"
+
+        echo "report_md=$REPORT_MD" >> "$GITHUB_OUTPUT"
+        echo "report_json=$REPORT_JSON" >> "$GITHUB_OUTPUT"
+
+        echo "--- Tokler report preview ---"
+        head -20 "$REPORT_MD"
+
+    - name: Write step summary
+      shell: bash
+      run: cat "${{ steps.tokler.outputs.report_md }}" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upsert sticky PR comment
+      if: >-
+        github.event_name == 'pull_request' &&
+        inputs.comment-mode != 'off'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        COMMENT_MODE: ${{ inputs.comment-mode }}
+      run: |
+        set -euo pipefail
+        REPO="${{ github.repository }}"
+        PR="${{ github.event.pull_request.number }}"
+        REPORT_MD="${{ steps.tokler.outputs.report_md }}"
+        MARKER='<!-- tokler-report -->'
+
+        if [ "$COMMENT_MODE" = "sticky" ]; then
+          CID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -n 1)
+          if [ -n "$CID" ]; then
+            echo "Updating existing comment $CID"
+            gh api -X PATCH "repos/$REPO/issues/comments/$CID" \
+              -F body=@"$REPORT_MD" > /dev/null
+          else
+            echo "Creating new comment"
+            gh api -X POST "repos/$REPO/issues/$PR/comments" \
+              -F body=@"$REPORT_MD" > /dev/null
+          fi
+        else
+          echo "Creating new comment (comment-mode=new)"
+          gh api -X POST "repos/$REPO/issues/$PR/comments" \
+            -F body=@"$REPORT_MD" > /dev/null
+        fi
+
+    - name: Severity gate
+      if: inputs.fail-on != 'none'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TOKLER_VERSION: ${{ inputs.version }}
+        TOKLER_NO_LEDGER: "1"
+      run: |
+        set -euo pipefail
+        if [ -n "${TOKLER_BIN:-}" ] && [ -x "$TOKLER_BIN" ]; then
+          TOKLER="$TOKLER_BIN"
+        else
+          TOKLER="npx --yes tokler-cli@${TOKLER_VERSION}"
+        fi
+        $TOKLER project . --fail-on "${{ inputs.fail-on }}"

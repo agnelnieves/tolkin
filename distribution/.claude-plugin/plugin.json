@@ -1,0 +1,11 @@
+{
+  "name": "tokler",
+  "version": "0.7.0",
+  "description": "Privacy-first AI token analyzer. Audit agent-context files, slim MCP configs, and run the full optimization loop. Nothing leaves your machine.",
+  "author": {
+    "name": "Agnel Nieves"
+  },
+  "license": "MIT",
+  "keywords": ["tokens", "mcp", "agent-context", "optimization", "privacy"],
+  "skills": "./skills"
+}
