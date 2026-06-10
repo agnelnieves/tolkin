@@ -6,7 +6,7 @@ description: |
   CLI equivalent, or verify the delta after slimming. Also triggers on: "slim my MCP",
   "reduce MCP tokens", "tolkin mcp", "apply slim snippets", "MCP tool-definition cost".
 metadata:
-  version: 0.7.0
+  version: 0.9.0
 ---
 
 # tolkin-slim
@@ -23,31 +23,28 @@ Use this skill when the user wants to reduce what MCP servers cost at context lo
 ## Step 1: Discover MCP configs (optional, if path unknown)
 
 ```bash
+# tolkin-schema: scan --json
 npx tolkin-cli@latest scan --json
 # bunx works identically
 ```
 
 Key fields from `tolkin scan --json`:
 
-```
+<!-- tolkin-schema: scan --json -->
+```json
 {
+  "environment": ["<str>"],
+  "instruction_files": [
+    { "path": "<str>", "tokens": <u64> }
+  ],
   "mcp": [
     {
       "client": "<str>",
       "path": "<str>",
-      "analysis": { ... },
-      "swaps": [
-        {
-          "server": "<str>",
-          "cli": "<str>",
-          "binary": "<str>",
-          "installed": <bool>,
-          "install_hint": "<str>",
-          "savings_tokens": <u64>
-        }
-      ]
+      "analysis": { ... }
     }
   ],
+  "shell": [],
   "totals": {
     "mcp_configs": <u64>,
     "mcp_cold_tokens": <u64>,
@@ -57,7 +54,8 @@ Key fields from `tolkin scan --json`:
     "instruction_tokens": <u64>,
     "shell_secret_count": <u64>,
     "provider": "<str>"
-  }
+  },
+  "warnings": ["<str>"]
 }
 ```
 
@@ -66,48 +64,64 @@ If the config path is already known, skip directly to Step 2.
 ## Step 2: Analyze a specific MCP config
 
 ```bash
+# tolkin-schema: mcp --json
 npx tolkin-cli@latest mcp <path-to-config> --json
 ```
 
 Key fields from `tolkin mcp <config> --json` (shape: `McpAnalysis`):
 
-```
+<!-- tolkin-schema: mcp --json -->
+```json
 {
   "client": "<str>",
   "provider": "<str>",
   "servers": [
     {
       "name": "<str>",
-      "recommendation": "replace" | "replace*" | "keep" | "unknown",
+      "matched_id": "<str>",
+      "display": "<str>",
+      "transport": "stdio" | "sse" | "<str>",
       "tools": <u64 | null>,
-      "savings_tokens": <u64>,
-      "cli_alternative": "<str | null>",
-      "note": "<str>",
+      "cold_tokens": <u64>,
       "scenarios": {
         "cold": <u64>,
-        "warm": <u64>
+        "warm": <u64>,
+        "tool_search": <u64>,
+        "capacity": <u64>
       } | null,
+      "cli_alternative": "<str | null>",
+      "recommendation": "replace" | "replace*" | "keep" | "unknown",
+      "note": "<str>",
+      "savings_tokens": <u64>,
+      "savings_usd": <f64>,
       "slim": {
         "already_slimmed": <bool>,
-        "est_tokens_saved": <u64>,
         "option": {
           "mechanism": "<str>",
-          "snippet": "<str>"
-        }
+          "snippet": "<str>",
+          "location": "<str>",
+          "est_reduction_pct": <u64>,
+          "note": "<str>",
+          "source_hint": "<str>"
+        },
+        "est_tokens_saved": <u64>
       } | null
     }
   ],
   "totals": {
     "servers": <u64>,
+    "matched": <u64>,
+    "unknown": <u64>,
     "cold": <u64>,
     "warm": <u64>,
     "tool_search": <u64>,
-    "pct_of_window": <u64>,
+    "capacity": <u64>,
+    "pct_of_window": <f64>,
     "savings_tokens": <u64>,
     "savings_usd": <f64>,
+    "cold_usd": <f64>,
     "slim_savings_tokens": <u64>,
-    "slim_savings_usd": <f64>,
-    "unknown": <u64>
+    "slim_savings_usd": <f64>
   },
   "notes": ["<str>"]
 }

@@ -7,7 +7,7 @@ description: |
   footprint", "tolkin optimize loop", "full token audit and fix", "run tolkin and
   fix issues", "end-to-end token savings".
 metadata:
-  version: 0.7.0
+  version: 0.9.0
 ---
 
 # tolkin-optimize
@@ -35,34 +35,84 @@ Record the baseline numbers from `totals`:
 Also check stats if the ledger is available:
 
 ```bash
+# tolkin-schema: stats --json
 npx tolkin-cli@latest stats --json
 ```
 
 Key fields from `tolkin stats --json`:
 
-```
+<!-- tolkin-schema: stats --json -->
+```json
 {
-  "project": {
-    "root": "<str>",
-    "snapshots": <u64>,
-    "last_run": "<iso8601>",
-    "always_tokens_current": <u64>,
-    "always_tokens_first": <u64>,
-    "reclaimable_min": <u64>,
-    "reclaimable_max": <u64>
+  "scope": "project",
+  "project_key": "<str | null>",
+  "generated_at": <unix_epoch_secs>,
+  "prices_observed": "<str>",
+  "realized_rate": {
+    "usd_per_mtok_input": <f64>,
+    "model": "<str>"
   },
-  "realized": {
-    "delta_tokens": <i64>,
-    "sessions_estimated": <u64>,
-    "total_tokens_saved": <i64>,
-    "tier": "realized"
-  } | null,
-  "measured": { ... } | null
+  "ledger": {
+    "records": <u64>,
+    "skipped_lines": <u64>
+  },
+  "ingestion": {
+    "enabled": <bool>,
+    "sessions_scanned": <u64 | null>,
+    "skipped_lines": <u64 | null>,
+    "skipped_files": <u64 | null>
+  },
+  "tiers": {
+    "identified": {
+      "label": "advisory estimate",
+      "project_reclaimable_min": <u64 | null>,
+      "project_reclaimable_max": <u64 | null>,
+      "project_as_of": <unix_epoch_secs | null>,
+      "mcp_swap_tokens": <u64 | null>,
+      "mcp_slim_tokens": <u64 | null>,
+      "mcp_as_of": <unix_epoch_secs | null>,
+      "audit_savings_min": <u64 | null>,
+      "audit_savings_max": <u64 | null>,
+      "audit_as_of": <unix_epoch_secs | null>,
+      "projects": <u64>
+    } | null,
+    "realized": {
+      "label": "measured structure, estimated frequency",
+      "tokens": <i64>,
+      "usd": <f64>,
+      "sessions_basis": "measured" | "assumed",
+      "sessions_count": <u64>,
+      "since": <unix_epoch_secs>,
+      "baseline_always_tokens": <u64>,
+      "current_always_tokens": <u64>,
+      "projects": <u64>
+    } | null,
+    "measured": {
+      "label": "ground truth",
+      "sessions": <u64>,
+      "first_ts": <unix_epoch_secs | null>,
+      "last_ts": <unix_epoch_secs | null>,
+      "totals": {
+        "input_tokens": <u64>,
+        "output_tokens": <u64>,
+        "cache_read_tokens": <u64>,
+        "cache_write_5m_tokens": <u64>,
+        "cache_write_1h_tokens": <u64>
+      },
+      "by_model": { "<model_id>": { "totals": { ... }, "cost_usd": <f64 | null> } },
+      "cost_usd_total": <f64>,
+      "unpriced_models": [{ "model": "<str>", "tokens": <u64> }],
+      "cache_hit_rate": <f64>
+    } | null,
+    "notes": ["<str>"]
+  }
 }
 ```
 
-If `realized` is present, report it: "Realized savings (Tier 2) so far: ~N tokens
-removed from always-loaded context, across ~M sessions."
+All tiers are nested under `tiers`. If `tiers.realized` is non-null, report it:
+"Realized savings (Tier 2) so far: ~N tokens removed from always-loaded context,
+across ~M sessions (input-token estimate; output may vary)." The `tokens` field
+is signed: negative means context grew since the baseline snapshot.
 
 ## Step 2: Triage findings
 
