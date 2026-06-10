@@ -123,7 +123,7 @@ All savings figures are input-token bounded. Output tokens are not affected by
 context slimming.
 
 For methodology details and benchmark results, see `benchmarks/RESULTS.md` in this
-repository or the live /bench page.
+repository.
 
 ## Support matrix
 
