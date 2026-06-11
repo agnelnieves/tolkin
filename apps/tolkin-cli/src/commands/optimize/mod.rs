@@ -210,9 +210,7 @@ pub fn run(args: OptimizeArgs, yes: bool) -> Result<()> {
 
     // Step 4: plans and the time estimate. Building them makes zero model
     // calls; the dry run and the JSON estimate need them either way.
-    let narrate_plan = tasks
-        .narrate
-        .then(|| build_narrate_plan(&skeleton_json));
+    let narrate_plan = tasks.narrate.then(|| build_narrate_plan(&skeleton_json));
     let skills_plan = tasks
         .skills
         .then(|| build_skills_plan(&root, &report, args.max_files, &mut warnings));
@@ -271,8 +269,7 @@ fn resolve_consent(
         Some(true) => Consent::Granted,
         Some(false) => Consent::Declined,
         None => {
-            let interactive =
-                std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+            let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
             // Never ask non-interactively, under --yes (which suppresses,
             // never auto-consents), in JSON mode, or during a dry run.
             if !interactive || yes || args.json || args.dry_run {
@@ -389,7 +386,11 @@ fn build_estimate(narrate: Option<&NarratePlan>, skills: Option<&SkillsPlan>) ->
         per_task.insert("skills", secs);
     }
     let total_seconds = per_task.values().sum();
-    let kind = if rates.measured { "measured" } else { "estimate" };
+    let kind = if rates.measured {
+        "measured"
+    } else {
+        "estimate"
+    };
     let basis = format!(
         "{}: prefill {} tok/s, decode {} tok/s ({kind}); all times are estimates",
         rates.label, rates.prefill, rates.decode

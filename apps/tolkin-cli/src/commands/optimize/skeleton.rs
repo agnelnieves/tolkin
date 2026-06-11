@@ -134,7 +134,7 @@ fn commas(n: u64) -> String {
     let len = s.len();
     let mut out = String::with_capacity(len + len / 3);
     for (i, b) in s.bytes().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(char::from(b));
@@ -145,9 +145,7 @@ fn commas(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{
-        HeavyFile, McpConfigEntry, ProjectReport, Profiles, RuleRollup, Totals,
-    };
+    use crate::project::{HeavyFile, McpConfigEntry, Profiles, ProjectReport, RuleRollup, Totals};
 
     fn fixture_report() -> ProjectReport {
         ProjectReport {
