@@ -203,6 +203,24 @@ body {
   background-size: 88px 100%;
 }
 
+/* Hero particle field layers. The glow is the always-present base: it is the
+   reduced-motion fallback, the pre-init state while three.js waits for idle,
+   and the ambient bed under the particles once they run. The vignette sits
+   above the canvas and pulls the edges back to the page background so the
+   headline keeps its contrast. Both are pure gradients, no post-processing. */
+.hero-field-glow {
+  background:
+    radial-gradient(42% 52% at 70% 36%, oklch(0.85 0.2 130 / 7%), transparent 70%),
+    radial-gradient(65% 75% at 46% 8%, oklch(0.62 0.012 95 / 6.5%), transparent 75%);
+}
+
+.hero-field-vignette {
+  background:
+    linear-gradient(to right, oklch(0.13 0.005 100 / 80%) 0%, oklch(0.13 0.005 100 / 0%) 42%),
+    linear-gradient(to top, oklch(0.13 0.005 100 / 88%) 0%, oklch(0.13 0.005 100 / 0%) 32%),
+    radial-gradient(130% 130% at 50% 42%, transparent 52%, oklch(0.13 0.005 100 / 62%) 100%);
+}
+
 /* Duplicated-text hover slide for landing nav links. Two stacked copies of
    the same label inside an overflow-hidden span; hover swaps them with a
    vertical slide. Transform only, both layers identical, zero layout shift.

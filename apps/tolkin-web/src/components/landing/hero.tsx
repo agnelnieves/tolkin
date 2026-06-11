@@ -1,6 +1,7 @@
 "use client";
 
 import gsap from "gsap";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useLayoutEffect, useRef } from "react";
 import { buttonVariants } from "@/components/ui/button";
@@ -10,6 +11,11 @@ import { CopyButton } from "./copy-button";
 import { Hairline } from "./hairline";
 import { RevealText } from "./reveal-text";
 import { Terminal } from "./terminal";
+
+// The three.js field ships in its own chunk, fetched client-side only after
+// the hero hydrates; it never blocks first paint and never renders on the
+// server. The static export stays static.
+const HeroField = dynamic(() => import("./hero-field"), { ssr: false });
 
 const INTRO_KEY = "tolkin-hero-intro";
 
@@ -45,7 +51,8 @@ export function Hero() {
 
   return (
     <section ref={scope} className="landing-grid relative">
-      <div className="mx-auto max-w-[1200px] px-6 pt-20 pb-16 sm:pt-28 sm:pb-24">
+      <HeroField />
+      <div className="relative mx-auto max-w-[1200px] px-6 pt-20 pb-16 sm:pt-28 sm:pb-24">
         <p
           data-hero-stagger
           className="font-mono text-[11px] uppercase tracking-[0.24em] text-lime-300/90"
