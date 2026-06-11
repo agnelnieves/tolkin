@@ -216,7 +216,7 @@ body {
 
 .hero-field-vignette {
   background:
-    linear-gradient(to right, oklch(0.13 0.005 100 / 80%) 0%, oklch(0.13 0.005 100 / 0%) 42%),
+    linear-gradient(to right, oklch(0.13 0.005 100 / 88%) 0%, oklch(0.13 0.005 100 / 0%) 56%),
     linear-gradient(to top, oklch(0.13 0.005 100 / 88%) 0%, oklch(0.13 0.005 100 / 0%) 32%),
     radial-gradient(130% 130% at 50% 42%, transparent 52%, oklch(0.13 0.005 100 / 62%) 100%);
 }
@@ -313,4 +313,17 @@ body {
   html {
     @apply font-sans;
   }
+}
+
+/* Text-side scrim and soft text shadow for the hero: the FaultyTerminal
+   shader is busier than the old particle field, so the headline column gets
+   a quiet radial darkening plus an inherited text shadow to stay legible. */
+.hero-text-scrim {
+  background: radial-gradient(72% 78% at 30% 42%, oklch(0.13 0.005 100 / 78%), transparent 74%);
+}
+
+.hero-text-shadow {
+  text-shadow:
+    0 1px 2px oklch(0 0 0 / 55%),
+    0 6px 28px oklch(0 0 0 / 45%);
 }

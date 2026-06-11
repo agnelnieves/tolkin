@@ -55,14 +55,14 @@ export function Hero() {
       <div className="relative mx-auto max-w-[1200px] px-6 pt-20 pb-16 sm:pt-28 sm:pb-24">
         <p
           data-hero-stagger
-          className="font-mono text-[11px] uppercase tracking-[0.24em] text-lime-300/90"
+          className="hero-text-shadow font-mono text-[11px] uppercase tracking-[0.24em] text-lime-300/90"
         >
           Privacy-first token analyzer for AI agent setups
         </p>
 
         <RevealText
           as="h1"
-          className="mt-6 max-w-[14ch] font-display text-[clamp(2.75rem,8vw,7rem)] leading-[0.98] font-bold tracking-tight text-balance"
+          className="hero-text-shadow mt-6 max-w-[14ch] font-display text-[clamp(2.75rem,8vw,7rem)] leading-[0.98] font-bold tracking-tight text-balance"
         >
           Know exactly what your agents are eating.
         </RevealText>
@@ -71,7 +71,7 @@ export function Hero() {
           <div className="flex flex-col gap-8">
             <p
               data-hero-stagger
-              className="max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg"
+              className="hero-text-shadow max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg"
             >
               Tolkin measures the standing context of your AI setup: MCP servers, instruction files,
               skills, cache health. Deterministic numbers, zero network egress, receipts for every
