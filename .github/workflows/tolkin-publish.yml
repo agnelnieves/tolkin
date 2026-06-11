@@ -254,15 +254,25 @@ jobs:
       - name: Verify from the registry
         run: |
           V="${{ needs.gate.outputs.local }}"
-          for i in 1 2 3 4 5; do
-            GOT=$(npm view tolkin-cli version 2>/dev/null || echo "none")
-            [ "$GOT" = "$V" ] && break
-            sleep 5
-          done
+          # The registry replicates with a small lag after publish, so every
+          # required check retries before failing. The win32 leg once lost a
+          # four-second race against its own successful publish (0.11.0); the
+          # old form retried only the wrapper.
+          require() {
+            for i in 1 2 3 4 5 6; do
+              if npm view "$1@$V" version > /dev/null 2>&1; then
+                echo "$1@$V verified."
+                return 0
+              fi
+              sleep 10
+            done
+            echo "$1@$V is not on the registry after retries."
+            return 1
+          }
           # Five packages are hard-required; a miss fails the run.
-          npm view tolkin-cli version
+          require tolkin-cli
           for pkg in tolkin-darwin-arm64 tolkin-darwin-x64 tolkin-linux-x64 tolkin-win32-x64; do
-            npm view "$pkg@$V" version
+            require "$pkg"
           done
           # linux-arm64 stays warning-only: its runner availability varies by
           # plan, and an unavailable runner means a legitimately absent leg.

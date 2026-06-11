@@ -316,14 +316,11 @@ fn locate_tools(value: &Value) -> Option<&Vec<Value>> {
         arr
     } else if let Some(arr) = value.get("tools").and_then(Value::as_array) {
         arr
-    } else if let Some(arr) = value
-        .get("result")
-        .and_then(|r| r.get("tools"))
-        .and_then(Value::as_array)
-    {
-        arr
     } else {
-        return None;
+        value
+            .get("result")
+            .and_then(|r| r.get("tools"))
+            .and_then(Value::as_array)?
     };
     // Every entry must be an object with a string name; otherwise this is
     // some other JSON that happens to carry a "tools" key.
