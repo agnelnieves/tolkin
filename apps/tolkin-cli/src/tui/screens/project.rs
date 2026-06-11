@@ -11,7 +11,7 @@ use ratatui::Frame;
 use crate::tui::anim::AnimKey;
 use crate::tui::app::{reveal, FilterTarget, Model, ScanState};
 use crate::tui::components::bars;
-use crate::tui::components::list::render_select_list;
+use crate::tui::components::list::{render_select_list_window, visible_window};
 use crate::tui::data::REALIZED_SPARK_POINTS;
 use crate::tui::format;
 
@@ -165,8 +165,8 @@ fn render_heavy_files(frame: &mut Frame, area: Rect, model: &Model) {
         frame.render_widget(Paragraph::new(muted_line(text, theme)), inner);
         return;
     }
-    let visible = model.visible_heavy();
-    if visible.is_empty() {
+    let len = model.visible_heavy_len();
+    if len == 0 {
         frame.render_widget(
             Paragraph::new(muted_line("no files match the filter", theme)),
             inner,
@@ -177,8 +177,12 @@ fn render_heavy_files(frame: &mut Frame, area: Rect, model: &Model) {
     // Right-aligned numerics: tokens column then percent-of-always.
     let value_w: usize = 21;
     let path_w = (inner.width as usize).saturating_sub(3 + value_w);
-    let rows: Vec<Line> = visible
-        .iter()
+    // Style only the rows the list will blit; reveal tweens key on the
+    // path identity, so windowing never changes which rows animate.
+    let selected = model.selection(model.sel_heavy.idx).map(|s| s.min(len - 1));
+    let (start, end) = visible_window(selected.unwrap_or(0), len, inner.height as usize);
+    let rows: Vec<Line> = (start..end)
+        .filter_map(|i| model.visible_heavy_row(i))
         .map(|h| {
             let shown = format::truncate_left(&h.path, path_w);
             let (dir, name) = format::split_path(&shown);
@@ -197,14 +201,7 @@ fn render_heavy_files(frame: &mut Frame, area: Rect, model: &Model) {
             super::reveal_row(model, reveal::HEAVY, &h.path, line, theme)
         })
         .collect();
-    render_select_list(
-        frame,
-        inner,
-        &rows,
-        model.selection(model.sel_heavy.idx),
-        true,
-        theme,
-    );
+    render_select_list_window(frame, inner, &rows, start, len, selected, true, theme);
 }
 
 fn render_savings(frame: &mut Frame, area: Rect, model: &Model) {

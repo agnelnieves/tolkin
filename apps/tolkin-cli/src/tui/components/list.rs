@@ -73,7 +73,9 @@ pub fn visible_window(selected: usize, len: usize, height: usize) -> (usize, usi
 /// Render rows with a selection rail and scrollbar. `selected` is None for
 /// non-interactive lists (no rail column reserved). The selected row is
 /// repainted contrast-safe: selection_fg over selection_bg, original
-/// modifiers kept.
+/// modifiers kept. Callers with cheap rows pass them all; long lists with
+/// expensive styling should window first and call
+/// [`render_select_list_window`] instead.
 pub fn render_select_list(
     frame: &mut Frame,
     area: Rect,
@@ -82,19 +84,50 @@ pub fn render_select_list(
     focused: bool,
     theme: &Theme,
 ) {
+    let len = rows.len();
+    let sel = selected.map(|s| s.min(len.saturating_sub(1)));
+    let (start, end) = visible_window(sel.unwrap_or(0), len, area.height as usize);
+    render_select_list_window(
+        frame,
+        area,
+        &rows[start..end],
+        start,
+        len,
+        selected,
+        focused,
+        theme,
+    );
+}
+
+/// Windowed variant: `rows` holds styled lines for ONLY the slice
+/// `[start, start + rows.len())` of a list `len` rows long. Callers compute
+/// the slice with [`visible_window`] so per-frame styling work stays
+/// proportional to the viewport, not the data. `selected` is an absolute
+/// row index into the full list.
+// One past clippy's argument budget: the windowing pair (start, len) is
+// load-bearing and a wrapper struct would only rename the problem.
+#[allow(clippy::too_many_arguments)]
+pub fn render_select_list_window(
+    frame: &mut Frame,
+    area: Rect,
+    rows: &[Line],
+    start: usize,
+    len: usize,
+    selected: Option<usize>,
+    focused: bool,
+    theme: &Theme,
+) {
     if area.width < 4 || area.height == 0 {
         return;
     }
     let height = area.height as usize;
-    let len = rows.len();
     let sel = selected.map(|s| s.min(len.saturating_sub(1)));
-    let (start, end) = visible_window(sel.unwrap_or(0), len, height);
     let overflow = len > height;
     let buf = frame.buffer_mut();
 
-    for (row_offset, row_idx) in (start..end).enumerate() {
+    for (row_offset, row) in rows.iter().enumerate().take(height) {
         let y = area.y + row_offset as u16;
-        let is_selected = sel == Some(row_idx);
+        let is_selected = sel == Some(start + row_offset);
         let rail_x = area.x;
         let text_x = area.x + 2;
         // The last column is always a gutter (scrollbar when overflowing),
@@ -118,10 +151,10 @@ pub fn render_select_list(
             buf[(rail_x, y)]
                 .set_symbol("▌")
                 .set_style(row_style.fg(rail_color));
-            let line = restyle_line(&rows[row_idx], row_style);
+            let line = restyle_line(row, row_style);
             buf.set_line(text_x, y, &line, text_width);
         } else {
-            buf.set_line(text_x, y, &rows[row_idx], text_width);
+            buf.set_line(text_x, y, row, text_width);
         }
     }
 
@@ -215,6 +248,42 @@ mod tests {
         assert_eq!(visible_window(9, 10, 4), (6, 10));
         assert_eq!(visible_window(0, 2, 4), (0, 2));
         assert_eq!(visible_window(0, 0, 4), (0, 0));
+    }
+
+    #[test]
+    fn windowed_render_matches_the_full_row_path() {
+        let t = theme::by_name("tolkin-dark", true).unwrap();
+        let rows: Vec<Line> = (0..40).map(|i| Line::from(format!("row {i}"))).collect();
+        let selected = Some(17);
+        let render = |windowed: bool| {
+            let backend = TestBackend::new(24, 6);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    if windowed {
+                        let (start, end) = visible_window(17, rows.len(), f.area().height as usize);
+                        render_select_list_window(
+                            f,
+                            f.area(),
+                            &rows[start..end],
+                            start,
+                            rows.len(),
+                            selected,
+                            true,
+                            &t,
+                        );
+                    } else {
+                        render_select_list(f, f.area(), &rows, selected, true, &t);
+                    }
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        assert_eq!(
+            render(true),
+            render(false),
+            "building only the visible slice must blit identically"
+        );
     }
 
     #[test]

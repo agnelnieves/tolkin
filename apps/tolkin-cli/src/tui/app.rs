@@ -575,28 +575,29 @@ impl Model {
         self.derived.machine.get(idx)
     }
 
-    /// Visible heavy-file rows in render order (filtered when active).
-    pub fn visible_heavy(&self) -> Vec<&HeavyRow> {
-        match &self.filter {
-            Some(f) if f.target == FilterTarget::Heavy => f
-                .matches
-                .iter()
-                .filter_map(|&i| self.derived.heavy.get(i))
-                .collect(),
-            _ => self.derived.heavy.iter().collect(),
-        }
+    /// Visible (filter-honoring) heavy-file row count.
+    pub fn visible_heavy_len(&self) -> usize {
+        self.visible_len(FilterTarget::Heavy, self.derived.heavy.len())
     }
 
-    /// Visible machine projects in render order (filtered when active).
-    pub fn visible_machine(&self) -> Vec<&MachineProject> {
-        match &self.filter {
-            Some(f) if f.target == FilterTarget::Machine => f
-                .matches
-                .iter()
-                .filter_map(|&i| self.derived.machine.get(i))
-                .collect(),
-            _ => self.derived.machine.iter().collect(),
-        }
+    /// The visible heavy-file row at `idx` in render order (filtered when
+    /// active). Index-based so screens can window without building a
+    /// per-frame Vec of references.
+    pub fn visible_heavy_row(&self, idx: usize) -> Option<&HeavyRow> {
+        let i = self.filtered_index(FilterTarget::Heavy, idx)?;
+        self.derived.heavy.get(i)
+    }
+
+    /// Visible (filter-honoring) machine-project row count.
+    pub fn visible_machine_len(&self) -> usize {
+        self.visible_len(FilterTarget::Machine, self.derived.machine.len())
+    }
+
+    /// The visible machine project at `idx` in render order (filtered when
+    /// active). Index-based for the same windowing reason as above.
+    pub fn visible_machine_row(&self, idx: usize) -> Option<&MachineProject> {
+        let i = self.filtered_index(FilterTarget::Machine, idx)?;
+        self.derived.machine.get(i)
     }
 
     /// The filter line for a list panel: (query, typing) when one targets
@@ -670,7 +671,52 @@ impl Model {
         }
         // The filter's indices point into the rebuilt vectors now.
         self.apply_filter();
+        self.sweep_stale_anim_keys();
         self.fire_data_animations();
+    }
+
+    /// Drop Reveal and Weight animator state whose identity keys vanished
+    /// from the recomputed derived data (removed projects, replaced
+    /// advisory lines). Position-keyed surfaces (cards, gauges, day bars)
+    /// reuse a fixed key space and need no sweep; toasts forget themselves.
+    fn sweep_stale_anim_keys(&mut self) {
+        use std::collections::HashSet;
+        let weights: HashSet<u64> = self
+            .derived
+            .machine
+            .iter()
+            .map(|p| anim::ident(&p.key))
+            .collect();
+        let mut reveals: HashSet<(u8, u64)> = HashSet::new();
+        reveals.extend(
+            self.derived
+                .heavy
+                .iter()
+                .map(|r| (reveal::HEAVY, anim::ident(&r.path))),
+        );
+        reveals.extend(
+            self.derived
+                .machine
+                .iter()
+                .map(|p| (reveal::MACHINE, anim::ident(&p.key))),
+        );
+        reveals.extend(
+            self.derived
+                .advisory_lines
+                .iter()
+                .map(|l| (reveal::ADVISORIES, anim::ident(l))),
+        );
+        reveals.extend(
+            self.derived
+                .spend_models
+                .iter()
+                .map(|r| (reveal::MODELS, anim::ident(&r.model))),
+        );
+        self.animator.retain_keys(|key| match key {
+            AnimKey::Weight(id) => weights.contains(id),
+            AnimKey::Reveal { panel, id } => reveals.contains(&(*panel, *id)),
+            _ => true,
+        });
     }
 
     /// Retarget every data-driven tween: hero count-ups, bar grow-ins, the
@@ -2620,6 +2666,117 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_refresh_with_unchanged_data_keeps_the_loop_idle() {
+        use crate::ledger::{self, Config};
+        use serde_json::json;
+        use std::fs;
+
+        let dir = std::env::temp_dir().join(format!(
+            "tolkin-idle-refresh-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        ledger::save_config_to(&dir, &Config::new(true, false)).unwrap();
+        let project = dir.join("repo");
+        fs::create_dir_all(&project).unwrap();
+        ledger::append_in(
+            &dir,
+            "project",
+            &project,
+            json!({ "always_tokens": 9_000, "reclaimable_min": 200, "reclaimable_max": 800 }),
+        )
+        .unwrap();
+
+        let clock = ManualClock::new();
+        let animator = Animator::new(Box::new(clock.clone()), true);
+        let theme = theme::by_name("tolkin-dark", true).unwrap();
+        let mut model = Model::new(
+            Some(Box::new(StatsSnapshot::load_in(&dir))),
+            theme,
+            ThemeEnv::default(),
+            animator,
+            1_780_000_000,
+        );
+        assert!(model.animator.active(), "arrival animations run once");
+        clock.advance(Duration::from_millis(10_000));
+        update(
+            &mut model,
+            Msg::Tick {
+                now_epoch: 1_780_000_010,
+                delta_ms: 10_000,
+            },
+        );
+        assert!(!model.animator.active(), "tweens settle after the ramp");
+
+        // The same data arriving again retargets every tween to the value
+        // it already rests at: nothing restarts, the loop stays at the
+        // 1 s idle cadence instead of pinning 30 fps for ~2 s.
+        let same = StatsSnapshot::load_in(&dir);
+        update(&mut model, Msg::SnapshotLoaded(Box::new(Some(same))));
+        assert!(
+            !model.animator.active(),
+            "unchanged data must not pin the loop"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refresh_with_changed_advisory_lines_does_not_strand_old_keys() {
+        let (mut model, clock) = test_model();
+        model.derived.advisory_lines = vec!["old advisory".to_string()];
+        model.fire_data_animations();
+        clock.advance(Duration::from_millis(5_000));
+        update(
+            &mut model,
+            Msg::Tick {
+                now_epoch: 1_780_000_005,
+                delta_ms: 5_000,
+            },
+        );
+        let old = AnimKey::Reveal {
+            panel: reveal::ADVISORIES,
+            id: anim::ident("old advisory"),
+        };
+        assert_eq!(
+            model.animator.settled_value(old),
+            Some(1.0),
+            "settled while the line exists"
+        );
+
+        // The next refresh replaced the line: the sweep drops the stale
+        // identity key while the replacement ramps in fresh.
+        model.derived.advisory_lines = vec!["new advisory".to_string()];
+        model.sweep_stale_anim_keys();
+        model.fire_data_animations();
+        assert_eq!(model.animator.settled_value(old), None, "stale key swept");
+        assert_eq!(
+            model.animator.value(old, 0.25),
+            0.25,
+            "swept key falls back"
+        );
+        let new = AnimKey::Reveal {
+            panel: reveal::ADVISORIES,
+            id: anim::ident("new advisory"),
+        };
+        assert!(model.animator.active(), "the new line animates");
+        clock.advance(Duration::from_millis(200));
+        assert_eq!(model.animator.value(new, 0.0), 1.0);
+
+        // The wired path: a recompute that empties the derived sets sweeps
+        // everything identity-keyed.
+        update(&mut model, Msg::SnapshotLoaded(Box::new(None)));
+        assert_eq!(
+            model.animator.value(new, 0.25),
+            0.25,
+            "recompute sweeps departed reveal keys"
+        );
+    }
+
+    #[test]
     fn toast_slide_tween_fires_on_push_and_dies_with_the_toast() {
         let (mut model, clock) = test_model();
         update(&mut model, key(KeyCode::Char('t')));
@@ -2714,7 +2871,7 @@ mod tests {
         for c in "claude".chars() {
             assert!(update(&mut model, key(KeyCode::Char(c))).is_empty());
         }
-        assert_eq!(model.visible_heavy().len(), 2, "case-insensitive substring");
+        assert_eq!(model.visible_heavy_len(), 2, "case-insensitive substring");
         // Navigation while typing is parked; enter confirms and hands the
         // keys back to the list.
         update(&mut model, key(KeyCode::Enter));
@@ -2731,7 +2888,7 @@ mod tests {
         // Esc clears the filter; the full list returns.
         update(&mut model, key(KeyCode::Esc));
         assert!(model.filter.is_none());
-        assert_eq!(model.visible_heavy().len(), 3);
+        assert_eq!(model.visible_heavy_len(), 3);
         // Switching tabs drops a confirmed filter (typing parks tab).
         update(&mut model, key(KeyCode::Char('/')));
         update(&mut model, key(KeyCode::Char('c')));

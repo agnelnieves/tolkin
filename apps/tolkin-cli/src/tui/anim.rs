@@ -143,6 +143,11 @@ impl Tween {
     }
 }
 
+/// Targets closer than this are "already there": a `go` toward a value the
+/// key already rests at (or tweens toward) is skipped, so a data refresh
+/// that changes nothing never pins the event loop at 30 fps.
+const RETARGET_EPSILON: f32 = 1e-6;
+
 /// Tween table plus clock. `enabled = false` is reduced motion: `go` snaps
 /// instantly and `active()` reports false, so the event loop idles.
 pub struct Animator {
@@ -190,7 +195,9 @@ impl Animator {
     /// Start (or retarget) the tween for `key`. Retargeting an active tween
     /// starts from its CURRENT sampled value, so interruptions stay smooth.
     /// A key never animated before starts from its settled value, falling
-    /// back to 0.0 (bars grow in from empty on first data).
+    /// back to 0.0 (bars grow in from empty on first data). A target the
+    /// key already rests at (or already tweens toward) is a no-op: data
+    /// refreshes with unchanged values leave the loop idle.
     pub fn go(&mut self, key: AnimKey, to: f32, dur: Duration, ease: Ease) {
         self.go_delayed(key, to, dur, ease, Duration::ZERO);
     }
@@ -215,8 +222,23 @@ impl Animator {
         }
         let now = self.clock.now();
         let from = match self.tweens.get(&key) {
-            Some(tween) => tween.sample(now),
-            None => self.settled.get(&key).copied().unwrap_or(0.0),
+            Some(tween) => {
+                // Already heading to the same target: keep the in-flight
+                // schedule instead of restarting the clock.
+                if (tween.to - to).abs() <= RETARGET_EPSILON {
+                    return;
+                }
+                tween.sample(now)
+            }
+            None => {
+                let from = self.settled_value(key).unwrap_or(0.0);
+                // Already at rest on the target: a no-motion tween would
+                // only hold the 33 ms cadence for its duration.
+                if (from - to).abs() <= RETARGET_EPSILON {
+                    return;
+                }
+                from
+            }
         };
         self.tweens.insert(
             key,
@@ -241,6 +263,16 @@ impl Animator {
         match self.tweens.get(&key) {
             Some(tween) => tween.sample(self.clock.now()),
             None => self.settled.get(&key).copied().unwrap_or(fallback),
+        }
+    }
+
+    /// The at-rest value for `key`: the target of a finished (pruned)
+    /// tween. None while a tween is in flight or for a key never animated.
+    pub fn settled_value(&self, key: AnimKey) -> Option<f32> {
+        if self.tweens.contains_key(&key) {
+            None
+        } else {
+            self.settled.get(&key).copied()
         }
     }
 
@@ -271,6 +303,15 @@ impl Animator {
     pub fn forget(&mut self, key: AnimKey) {
         self.tweens.remove(&key);
         self.settled.remove(&key);
+    }
+
+    /// Keep only the keys passing `keep` (active tweens and settled values
+    /// both). Derived recomputes sweep stale identity-keyed entries
+    /// (Reveal, Weight) this way so rows that no longer exist cannot
+    /// strand animator state over a long session.
+    pub fn retain_keys(&mut self, keep: impl Fn(&AnimKey) -> bool) {
+        self.tweens.retain(|k, _| keep(k));
+        self.settled.retain(|k, _| keep(k));
     }
 
     /// Move finished tweens to the settled table. Called on the tick path,
@@ -525,6 +566,113 @@ mod tests {
             "fallback after forget"
         );
         assert!(!a.active());
+    }
+
+    #[test]
+    fn go_toward_the_settled_value_is_a_no_op() {
+        let (mut a, clock) = manual_animator();
+        a.go(
+            AnimKey::Card(0),
+            5.0,
+            Duration::from_millis(100),
+            Ease::Linear,
+        );
+        clock.advance(Duration::from_millis(200));
+        a.prune();
+        assert_eq!(a.settled_value(AnimKey::Card(0)), Some(5.0));
+        // Same target again: nothing restarts, the loop stays idle.
+        a.go(
+            AnimKey::Card(0),
+            5.0,
+            Duration::from_millis(400),
+            Ease::Linear,
+        );
+        assert!(!a.active(), "no-motion go must not wake the loop");
+        assert_eq!(a.value(AnimKey::Card(0), 0.0), 5.0);
+        // A genuinely new target still animates from the settled value.
+        a.go(
+            AnimKey::Card(0),
+            6.0,
+            Duration::from_millis(100),
+            Ease::Linear,
+        );
+        assert!(a.active());
+    }
+
+    #[test]
+    fn go_toward_an_in_flight_target_keeps_the_existing_schedule() {
+        let (mut a, clock) = manual_animator();
+        a.go(
+            AnimKey::Card(1),
+            1.0,
+            Duration::from_millis(100),
+            Ease::Linear,
+        );
+        clock.advance(Duration::from_millis(50));
+        // Re-issuing the same destination mid-flight must not restart the
+        // clock; the original tween finishes on time.
+        a.go(
+            AnimKey::Card(1),
+            1.0,
+            Duration::from_millis(100),
+            Ease::Linear,
+        );
+        clock.advance(Duration::from_millis(50));
+        assert_eq!(a.value(AnimKey::Card(1), 0.0), 1.0);
+        assert!(!a.active());
+    }
+
+    #[test]
+    fn settled_value_is_none_while_a_tween_runs() {
+        let (mut a, clock) = manual_animator();
+        assert_eq!(a.settled_value(AnimKey::Gauge(0)), None, "never animated");
+        a.go(
+            AnimKey::Gauge(0),
+            1.0,
+            Duration::from_millis(100),
+            Ease::Linear,
+        );
+        assert_eq!(a.settled_value(AnimKey::Gauge(0)), None, "in flight");
+        clock.advance(Duration::from_millis(200));
+        a.prune();
+        assert_eq!(a.settled_value(AnimKey::Gauge(0)), Some(1.0));
+    }
+
+    #[test]
+    fn retain_keys_sweeps_tweens_and_settled_state() {
+        let (mut a, clock) = manual_animator();
+        a.go(
+            AnimKey::Weight(1),
+            1.0,
+            Duration::from_millis(10),
+            Ease::Linear,
+        );
+        a.go(
+            AnimKey::Weight(2),
+            1.0,
+            Duration::from_millis(10),
+            Ease::Linear,
+        );
+        clock.advance(Duration::from_millis(20));
+        a.prune();
+        // Put key 2 back in flight so the sweep covers both tables.
+        a.go(
+            AnimKey::Weight(2),
+            0.5,
+            Duration::from_millis(50),
+            Ease::Linear,
+        );
+        a.retain_keys(|k| !matches!(k, AnimKey::Weight(2)));
+        assert_eq!(a.settled_value(AnimKey::Weight(1)), Some(1.0), "kept key");
+        assert_eq!(
+            a.value(AnimKey::Weight(2), 0.25),
+            0.25,
+            "swept key falls back"
+        );
+        assert!(
+            !a.active(),
+            "swept in-flight tween stops driving the cadence"
+        );
     }
 
     #[test]

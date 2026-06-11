@@ -10,7 +10,7 @@ use ratatui::Frame;
 use crate::tui::anim::{self, AnimKey};
 use crate::tui::app::{reveal, FilterTarget, Model};
 use crate::tui::components::card::{render_stat_card, value_line, StatCard};
-use crate::tui::components::list::render_select_list;
+use crate::tui::components::list::{render_select_list_window, visible_window};
 use crate::tui::format;
 
 use crate::tui::theme::Theme;
@@ -167,8 +167,8 @@ fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
         frame.render_widget(Paragraph::new(lines), inner);
         return;
     }
-    let visible = model.visible_machine();
-    if visible.is_empty() {
+    let len = model.visible_machine_len();
+    if len == 0 {
         frame.render_widget(
             Paragraph::new(muted_line("no projects match the filter", theme)),
             inner,
@@ -176,12 +176,24 @@ fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
         return;
     }
 
-    let max = visible.iter().map(|p| p.always_tokens).max().unwrap_or(0);
+    let max = (0..len)
+        .filter_map(|i| model.visible_machine_row(i))
+        .map(|p| p.always_tokens)
+        .max()
+        .unwrap_or(0);
     let bar_width = inner
         .width
         .saturating_sub((3 + NAME_W + 1 + VALUE_W) as u16);
-    let rows: Vec<Line> = visible
-        .iter()
+    // Style only the rows the list will blit: the window is about a screen
+    // tall while the ledger can hold hundreds of projects. Reveal and
+    // weight tweens key on project identity, so windowing never changes
+    // which rows animate.
+    let selected = model
+        .selection(model.sel_machine.idx)
+        .map(|s| s.min(len - 1));
+    let (start, end) = visible_window(selected.unwrap_or(0), len, inner.height as usize);
+    let rows: Vec<Line> = (start..end)
+        .filter_map(|i| model.visible_machine_row(i))
         .map(|p| {
             let target = if max > 0 {
                 p.always_tokens as f32 / max as f32
@@ -229,12 +241,5 @@ fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
             super::reveal_row(model, reveal::MACHINE, &p.key, line, theme)
         })
         .collect();
-    render_select_list(
-        frame,
-        inner,
-        &rows,
-        model.selection(model.sel_machine.idx),
-        true,
-        theme,
-    );
+    render_select_list_window(frame, inner, &rows, start, len, selected, true, theme);
 }
