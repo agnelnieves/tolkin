@@ -95,7 +95,7 @@ Manifest provenance (full detail and license texts in the manifests directory):
 - **configuration/server-memory**. Reference memory server, captured live. Catalog recommendation is keep (no CLI equivalent), so swap savings are 0 by design. The catalog's representative estimate for this server is 3,000 tokens; the measured manifest supersedes it.
 - **configuration/server-everything**. Reference protocol-exercise server. NOT in tolkin's curated catalog: this row exists because manifest measurement covers servers the catalog has never seen, which was the catalog's blind spot. No swap or slim recommendation, so those cells are 0.
 - **configuration/github-mcp-server**. GitHub official server at its v1.2.0 defaults (43 tools). The catalog's representative figure is 40,000 tokens for the all-toolsets era (90 to 162 tools, externally reported 26-55K); the v1.2.0 default registration measures far smaller, which is exactly the staleness manifest measurement exists to correct. Slim savings are measured, not estimated: this cold minus the tokenized GITHUB_TOOLSETS=repos,issues manifest below.
-- **configuration/github-mcp-server-slim**. The same binary captured with the exact slim snippet tolkin recommends (GITHUB_TOOLSETS=repos,issues; the default context toolset stays registered, which is upstream behavior). This row IS the slim profile, so its own slim cell is 0.
+- **configuration/github-mcp-server-slim**. The same binary captured with the exact slim snippet tolkin recommends (GITHUB_TOOLSETS=repos,issues; setting the env explicitly gates off the other default toolsets, including context, so this fixture is repos+issues only and the issues set registers get_label per upstream labels.go). This row IS the slim profile, so its own slim cell is 0.
 
 ## Lossy track
 
@@ -134,6 +134,6 @@ Quality scoring: scored=false, method=BYOK extraction-QA harness, off by default
 
 ---
 
-Generated at: 2026-06-11T01:10:17.387Z. Tolkin 0.10.0. Prices observed: 2026-06. Runner: bun + tolkin CLI. OS: darwin.
+Generated at: 2026-06-11T01:42:45.009Z. Tolkin 0.10.0. Prices observed: 2026-06. Runner: bun + tolkin CLI. OS: darwin.
 
 To regenerate: `bun apps/tolkin-cli/benchmarks/run.ts` (from the repo root). Verify determinism with `bun apps/tolkin-cli/benchmarks/run.ts --check-determinism`.

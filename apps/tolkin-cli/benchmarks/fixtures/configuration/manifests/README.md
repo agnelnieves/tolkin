@@ -69,9 +69,12 @@ Capture date for all five fixtures: 2026-06-10 (local), on macOS arm64.
 
 - Same binary, same capture method, with `GITHUB_TOOLSETS=repos,issues`: the
   exact slim snippet tolkin's catalog recommends for this server. Tools
-  captured: 27 (the default `context` toolset stays registered alongside the
-  two requested toolsets; that is upstream behavior, recorded here so the
-  slim row's denominator is unambiguous)
+  captured: 27, all in repos or issues (the issues toolset registers
+  `get_label` per upstream `labels.go`; verified against
+  github/github-mcp-server v1.2.0 `pkg/github/tools.go`, where the default
+  context, users, pull_requests, and copilot toolsets are gated off when
+  `GITHUB_TOOLSETS` is set explicitly, so `get_me` and the team tools that
+  appear in the all-defaults full fixture do NOT appear here)
 - License: MIT (vendored at `LICENSE-github-mcp-server`)
 
 ## How the benchmark counts these

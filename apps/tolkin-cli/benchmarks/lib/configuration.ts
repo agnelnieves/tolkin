@@ -113,7 +113,7 @@ const CASES: ManifestSpec[] = [
       server_version: "github-mcp-server 1.2.0, GITHUB_TOOLSETS=repos,issues",
     },
     notes:
-      "The same binary captured with the exact slim snippet tolkin recommends (GITHUB_TOOLSETS=repos,issues; the default context toolset stays registered, which is upstream behavior). This row IS the slim profile, so its own slim cell is 0.",
+      "The same binary captured with the exact slim snippet tolkin recommends (GITHUB_TOOLSETS=repos,issues; setting the env explicitly gates off the other default toolsets, including context, so this fixture is repos+issues only and the issues set registers get_label per upstream labels.go). This row IS the slim profile, so its own slim cell is 0.",
   },
 ];
 
