@@ -305,23 +305,23 @@ jobs:
       # macOS arm64/x64 and Linux x64/arm64.
       - uses: actions/download-artifact@v8
         with:
-          name: aarch64-apple-darwin
+          name: tolkin-aarch64-apple-darwin
           path: artifacts/aarch64-apple-darwin
 
       - uses: actions/download-artifact@v8
         with:
-          name: x86_64-apple-darwin
+          name: tolkin-x86_64-apple-darwin
           path: artifacts/x86_64-apple-darwin
 
       - uses: actions/download-artifact@v8
         with:
-          name: x86_64-unknown-linux-gnu
+          name: tolkin-x86_64-unknown-linux-gnu
           path: artifacts/x86_64-unknown-linux-gnu
 
       - uses: actions/download-artifact@v8
         continue-on-error: true
         with:
-          name: aarch64-unknown-linux-gnu
+          name: tolkin-aarch64-unknown-linux-gnu
           path: artifacts/aarch64-unknown-linux-gnu
 
       - name: Package binaries into per-platform tarballs
