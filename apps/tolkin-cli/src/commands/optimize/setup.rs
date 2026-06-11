@@ -13,7 +13,7 @@ use crate::commands::optimize::prompts;
 #[derive(Debug, Clone)]
 pub struct Recommendation {
     pub model_id: &'static str,
-    pub download_gb: f32,
+    pub download_gb: f64,
     pub tier_note: &'static str,
     /// True when RAM detection failed and we assumed a floor of 16 GB.
     pub assumed: bool,
