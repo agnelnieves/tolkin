@@ -1,6 +1,6 @@
 {
   "v": 2,
-  "generated_at": "2026-06-11T02:34:07.846Z",
+  "generated_at": "2026-06-11T02:51:46.496Z",
   "tolkin_version": "0.11.0",
   "prices_observed": "2026-06",
   "runs": 3,
@@ -382,8 +382,8 @@
           "before_tokens": 2637,
           "after_tokens": 2327,
           "savings_pct": 11.76,
-          "reason": "MIT-licensed, runs headlessly via `cavemem compress <file>`; the subcommand is pure-JS and does not touch the sqlite store or the embedding worker. Pinned via bun (apps/tolkin-cli devDependencies); LICENSE vendored at benchmarks/external/cavemem-LICENSE. Run on the same three prose fixtures the LLMLingua-2 cases use, with token counts from the same `tolkin count --model openai` path. Upstream README claims about 46 percent for memory-store compression; basis: undisclosed (the 46 percent figure is distinct from cavemem's caveman-grammar reference of about 75 percent for prose, and from the parent caveman skill's about 65 percent for output).",
-          "notes": "The cross-reference review (REVIEW-FINDINGS.md) flagged this claim as unverified at the gap-1 surface. This row is the measurement: bench fixtures, same tokenizer, same one-command harness as the other comparisons."
+          "reason": "MIT-licensed, runs headlessly via `cavemem compress <file>`; the subcommand is pure-JS and does not touch the sqlite store or the embedding worker. Pinned via bun (apps/tolkin-cli devDependencies); LICENSE vendored at benchmarks/external/cavemem-LICENSE. Run on the same three prose fixtures the LLMLingua-2 cases use, with token counts from the same `tolkin count --model openai` path. The upstream cavemem README's only compression figure is about 75 percent fewer prose tokens for the caveman grammar that `cavemem compress` runs; published basis: cavemem README (no methodology disclosed). A separate 46 percent figure for memory-store compression appears in the cross-reference research notes as unverified; it is not in the upstream README, so it is not attributed to the upstream here.",
+          "notes": "The cross-reference review (REVIEW-FINDINGS.md) flagged the 46 percent memory-store figure as unverified at the gap-1 surface and the upstream README's about-75-percent prose figure has no published methodology. This row is the measurement: bench fixtures, same tokenizer, same one-command harness as the other comparisons."
         }
       ]
     }
