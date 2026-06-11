@@ -37,26 +37,28 @@ Works with Claude Code, Cursor, Windsurf, Codex, and ~71 other agents that suppo
 the `skills/<name>/SKILL.md` layout.
 
 ```sh
-npx skills add <public-repo> --skill tolkin-audit
-npx skills add <public-repo> --skill tolkin-slim
-npx skills add <public-repo> --skill tolkin-optimize
+npx skills add agnelnieves/tolkin --skill tolkin-audit
+npx skills add agnelnieves/tolkin --skill tolkin-slim
+npx skills add agnelnieves/tolkin --skill tolkin-optimize
+npx skills add agnelnieves/tolkin --skill tolkin-cache
 ```
 
-Three skills are available:
+Four skills are available:
 
 | Skill | What it does |
 | :--- | :--- |
 | `tolkin-audit` | Repo-wide audit: run `tolkin project`, interpret findings, prioritize by severity, propose concrete edits |
 | `tolkin-slim` | MCP analysis: apply slim snippets to your MCP config, verify the delta, report realized vs identified savings |
 | `tolkin-optimize` | Full loop: audit, apply safe fixes (with your confirmation), re-measure, summarize with tier labels |
+| `tolkin-cache` | Prompt-cache health: read the measured report, apply prefix-stability fixes (with your confirmation), re-measure |
 
 ### 2. Claude Code plugin
 
-Installs all three skills namespaced as `/tolkin:tolkin-audit`, `/tolkin:tolkin-slim`,
+Installs all four skills namespaced as `/tolkin:tolkin-audit`, `/tolkin:tolkin-slim`,
 and `/tolkin:tolkin-optimize`.
 
 ```sh
-/plugin marketplace add <public-repo>
+/plugin marketplace add agnelnieves/tolkin
 /plugin install tolkin@tolkin
 ```
 
@@ -104,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: <public-repo>/action@v1
+      - uses: agnelnieves/tolkin/action@v1
         with:
           fail-on: none        # none | low | medium | high
           comment-mode: sticky # sticky | new | off
