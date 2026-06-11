@@ -1335,6 +1335,123 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Wave 2 review pin: when a parent-vs-subagent collision happens AND
+    /// the PARENT record wins (later ts than the subagent's copy), the
+    /// subagent file must not register an orphan side-table entry. The
+    /// existing `cross_parent_subagent_dedup_collapses_collisions` covers
+    /// the subagent-wins direction; this is the symmetric case the review
+    /// flagged. The grouped map is keyed on the winner's `is_subagent`
+    /// flag, so a parent-winning row stays parent and the side-table is
+    /// populated solely from grouped entries that actually exist.
+    #[test]
+    fn parent_winning_collision_does_not_register_orphan_subagent_side_table() {
+        let root = tmp_tree("parent-wins-collision");
+        let proj = root.join("proj-x");
+        let parent = proj.join("parent-X.jsonl");
+        let sub_dir = proj.join("parent-X").join("subagents");
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub = sub_dir.join("agent-yyy.jsonl");
+        // Parent has the later ts and wins on the first tier of the rule.
+        // The subagent file contains only this colliding record, so after
+        // global dedup the subagent has no surviving records and emits no
+        // SessionUsage row; the side-tables must reflect that absence.
+        write_record(&parent, "m1", "r1", "2026-06-10T12:00:01Z", 200, "/work/x");
+        write_record(&sub, "m1", "r1", "2026-06-10T12:00:00Z", 100, "/work/x");
+        let data = read(&root);
+        let total_out: u64 = data.sessions.iter().map(|s| s.totals.output_tokens).sum();
+        assert_eq!(
+            total_out, 200,
+            "collision must collapse to the parent winner"
+        );
+        // The parent session is present and classified as parent.
+        let parent_session = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "parent-X")
+            .expect("parent winner present");
+        assert!(!data.is_subagent(parent_session));
+        // No subagent row exists for agent-yyy. The side-tables must be
+        // empty: no orphan key, no orphan parent-pointer.
+        assert!(data.sessions.iter().all(|s| s.session_id != "agent-yyy"));
+        assert!(
+            data.subagent_session_keys.is_empty(),
+            "side-table must not carry an orphan entry: {:?}",
+            data.subagent_session_keys
+        );
+        assert!(
+            data.subagent_parent_ids.is_empty(),
+            "parent-pointer map must not carry an orphan entry: {:?}",
+            data.subagent_parent_ids
+        );
+        // Headlines: one parent session, zero subagent streams.
+        assert_eq!(data.parent_session_count(), 1);
+        assert_eq!(data.subagent_stream_count(), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Wave 2 review pin: a `<parent>/subagents/` directory whose parent
+    /// jsonl is missing (orphan subagents). The subagent rows must still
+    /// ingest and tag the missing parent as their parent_session_id.
+    #[test]
+    fn orphan_subagent_dir_with_missing_parent_still_ingests() {
+        let root = tmp_tree("orphan-subagents");
+        let proj = root.join("proj-x");
+        // No parent-Z.jsonl, only the subagents directory.
+        let sub_dir = proj.join("parent-Z").join("subagents");
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub = sub_dir.join("agent-orphan.jsonl");
+        write_record(&sub, "mO", "rO", "2026-06-10T12:00:00Z", 77, "/work/x");
+        let data = read(&root);
+        let s = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "agent-orphan")
+            .expect("subagent row present even with no parent jsonl");
+        assert_eq!(s.totals.output_tokens, 77);
+        assert!(data.is_subagent(s));
+        assert_eq!(
+            data.subagent_parent_ids
+                .get(&(s.session_id.clone(), s.project_key.clone())),
+            Some(&"parent-Z".to_string()),
+            "subagent attribution still points at the missing parent stem",
+        );
+        // Headlines: zero parents, one subagent stream.
+        assert_eq!(data.parent_session_count(), 0);
+        assert_eq!(data.subagent_stream_count(), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Wave 2 review pin: a subagent file whose every record is filtered
+    /// out by `extract_record` (no usage-bearing field, synthetic model,
+    /// missing keys) must produce no SessionUsage row and no side-table
+    /// entry; the file is observed but its absence is silent (zero is
+    /// not an error here).
+    #[test]
+    fn subagent_with_zero_usage_bearing_records_emits_nothing() {
+        let root = tmp_tree("zero-usage-subagent");
+        let proj = root.join("proj-x");
+        let parent = proj.join("parent-Q.jsonl");
+        let sub_dir = proj.join("parent-Q").join("subagents");
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub = sub_dir.join("agent-quiet.jsonl");
+        // The parent has a real record so the project shows up at all.
+        write_record(&parent, "mp", "rp", "2026-06-10T12:00:00Z", 50, "/work/x");
+        // The subagent contains a synthetic-model line and a malformed
+        // line; neither survives extract_record.
+        let lines = "\
+{\"message\":{\"model\":\"<synthetic>\",\"id\":\"ms\",\"usage\":{\"input_tokens\":0,\"output_tokens\":999,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}},\"requestId\":\"rs\",\"cwd\":\"/work/x\",\"timestamp\":\"2026-06-10T12:00:00Z\"}\nnot json at all\n";
+        fs::write(&sub, lines).unwrap();
+        let data = read(&root);
+        assert!(data.sessions.iter().all(|s| s.session_id != "agent-quiet"));
+        assert!(data.subagent_session_keys.is_empty());
+        assert!(data.subagent_parent_ids.is_empty());
+        assert_eq!(data.subagent_stream_count(), 0);
+        // The synthetic line wasn't a JSON parse error; only the second
+        // bare-text line counts toward skipped_lines.
+        assert!(data.skipped_lines >= 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// Synthetic disjointness: pin the practically-observed shape that
     /// parent and subagent keys do NOT overlap, by checking that two
     /// distinct keys remain distinct after global dedup. This is the

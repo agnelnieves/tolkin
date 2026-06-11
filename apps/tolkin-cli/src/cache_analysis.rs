@@ -240,7 +240,15 @@ pub struct Cadence {
     /// SAME PROJECT (next session's first request minus previous session's
     /// last request), because a surviving cache implies a shared prefix and
     /// unrelated projects share none. Global scope aggregates the
-    /// per-project gap sets.
+    /// per-project gap sets. Subagent streams (Task-tool fan-out) live in
+    /// the sessions vector alongside parent sessions and so contribute their
+    /// own pair-wise gaps within their project; each subagent has its own
+    /// independent prefix, so the gap between a parent and one of its
+    /// subagents is not a "could the cache have survived" gap in any
+    /// strict sense, but is reported as-is for the project's overall
+    /// timeline shape. Read the inter-session distribution as the
+    /// project's cadence (TTL counterfactual already handles each stream's
+    /// intra-session math separately).
     pub inter_session_gaps: u64,
     pub inter_session_gaps_under_1h: u64,
     pub share_inter_gaps_under_1h: f64,
