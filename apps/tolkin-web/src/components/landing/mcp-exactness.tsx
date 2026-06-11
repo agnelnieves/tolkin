@@ -22,8 +22,8 @@ export function McpExactness() {
             <p className="mt-8 text-sm leading-relaxed text-muted-foreground">
               Probe once, commit{" "}
               <code className="font-mono text-xs text-foreground">.tolkin/mcp-manifests</code>, and
-              the whole team reports exact numbers. The cached manifest is
-              date-stamped, secret-redacted, and flagged when it goes stale.
+              the whole team reports exact numbers. The cached manifest is date-stamped,
+              secret-redacted, and flagged when it goes stale.
             </p>
           </div>
 

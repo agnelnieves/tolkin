@@ -35,7 +35,7 @@ export async function CodeBlock({ code, lang, label, copyText }: CodeBlockProps)
         </span>
         <CopyButton text={copyText ?? code} label={`Copy ${label}`} />
       </figcaption>
-      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is generated at build time from string literals in this repo, never from user input */}
+      {/* shiki output is generated at build time from string literals in this repo, never from user input */}
       <div dangerouslySetInnerHTML={{ __html: html }} />
     </figure>
   );

@@ -199,11 +199,7 @@ body {
 
 /* Faint vertical hairline grid used behind the hero. Pure decoration. */
 .landing-grid {
-  background-image: linear-gradient(
-    to right,
-    oklch(1 0 0 / 3.5%) 1px,
-    transparent 1px
-  );
+  background-image: linear-gradient(to right, oklch(1 0 0 / 3.5%) 1px, transparent 1px);
   background-size: 88px 100%;
 }
 

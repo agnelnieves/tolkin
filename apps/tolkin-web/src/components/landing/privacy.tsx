@@ -35,9 +35,7 @@ export function Privacy() {
         <div className="mt-14 grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-white/10 bg-white/10 md:grid-cols-3">
           {EGRESS_CLASSES.map((cls, i) => (
             <div key={cls.name} className="flex flex-col gap-3 bg-background p-8">
-              <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                {i + 1}
-              </span>
+              <span className="font-mono text-xs text-muted-foreground tabular-nums">{i + 1}</span>
               <h3 className="font-mono text-sm text-foreground">{cls.name}</h3>
               <p className="text-sm leading-relaxed text-muted-foreground">{cls.body}</p>
             </div>
@@ -58,8 +56,8 @@ export function Privacy() {
             ))}
           </ul>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            The full posture, with every claim cross-referenced to the source
-            file that implements it, lives in{" "}
+            The full posture, with every claim cross-referenced to the source file that implements
+            it, lives in{" "}
             <a
               href="https://github.com/agnelnieves/tolkin/blob/main/PRIVACY.md"
               rel="noopener"

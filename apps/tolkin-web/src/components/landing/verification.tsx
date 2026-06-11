@@ -60,7 +60,10 @@ export function Verification() {
         </div>
 
         <div className="mt-8 flex flex-wrap items-center gap-4">
-          <Link href="/bench" className={cn(buttonVariants({ variant: "outline", size: "lg" }), "px-4")}>
+          <Link
+            href="/bench"
+            className={cn(buttonVariants({ variant: "outline", size: "lg" }), "px-4")}
+          >
             The full benchmark, methodology and all
           </Link>
           <p className="font-mono text-xs text-muted-foreground">

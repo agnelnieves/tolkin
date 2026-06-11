@@ -60,17 +60,24 @@ export function Hero() {
 
         <div className="mt-12 grid gap-12 lg:grid-cols-2 lg:gap-16">
           <div className="flex flex-col gap-8">
-            <p data-hero-stagger className="max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-              Tolkin measures the standing context of your AI setup: MCP servers,
-              instruction files, skills, cache health. Deterministic numbers, zero
-              network egress, receipts for every claim.
+            <p
+              data-hero-stagger
+              className="max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg"
+            >
+              Tolkin measures the standing context of your AI setup: MCP servers, instruction files,
+              skills, cache health. Deterministic numbers, zero network egress, receipts for every
+              claim.
             </p>
 
             <div data-hero-stagger className="flex flex-col gap-5">
               <Tabs defaultValue="brew">
                 <TabsList variant="line" className="h-9">
                   {INSTALLS.map((install) => (
-                    <TabsTrigger key={install.id} value={install.id} className="px-3 font-mono text-xs">
+                    <TabsTrigger
+                      key={install.id}
+                      value={install.id}
+                      className="px-3 font-mono text-xs"
+                    >
                       {install.label}
                     </TabsTrigger>
                   ))}

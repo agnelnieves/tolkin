@@ -30,10 +30,7 @@ export function Distribution() {
   return (
     <section className="border-b border-white/10">
       <div className="mx-auto max-w-[1200px] px-6 py-20 sm:py-28">
-        <SectionHeading
-          eyebrow="Distribution"
-          title="Wherever your agents live."
-        />
+        <SectionHeading eyebrow="Distribution" title="Wherever your agents live." />
 
         <div className="mt-12 flex flex-col gap-3">
           {COMMANDS.map((entry) => (
@@ -51,7 +48,10 @@ export function Distribution() {
                 <span className="hidden font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground sm:inline">
                   {entry.label}
                 </span>
-                <CopyButton text={entry.command} label={`Copy the ${entry.label} install command`} />
+                <CopyButton
+                  text={entry.command}
+                  label={`Copy the ${entry.label} install command`}
+                />
               </div>
             </div>
           ))}

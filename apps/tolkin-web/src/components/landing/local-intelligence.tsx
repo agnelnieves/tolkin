@@ -46,9 +46,9 @@ export function LocalIntelligence() {
         <div className="mt-14 grid grid-cols-1 items-start gap-10 lg:grid-cols-2 lg:gap-14">
           <div className="flex flex-col gap-8">
             <p className="text-sm leading-relaxed text-muted-foreground">
-              The model proposes, Rust verifies. Every model claim has to pass
-              verification gates before it reaches your terminal; anything that
-              fails is dropped and counted, not printed.
+              The model proposes, Rust verifies. Every model claim has to pass verification gates
+              before it reaches your terminal; anything that fails is dropped and counted, not
+              printed.
             </p>
             <ul className="flex flex-col gap-3">
               {GATES.map((gate) => (
@@ -61,10 +61,9 @@ export function LocalIntelligence() {
               ))}
             </ul>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              When no model is installed, optimize does not dead-end. It detects
-              the machine&apos;s RAM and chip, recommends the blessed model for that
-              tier with the download size and a per-machine time estimate, and
-              asks one question before showing the setup guide.
+              When no model is installed, optimize does not dead-end. It detects the machine&apos;s
+              RAM and chip, recommends the blessed model for that tier with the download size and a
+              per-machine time estimate, and asks one question before showing the setup guide.
             </p>
           </div>
 
@@ -92,8 +91,7 @@ export function LocalIntelligence() {
               ))}
             </dl>
             <p className="font-mono text-xs leading-relaxed text-muted-foreground">
-              measured near 250 tok/s prefill on an M1 Max; estimates printed
-              before any run
+              measured near 250 tok/s prefill on an M1 Max; estimates printed before any run
             </p>
           </div>
         </div>

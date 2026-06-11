@@ -31,9 +31,7 @@ export function Tiers() {
         <div className="mt-14 grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-white/10 bg-white/10 md:grid-cols-3">
           {TIERS.map((tier, i) => (
             <div key={tier.name} className="flex flex-col gap-4 bg-background p-8">
-              <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                0{i + 1}
-              </span>
+              <span className="font-mono text-xs text-muted-foreground tabular-nums">0{i + 1}</span>
               <h3 className="font-display text-2xl font-semibold tracking-tight">{tier.name}</h3>
               <p className="font-mono text-xs text-lime-300">&quot;{tier.basis}&quot;</p>
               <p className="text-sm leading-relaxed text-muted-foreground">{tier.body}</p>
@@ -43,8 +41,10 @@ export function Tiers() {
 
         <p className="mt-8 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           Model output is a fourth class,{" "}
-          <span className="font-mono text-xs text-foreground">&quot;model advisory (local)&quot;</span>,
-          and it never joins the tiers.
+          <span className="font-mono text-xs text-foreground">
+            &quot;model advisory (local)&quot;
+          </span>
+          , and it never joins the tiers.
         </p>
       </div>
     </section>

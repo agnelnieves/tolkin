@@ -50,9 +50,7 @@ export function Features() {
           {FEATURES.map((feature) => (
             <Card key={feature.name} className="bg-white/[0.02] ring-white/10">
               <CardHeader>
-                <CardTitle className="font-mono text-sm text-lime-300">
-                  {feature.name}
-                </CardTitle>
+                <CardTitle className="font-mono text-sm text-lime-300">{feature.name}</CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm leading-relaxed text-muted-foreground">{feature.body}</p>

@@ -77,7 +77,11 @@ export function Nav() {
             onClick={() => setOpen((v) => !v)}
             className="inline-flex size-11 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground md:hidden"
           >
-            {open ? <X aria-hidden="true" className="size-5" /> : <Menu aria-hidden="true" className="size-5" />}
+            {open ? (
+              <X aria-hidden="true" className="size-5" />
+            ) : (
+              <Menu aria-hidden="true" className="size-5" />
+            )}
           </button>
         </div>
       </nav>

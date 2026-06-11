@@ -36,9 +36,9 @@ const JSON_LD = {
 export default function LandingPage() {
   return (
     <div className="dark landing min-h-screen bg-background text-foreground antialiased selection:bg-lime-300 selection:text-black">
+      {/* Static JSON-LD object defined above, no user input. */}
       <script
         type="application/ld+json"
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: static JSON-LD object defined above, no user input
         dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
       />
       <SmoothScroll />

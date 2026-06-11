@@ -50,12 +50,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={cn(
-        "font-sans",
-        geist.variable,
-        geistMono.variable,
-        bricolage.variable,
-      )}
+      className={cn("font-sans", geist.variable, geistMono.variable, bricolage.variable)}
     >
       <body>
         {children}

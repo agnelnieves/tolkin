@@ -67,9 +67,7 @@ export default function OpengraphImage() {
           >
             0.97522 measured
           </div>
-          <div style={{ fontSize: 24, color: "#73726b" }}>
-            cache hit rate, on real session logs
-          </div>
+          <div style={{ fontSize: 24, color: "#73726b" }}>cache hit rate, on real session logs</div>
         </div>
         <div style={{ fontSize: 28, color: "#9b9a93" }}>tolkin.dev</div>
       </div>

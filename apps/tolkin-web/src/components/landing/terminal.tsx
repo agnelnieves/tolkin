@@ -18,9 +18,7 @@ const FINAL_LINE = "593 files measured. nothing left this machine.";
 const PLAIN_TRANSCRIPT = [
   `$ ${COMMAND}`,
   "{",
-  ...JSON_FIELDS.map(
-    (f, i) => `  "${f.key}": ${f.value}${i < JSON_FIELDS.length - 1 ? "," : ""}`,
-  ),
+  ...JSON_FIELDS.map((f, i) => `  "${f.key}": ${f.value}${i < JSON_FIELDS.length - 1 ? "," : ""}`),
   "}",
   FINAL_LINE,
 ].join("\n");
@@ -107,16 +105,17 @@ export function Terminal({ startDelay = 0 }: { startDelay?: number }) {
         <span className="font-mono text-xs text-muted-foreground">tolkin</span>
       </div>
 
-      <div aria-hidden="true" className="min-h-[15.5rem] px-5 py-4 font-mono text-[13px] leading-[1.7] text-zinc-500">
+      <div
+        aria-hidden="true"
+        className="min-h-[15.5rem] px-5 py-4 font-mono text-[13px] leading-[1.7] text-zinc-500"
+      >
         <div>
           <span className="text-zinc-500">$ </span>
           <span className="text-foreground">{COMMAND.slice(0, phase.cmd)}</span>
           {!phase.done && phase.lines === 0 ? <span className="terminal-caret" /> : null}
         </div>
         {jsonLines}
-        {phase.final ? (
-          <div className="mt-2 text-lime-300">{FINAL_LINE}</div>
-        ) : null}
+        {phase.final ? <div className="mt-2 text-lime-300">{FINAL_LINE}</div> : null}
         {phase.done ? (
           <div className="mt-2">
             <span>$ </span>
