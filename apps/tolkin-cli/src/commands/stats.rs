@@ -7,6 +7,7 @@ use clap::Args;
 use serde_json::json;
 use tolkin_core::pricing;
 
+use crate::advisories::AdvisoryBlock;
 use crate::ledger;
 use crate::tiers::TierReport;
 use crate::tui;
@@ -82,15 +83,18 @@ pub fn run(args: StatsArgs) -> Result<()> {
     };
 
     if args.json {
-        // Additive cache block: the measured tier gains a `cache` object
-        // carrying the prompt-cache health report. Strictly additive; no
-        // existing key moves or renames (the skill schema lint enforces the
-        // documented keys). Injected at the JSON layer so the TierReport
-        // struct and its consumers stay untouched.
+        // Additive blocks on the measured tier: `cache` (cache health) and
+        // `advisories` (model mix, output share, cap runway). Strictly
+        // additive; no existing key moves or renames (the skill schema lint
+        // enforces the documented keys). Injected at the JSON layer so the
+        // TierReport struct and its consumers stay untouched.
         let mut tiers_value = serde_json::to_value(&report)?;
         if !tiers_value["measured"].is_null() {
             if let Some(cache_report) = snapshot.compute_cache(scope_project) {
                 tiers_value["measured"]["cache"] = serde_json::to_value(&cache_report)?;
+            }
+            if let Some(advisory_block) = snapshot.compute_advisories(&report) {
+                tiers_value["measured"]["advisories"] = serde_json::to_value(&advisory_block)?;
             }
         }
         let out = json!({
@@ -115,32 +119,48 @@ pub fn run(args: StatsArgs) -> Result<()> {
         return Ok(());
     }
 
-    print_plain(
-        &report,
+    let advisories = snapshot.compute_advisories(&report);
+    let plain_args = PlainArgs {
+        report: &report,
+        advisories: advisories.as_ref(),
         scope_project,
-        &dir,
-        snapshot.records.len(),
-        snapshot.skipped,
-        snapshot.ingestion_on,
-        snapshot.rate_model_display,
-    );
+        dir: &dir,
+        record_count: snapshot.records.len(),
+        skipped: snapshot.skipped,
+        ingestion_on: snapshot.ingestion_on,
+        rate_display: snapshot.rate_model_display,
+    };
+    print_plain(&plain_args);
     Ok(())
 }
 
-fn print_plain(
-    report: &TierReport,
-    scope_project: Option<&str>,
-    dir: &Path,
+struct PlainArgs<'a> {
+    report: &'a TierReport,
+    advisories: Option<&'a AdvisoryBlock>,
+    scope_project: Option<&'a str>,
+    dir: &'a Path,
     record_count: usize,
     skipped: u64,
     ingestion_on: bool,
-    rate_display: &str,
-) {
+    rate_display: &'a str,
+}
+
+fn print_plain(args: &PlainArgs) {
+    let PlainArgs {
+        report,
+        advisories,
+        scope_project,
+        dir,
+        record_count,
+        skipped,
+        ingestion_on,
+        rate_display,
+    } = args;
     match scope_project {
         Some(p) => println!("Tolkin stats: {p}"),
         None => println!("Tolkin stats: all projects (machine-wide)"),
     }
-    let skipped_note = if skipped > 0 {
+    let skipped_note = if *skipped > 0 {
         format!(" ({skipped} unparseable skipped)")
     } else {
         String::new()
@@ -249,7 +269,7 @@ fn print_plain(
             }
         }
         None => {
-            if ingestion_on {
+            if *ingestion_on {
                 println!("Measured: ingestion is on but no session logs were found");
             } else {
                 println!("Measured: usage-log ingestion is off (re-run tolkin init to enable)");
@@ -257,6 +277,88 @@ fn print_plain(
         }
     }
     println!();
+
+    // Advisories block: model mix, output share, and cap runway.
+    // Rendered only when measured data exists (same gate as the cache block).
+    if let Some(block) = advisories {
+        println!("Advisories ({})", block.label);
+        // Model mix.
+        let mix = &block.model_mix;
+        if mix.priced_spend_total > 0.0 {
+            if let Some(ref f) = mix.frontier {
+                println!(
+                    "  model mix: top model {} carries {:.1}% of priced spend ({})",
+                    f.model,
+                    f.share * 100.0,
+                    usd(f.spend_usd)
+                );
+            }
+            if let Some(ref c) = mix.cheap {
+                println!(
+                    "  model mix: cheapest-tier model {} carries {:.1}% of priced spend ({})",
+                    c.model,
+                    c.share * 100.0,
+                    usd(c.spend_usd)
+                );
+            }
+            if !mix.unpriced_models_excluded.is_empty() {
+                println!(
+                    "  model mix: unpriced models excluded from shares: {}",
+                    mix.unpriced_models_excluded.join(", ")
+                );
+            }
+            if let Some(ref adv) = mix.frontier_advisory {
+                println!("  note: {adv}");
+            }
+            if let Some(ref adv) = mix.cheap_advisory {
+                println!("  note: {adv}");
+            }
+        } else {
+            println!("  model mix: no priced spend recorded");
+        }
+        // Output share.
+        let os = &block.output_share;
+        println!("  output share: {}", os.framing);
+        // Cap runway (only when configured).
+        if let Some(ref cap) = block.cap_runway {
+            if cap.cap_already_reached {
+                println!(
+                    "  cap runway: cap ${:.2} already reached this month (MTD {})",
+                    cap.monthly_cap_usd,
+                    usd(cap.mtd_spend_usd)
+                );
+            } else {
+                println!(
+                    "  cap runway: MTD spend {}, remaining {} of cap ${}",
+                    usd(cap.mtd_spend_usd),
+                    usd(cap.remaining_usd),
+                    cap.monthly_cap_usd
+                );
+                if let Some(ref date) = cap.rate_7d.projected_cap_date {
+                    println!(
+                        "    at your 7-day rate ({}/day) you reach ${:.2} on {}",
+                        usd(cap.rate_7d.avg_daily_usd),
+                        cap.monthly_cap_usd,
+                        date
+                    );
+                } else if let Some(ref note) = cap.rate_7d.projection_note {
+                    println!("    7-day projection: {note}");
+                }
+                if let Some(ref date) = cap.rate_30d.projected_cap_date {
+                    println!(
+                        "    at your 30-day rate ({}/day) you reach ${:.2} on {}",
+                        usd(cap.rate_30d.avg_daily_usd),
+                        cap.monthly_cap_usd,
+                        date
+                    );
+                } else if let Some(ref note) = cap.rate_30d.projection_note {
+                    println!("    30-day projection: {note}");
+                }
+            }
+        }
+        println!();
+    }
+
     for note in &report.notes {
         println!("note: {note}");
     }

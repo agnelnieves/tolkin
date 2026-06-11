@@ -22,6 +22,7 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 use tolkin_core::pricing;
 
+use crate::advisories::AdvisoryBlock;
 use crate::cache_analysis::CacheReport;
 use crate::ledger;
 use crate::tiers::{Identified, Measured, Realized, TierReport};
@@ -89,6 +90,7 @@ pub fn render_html(snapshot: &StatsSnapshot, global: bool) -> String {
     let version = env!("CARGO_PKG_VERSION");
 
     let mut body = String::with_capacity(8 * 1024);
+    let advisories = snapshot.compute_advisories(&report);
     body.push_str(&render_header(&scope_label, &generated_at, version));
     body.push_str(&render_tier_identified(report.identified.as_ref(), global));
     body.push_str(&render_tier_realized(
@@ -100,6 +102,10 @@ pub fn render_html(snapshot: &StatsSnapshot, global: bool) -> String {
     // `tolkin cache` command does, so the two surfaces can never disagree.
     if let Some(cache) = snapshot.compute_cache(scope_project) {
         body.push_str(&render_cache_section(&cache));
+    }
+    // Advisory section: model mix, output share, cap runway.
+    if let Some(ref adv) = advisories {
+        body.push_str(&render_advisories_section(adv));
     }
     if let Some(measured) = report.measured.as_ref() {
         if measured.sessions > 0 {
@@ -492,6 +498,145 @@ fn render_cache_section(cache: &CacheReport) -> String {
         "<p class=\"honesty\">{}</p>",
         html_escape(cache.scope_line)
     ));
+    out.push_str("</div></section>");
+    out
+}
+
+/// Measured advisories section: model mix, output share, and cap runway.
+/// Rendered only when the measured tier is present (same gate the TUI uses).
+fn render_advisories_section(block: &AdvisoryBlock) -> String {
+    let mut out = String::new();
+    out.push_str("<section class=\"tier\" id=\"advisories\"><div class=\"card\">");
+    out.push_str("<div class=\"label\">Advisories</div>");
+    out.push_str("<h2>Measured advisories</h2>");
+    out.push_str(&format!(
+        "<p class=\"tier-sub\">{}</p>",
+        html_escape(block.label)
+    ));
+    out.push_str("<table class=\"kv\"><tbody>");
+
+    // Model mix.
+    let mix = &block.model_mix;
+    out.push_str(&kv_row(
+        "Model mix",
+        &format!("({})", html_escape(mix.label)),
+        None,
+    ));
+    if mix.priced_spend_total > 0.0 {
+        if let Some(ref f) = mix.frontier {
+            out.push_str(&kv_row(
+                "Top model",
+                &format!(
+                    "{}: {:.1}% of priced spend ({})",
+                    html_escape(&f.model),
+                    f.share * 100.0,
+                    usd(f.spend_usd)
+                ),
+                None,
+            ));
+        }
+        if let Some(ref c) = mix.cheap {
+            out.push_str(&kv_row(
+                "Cheapest-tier model",
+                &format!(
+                    "{}: {:.1}% of priced spend ({})",
+                    html_escape(&c.model),
+                    c.share * 100.0,
+                    usd(c.spend_usd)
+                ),
+                None,
+            ));
+        }
+        if !mix.unpriced_models_excluded.is_empty() {
+            out.push_str(&kv_row(
+                "Unpriced models (excluded from mix)",
+                &html_escape(&mix.unpriced_models_excluded.join(", ")),
+                None,
+            ));
+        }
+        if let Some(ref adv) = mix.frontier_advisory {
+            out.push_str(&format!(
+                "<tr><td colspan=\"2\" class=\"note\">{}</td></tr>",
+                html_escape(adv)
+            ));
+        }
+        if let Some(ref adv) = mix.cheap_advisory {
+            out.push_str(&format!(
+                "<tr><td colspan=\"2\" class=\"note\">{}</td></tr>",
+                html_escape(adv)
+            ));
+        }
+    } else {
+        out.push_str(&kv_row("Model mix", "no priced spend recorded", None));
+    }
+
+    // Output share.
+    let os = &block.output_share;
+    out.push_str(&kv_row(
+        "Output tokens",
+        &format!(
+            "{} ({:.1}% of priced bill)",
+            commas(os.output_tokens),
+            os.share * 100.0
+        ),
+        None,
+    ));
+    out.push_str(&kv_row(
+        "Output cost",
+        &format!(
+            "{} of {} priced bill",
+            usd(os.output_cost_usd),
+            usd(os.priced_bill_usd)
+        ),
+        None,
+    ));
+    out.push_str(&format!(
+        "<tr><td colspan=\"2\" class=\"note\">{}</td></tr>",
+        html_escape(&os.framing)
+    ));
+
+    // Cap runway.
+    if let Some(ref cap) = block.cap_runway {
+        out.push_str(&kv_row(
+            "Monthly cap",
+            &format!("${:.2}", cap.monthly_cap_usd),
+            None,
+        ));
+        out.push_str(&kv_row("MTD spend", &usd(cap.mtd_spend_usd), None));
+        if cap.cap_already_reached {
+            out.push_str("<tr><td colspan=\"2\" class=\"warn\">Monthly cap already reached this month.</td></tr>");
+        } else {
+            out.push_str(&kv_row("Remaining", &usd(cap.remaining_usd), None));
+            if let Some(ref date) = cap.rate_7d.projected_cap_date {
+                out.push_str(&kv_row(
+                    "7-day projection",
+                    &format!(
+                        "at {} avg/day, cap reached {}",
+                        usd(cap.rate_7d.avg_daily_usd),
+                        html_escape(date)
+                    ),
+                    None,
+                ));
+            } else if let Some(ref note) = cap.rate_7d.projection_note {
+                out.push_str(&kv_row("7-day projection", &html_escape(note), None));
+            }
+            if let Some(ref date) = cap.rate_30d.projected_cap_date {
+                out.push_str(&kv_row(
+                    "30-day projection",
+                    &format!(
+                        "at {} avg/day, cap reached {}",
+                        usd(cap.rate_30d.avg_daily_usd),
+                        html_escape(date)
+                    ),
+                    None,
+                ));
+            } else if let Some(ref note) = cap.rate_30d.projection_note {
+                out.push_str(&kv_row("30-day projection", &html_escape(note), None));
+            }
+        }
+    }
+
+    out.push_str("</tbody></table>");
     out.push_str("</div></section>");
     out
 }

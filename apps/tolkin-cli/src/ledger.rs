@@ -82,6 +82,20 @@ fn is_truthy_env(name: &str) -> bool {
 }
 
 /// Consent and onboarding state. Lives next to the ledger as `config.toml`.
+///
+/// # Optional fields
+///
+/// - `session_rate_per_day`: user-supplied sessions-per-day rate for the
+///   realized-savings formula when log ingestion is off. Absent by default.
+///
+/// - `monthly_cap_usd`: optional monthly spend cap in US dollars. When set
+///   and measured usage data exists, `tolkin stats` and the report show how
+///   much of the cap has been used this calendar month (UTC) and project when
+///   the cap will be reached at the trailing 7-day and 30-day average daily
+///   rates. Absent by default; omitting it from config.toml disables the cap
+///   runway advisory entirely (no prompting when unset). Set this to the
+///   Claude monthly limit you are working within, for example
+///   `monthly_cap_usd = 50.0`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     pub v: u32,
@@ -92,6 +106,13 @@ pub struct Config {
     /// the realized-savings formula when log ingestion is off.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub session_rate_per_day: Option<f64>,
+    /// Optional monthly spend cap in USD. When set and measured data exists,
+    /// the stats and report surfaces show month-to-date spend and project when
+    /// the cap will be reached. Absent by default; unset means no advisory.
+    /// Forward and backward compatible: older binaries round-trip the value
+    /// via the `default` attribute (reads None if absent from the file).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub monthly_cap_usd: Option<f64>,
 }
 
 impl Config {
@@ -102,6 +123,7 @@ impl Config {
             consent_log_ingestion,
             onboarded_at: now_secs(),
             session_rate_per_day: None,
+            monthly_cap_usd: None,
         }
     }
 }

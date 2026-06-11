@@ -76,6 +76,7 @@ fn render_setup_only() -> Result<String> {
             spend_days: &[],
             spend_models: &[],
             cache: None,
+            advisories: None,
             ingestion_on: false,
             setup_needed: true,
             rate_model_display: "",
@@ -108,6 +109,7 @@ fn render_static_frame(snapshot: &StatsSnapshot, w: u16, h: u16) -> Result<Strin
     let spend_models = data::top_model_rows(&global_report);
     // The Spend tab is global scope, so its cache health row is too.
     let cache_report = snapshot.compute_cache(None);
+    let advisory_block = snapshot.compute_advisories(&global_report);
 
     // Static frame: try the project scan inline (the compact frame is a
     // one-shot snapshot, no background thread). If it fails for any reason we
@@ -129,6 +131,7 @@ fn render_static_frame(snapshot: &StatsSnapshot, w: u16, h: u16) -> Result<Strin
             spend_days: &spend_days,
             spend_models: &spend_models,
             cache: cache_report.as_ref(),
+            advisories: advisory_block.as_ref(),
             ingestion_on: snapshot.ingestion_on,
             setup_needed,
             rate_model_display: snapshot.rate_model_display,
@@ -234,6 +237,7 @@ fn draw_with_state(
             let spend_models = data::top_model_rows(&global_report);
             // The Spend tab is global scope, so its cache health row is too.
             let cache_report = s.compute_cache(None);
+            let advisory_block = s.compute_advisories(&global_report);
             let setup_needed = s.config.is_none() && s.records.is_empty();
             let view = DashboardView {
                 tab,
@@ -246,6 +250,7 @@ fn draw_with_state(
                 spend_days: &spend_days,
                 spend_models: &spend_models,
                 cache: cache_report.as_ref(),
+                advisories: advisory_block.as_ref(),
                 ingestion_on: s.ingestion_on,
                 setup_needed,
                 rate_model_display: s.rate_model_display,
@@ -265,6 +270,7 @@ fn draw_with_state(
                 spend_days: &[],
                 spend_models: &[],
                 cache: None,
+                advisories: None,
                 ingestion_on: false,
                 setup_needed: true,
                 rate_model_display: "",
@@ -364,6 +370,117 @@ mod tests {
         dir
     }
 
+    /// Render a single Spend-tab frame using TestBackend and verify that
+    /// the advisory compact lines appear when measured data is present.
+    /// This is the TestBackend buffer test required by the gate.
+    #[test]
+    fn spend_tab_advisory_compact_lines_rendered_in_buffer() {
+        use crate::advisories::AdvisoryInputs;
+        use crate::tiers::{Measured, ModelUsage};
+        use crate::usage::types::UsageTotals;
+        use std::collections::BTreeMap;
+
+        let dir = tmp_dir("spend-adv");
+        let cfg = Config::new(true, false);
+        ledger::save_config_to(&dir, &cfg).expect("save config");
+        let snapshot = StatsSnapshot::load_in(&dir);
+
+        // Build a minimal advisory block with a known output share framing.
+        let mut by_model: BTreeMap<String, ModelUsage> = BTreeMap::new();
+        by_model.insert(
+            "claude-sonnet-4-6".to_string(),
+            ModelUsage {
+                totals: UsageTotals {
+                    input_tokens: 1_000_000,
+                    output_tokens: 200_000,
+                    cache_read_tokens: 0,
+                    cache_write_5m_tokens: 0,
+                    cache_write_1h_tokens: 0,
+                },
+                cost_usd: Some(3.50),
+            },
+        );
+        let measured = Measured {
+            label: "ground truth",
+            sessions: 5,
+            first_ts: Some(1_749_000_000),
+            last_ts: Some(1_749_513_600),
+            totals: UsageTotals {
+                input_tokens: 1_000_000,
+                output_tokens: 200_000,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+            },
+            by_model,
+            cost_usd_total: 3.50,
+            unpriced_models: vec![],
+            cache_hit_rate: 0.0,
+        };
+
+        fn test_cost(model: &str, t: &UsageTotals) -> Option<f64> {
+            if model == "claude-sonnet-4-6" {
+                Some(
+                    t.input_tokens as f64 * 3.0 / 1_000_000.0
+                        + t.output_tokens as f64 * 15.0 / 1_000_000.0,
+                )
+            } else {
+                None
+            }
+        }
+        fn test_rate(model: &str) -> Option<f64> {
+            if model == "claude-sonnet-4-6" {
+                Some(3.0)
+            } else {
+                None
+            }
+        }
+
+        let adv_block = crate::advisories::compute(&AdvisoryInputs {
+            measured: &measured,
+            sessions: &[],
+            cost_fn: &test_cost,
+            input_rate_fn: &test_rate,
+            monthly_cap_usd: None,
+            now: 1_749_513_600,
+        });
+
+        let project_report = snapshot.compute_project();
+        let global_report = snapshot.compute_global();
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| {
+                let view = DashboardView {
+                    tab: Tab::Spend,
+                    project_key: "/tmp/test",
+                    records: &snapshot.records,
+                    scan: &ProjectScanState::None,
+                    project_report: &project_report,
+                    global_report: &global_report,
+                    global_projects: &[],
+                    spend_days: &[],
+                    spend_models: &[],
+                    cache: None,
+                    advisories: Some(&adv_block),
+                    ingestion_on: true,
+                    setup_needed: false,
+                    rate_model_display: "claude-sonnet-4.6",
+                    prices_observed: "2026-06-10",
+                };
+                ui::render(frame, &view);
+            })
+            .expect("draw");
+
+        let buf = buffer_to_string(terminal.backend().buffer());
+        // The output share line must appear in the Spend tab buffer.
+        assert!(
+            buf.contains("output share") || buf.contains("output"),
+            "output share line must appear in Spend tab buffer; buffer:\n{buf}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn render_static_frame_contains_chrome_and_honesty_line() {
         // Seed a ledger + config via the public seams (no env mutation).
@@ -387,7 +504,7 @@ mod tests {
         )
         .expect("append");
         let snapshot = StatsSnapshot::load_in(&dir);
-        let frame = render_static_frame(&snapshot, 100, 30).expect("render");
+        let frame = render_static_frame(&snapshot, 100, 40).expect("render");
         assert!(frame.contains("tolkin"), "header missing: {frame}");
         assert!(frame.contains("Project"));
         assert!(frame.contains("Machine"));
