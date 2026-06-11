@@ -145,11 +145,8 @@ pub fn run(args: McpArgs, yes: bool) -> Result<()> {
                     // the targeted server (basis resolution rule 1). Cached
                     // manifests for every OTHER server still apply, so a
                     // single targeted manifest does not blow away the cache.
-                    let mut inventories = load_cached_inventories(
-                        &project_root,
-                        &names,
-                        tok_provider,
-                    );
+                    let mut inventories =
+                        load_cached_inventories(&project_root, &names, tok_provider);
                     inventories.insert(target_server, inventory);
                     mcp::analyze_with_inventories(&config_text, cache_provider, &inventories)
                         .map_err(|e| anyhow!(e))?
@@ -487,6 +484,7 @@ fn is_ci_set() -> bool {
 /// One probe target resolved from the raw MCP config. `Stdio` and `Http`
 /// carry the real command / env / headers values; this struct never leaves
 /// the CLI process (the cached manifest stores zero of these fields).
+#[derive(Debug)]
 enum ProbeTarget {
     Stdio(StdioTarget),
     Http(HttpTarget),
@@ -652,11 +650,7 @@ fn extract_target(name: &str, entry: &Value) -> Result<ProbeTarget> {
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
-    Ok(ProbeTarget::Stdio(StdioTarget {
-        command,
-        args,
-        env,
-    }))
+    Ok(ProbeTarget::Stdio(StdioTarget { command, args, env }))
 }
 
 /// Run the probe pipeline: confirm, probe, redact, save. Per-server output

@@ -121,7 +121,7 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
 pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as i64; // 0..=399
+    let yoe = y - era * 400; // 0..=399
     let m = m as i64;
     let d = d as i64;
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // 0..=365
@@ -225,6 +225,7 @@ pub fn load_for(root: &Path, server: &str) -> Option<Manifest> {
 }
 
 /// Load every cached manifest under the project root, in slug order.
+#[allow(dead_code)] // public surface for future stats/diagnostics; tested below.
 pub fn load_all(root: &Path) -> Vec<Manifest> {
     let dir = cache_dir(root);
     let Ok(entries) = fs::read_dir(&dir) else {
@@ -272,12 +273,7 @@ mod tests {
 
     #[test]
     fn civil_date_round_trip() {
-        for (y, m, d) in [
-            (1970, 1, 1),
-            (2000, 2, 29),
-            (2026, 6, 11),
-            (2100, 12, 31),
-        ] {
+        for (y, m, d) in [(1970, 1, 1), (2000, 2, 29), (2026, 6, 11), (2100, 12, 31)] {
             let days = days_from_civil(y, m, d);
             let (y2, m2, d2) = civil_from_days(days);
             assert_eq!((y, m, d), (y2, m2, d2));
