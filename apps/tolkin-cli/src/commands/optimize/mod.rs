@@ -613,7 +613,7 @@ fn run_advisory(
                 );
             }
             NarrateOutcome::Unavailable(e) => {
-                adv.narration_note = Some(format!("local model unavailable: {e}"));
+                adv.narration_note = Some(unavailable_note(e));
             }
         }
     }
@@ -713,10 +713,31 @@ fn run_skills(sc: &Sidecar, plan: &SkillsPlan) -> Vec<SkillLintEntry> {
     entries
 }
 
+/// Render a chat failure, appending a recovery hint when the server's error
+/// body betrays a model-download attempt: mlx-lm and friends resolve unknown
+/// model ids through the Hugging Face hub, which restricted networks block.
+/// The user-facing cure is always the same: name a model that is already on
+/// disk.
+fn unavailable_note(e: impl std::fmt::Display) -> String {
+    let text = e.to_string();
+    let fetchy = ["hf.co", "huggingface", "Network error", "cas-server"]
+        .iter()
+        .any(|needle| text.contains(needle));
+    if fetchy {
+        format!(
+            "local model unavailable: {text} (hint: the server tried to download the requested model; \
+            pass --model with an on-disk path, set sidecar_model in config.toml, or restart the \
+            server pinned to it: mlx_lm.server --model </path/to/model-folder>)"
+        )
+    } else {
+        format!("local model unavailable: {text}")
+    }
+}
+
 fn unavailable_entry(path: &str, reason: &str) -> SkillLintEntry {
     SkillLintEntry {
         file: path.to_string(),
-        summary: format!("local model unavailable: {reason}"),
+        summary: unavailable_note(reason),
         findings: Vec::new(),
         dropped_findings: 0,
     }
@@ -775,7 +796,7 @@ fn run_mcp(sc: &Sidecar, plan: &McpPlan) -> McpLintResult {
                 findings: Vec::new(),
                 dropped_findings: 0,
                 summary: String::new(),
-                note: Some(format!("local model unavailable: {e}")),
+                note: Some(unavailable_note(e)),
             };
         }
     };
@@ -795,7 +816,7 @@ fn run_mcp(sc: &Sidecar, plan: &McpPlan) -> McpLintResult {
                     findings: Vec::new(),
                     dropped_findings: 0,
                     summary: String::new(),
-                    note: Some(format!("local model unavailable: {e}")),
+                    note: Some(unavailable_note(e)),
                 };
             }
         }
@@ -1244,5 +1265,28 @@ fn print_prompts(ctx: &RenderCtx) {
             println!("--- mcp user ---");
             println!("{}", prompts::mcp_user(&plan.index));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unavailable_note;
+
+    #[test]
+    fn unavailable_note_hints_only_on_download_errors() {
+        let net = unavailable_note(
+            "chat HTTP 404: {\"error\": \"Network error: 403 Forbidden, domain: https://cas-server.xethub.hf.co/v2/x\"}",
+        );
+        assert!(
+            net.contains("hint: the server tried to download"),
+            "download failure must carry the recovery hint: {net}"
+        );
+        assert!(net.contains("sidecar_model"), "hint names the config seam");
+        let plain = unavailable_note("connection refused");
+        assert!(
+            !plain.contains("hint:"),
+            "plain failures stay terse: {plain}"
+        );
+        assert!(plain.starts_with("local model unavailable: "));
     }
 }
