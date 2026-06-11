@@ -83,6 +83,20 @@ users should use `npx tolkin-cli` instead. Bottles and source builds from
 homebrew-core are out of scope until the project reaches the OSS extraction
 milestone; this tap provides pre-built binary installs only.
 
+#### Upgrading
+
+```sh
+brew update && brew upgrade tolkin
+```
+
+Always run the two commands together. Third-party taps only refresh during
+`brew update`, so `brew upgrade tolkin` on its own can answer "already
+installed" even when a newer release exists (Homebrew's auto-update may sit
+on tap metadata for up to a day). If tolkin came from npm instead, the
+command is `npm update -g tolkin-cli`. Not sure which one applies? Run
+`tolkin update`: it checks the registry once, detects the install channel,
+and prints the exact command to copy.
+
 ### 4. GitHub Action
 
 Add to any repository to get a PR comment with the agent-context load profile,
