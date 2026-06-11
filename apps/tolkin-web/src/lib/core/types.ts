@@ -186,6 +186,52 @@ export interface McpSlimRecommendation {
   est_tokens_saved: number;
 }
 
+// One tool parsed out of a tools/list payload by the core. `serialized` is
+// the canonical compact JSON ({name, description, input_schema}) the browser
+// tokenizer must count; tokenization stays platform-native by design.
+export interface McpToolSpec {
+  name: string;
+  description: string;
+  serialized: string;
+}
+
+// One tool with browser-supplied token counts, fed back into the core.
+export interface McpToolTokenCount {
+  name: string;
+  description: string;
+  tokens: number;
+  description_tokens: number;
+}
+
+// Per-tool table row: exact tokens and share of the server total.
+export interface McpToolRow {
+  name: string;
+  tokens: number;
+  description_tokens: number;
+  share_pct: number;
+}
+
+// One description smell across one or more tools. The recommendation always
+// carries the compact-clarity stance: clarify or shorten, never lengthen.
+export interface McpToolSmell {
+  rule: string;
+  tools: string[];
+  detail: string;
+  recommendation: string;
+}
+
+// Exact per-tool analysis of one server's tool inventory. basis is the
+// load-bearing label: "tokenized manifest (<tokenizer>)", never an estimate.
+export interface McpToolInventory {
+  tokenizer: string;
+  basis: string;
+  tool_count: number;
+  total_tokens: number;
+  tools: McpToolRow[];
+  smells: McpToolSmell[];
+  notes: string[];
+}
+
 export interface McpServerReport {
   name: string;
   matched_id: string | null;
@@ -202,12 +248,20 @@ export interface McpServerReport {
   // Slim recommendation; null when the server has no verified slim mechanism.
   // Independent of the CLI-swap savings: per server the two are alternatives.
   slim: McpSlimRecommendation | null;
+  // What kind of number cold_tokens is: "catalog estimate (representative)"
+  // or "tokenized manifest (<tokenizer>)". Never blended.
+  basis: string;
+  // Exact per-tool breakdown; present only when a tools/list manifest was
+  // supplied for this server (the key is omitted otherwise).
+  tools_detail?: McpToolInventory;
 }
 
 export interface McpTotals {
   servers: number;
   matched: number;
   unknown: number;
+  // Servers whose counts come from a supplied tools/list manifest (exact).
+  measured: number;
   cold: number;
   warm: number;
   tool_search: number;

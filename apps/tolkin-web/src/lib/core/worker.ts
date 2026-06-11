@@ -15,13 +15,23 @@
 // in-band as { ok: false } rather than thrown, so the client can reject the
 // matching promise without an unhandled "error" event.
 
-export type WorkerOp = "redact" | "cost" | "models" | "analyze-mcp" | "audit" | "prices-observed";
+export type WorkerOp =
+  | "redact"
+  | "cost"
+  | "models"
+  | "analyze-mcp"
+  | "parse-tools-list"
+  | "analyze-tools-inventory"
+  | "audit"
+  | "prices-observed";
 
 export type WorkerRequest =
   | { id: number; op: "redact"; text: string; optionsJson: string }
   | { id: number; op: "cost"; requestJson: string }
   | { id: number; op: "models" }
   | { id: number; op: "analyze-mcp"; configText: string; provider: string }
+  | { id: number; op: "parse-tools-list"; toolsJson: string }
+  | { id: number; op: "analyze-tools-inventory"; requestJson: string }
   | { id: number; op: "audit"; text: string; optionsJson: string }
   | { id: number; op: "prices-observed" };
 
@@ -45,6 +55,8 @@ type CoreModule = {
   cost: (request_json: string) => string;
   models: () => string;
   analyze_mcp: (config_text: string, provider: string) => string;
+  parse_tools_list: (tools_json: string) => string;
+  analyze_tools_inventory: (request_json: string) => string;
   audit: (text: string, options_json: string) => string;
   prices_observed: () => string;
 };
@@ -82,6 +94,10 @@ function run(req: WorkerRequest, core: CoreModule): string {
       return core.models();
     case "analyze-mcp":
       return core.analyze_mcp(req.configText, req.provider);
+    case "parse-tools-list":
+      return core.parse_tools_list(req.toolsJson);
+    case "analyze-tools-inventory":
+      return core.analyze_tools_inventory(req.requestJson);
     case "audit":
       return core.audit(req.text, req.optionsJson);
     case "prices-observed":

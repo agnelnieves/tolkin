@@ -3,7 +3,17 @@
 // and the regex-heavy redaction pass never blocks the UI. The worker is created
 // lazily on first use by the client, guarded against SSR.
 
-export { analyzeMcp, audit, cost, models, pricesObserved, redact, terminate } from "./client";
+export {
+  analyzeMcp,
+  analyzeToolsInventory,
+  audit,
+  cost,
+  models,
+  parseToolsList,
+  pricesObserved,
+  redact,
+  terminate,
+} from "./client";
 export type {
   AuditFinding,
   AuditOptions,
@@ -19,6 +29,11 @@ export type {
   McpServerReport,
   McpSlimOption,
   McpSlimRecommendation,
+  McpToolInventory,
+  McpToolRow,
+  McpToolSmell,
+  McpToolSpec,
+  McpToolTokenCount,
   McpTotals,
   ModelLongContext,
   ModelPrice,

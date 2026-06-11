@@ -12,6 +12,8 @@ import type {
   CostBreakdown,
   CostRequest,
   McpAnalysis,
+  McpToolSpec,
+  McpToolTokenCount,
   ModelPrice,
   RedactionResult,
   RedactOptions,
@@ -93,6 +95,29 @@ export async function analyzeMcp(
   provider: CoreProvider = "anthropic",
 ): Promise<McpAnalysis> {
   const raw = await request({ op: "analyze-mcp", configText, provider });
+  return JSON.parse(raw) as McpAnalysis;
+}
+
+// Parse a tools/list payload ({"tools": [...]}, a bare tool array, or a
+// JSON-RPC envelope) into ToolSpecs. The caller tokenizes each `serialized`
+// string and each `description` with the panel's own tokenizer, then feeds the
+// counts to analyzeToolsInventory. Tokenization never happens in the core.
+export async function parseToolsList(toolsJson: string): Promise<McpToolSpec[]> {
+  const raw = await request({ op: "parse-tools-list", toolsJson });
+  return JSON.parse(raw) as McpToolSpec[];
+}
+
+// Analyze a pre-tokenized tool inventory as a single-server McpAnalysis. The
+// returned server carries exact tokenized-manifest counts (basis label says
+// so) plus the per-tool table and description smells under tools_detail.
+export async function analyzeToolsInventory(
+  server: string,
+  tokenizer: string,
+  tools: McpToolTokenCount[],
+  provider: CoreProvider = "anthropic",
+): Promise<McpAnalysis> {
+  const requestJson = JSON.stringify({ server, provider, tokenizer, tools });
+  const raw = await request({ op: "analyze-tools-inventory", requestJson });
   return JSON.parse(raw) as McpAnalysis;
 }
 

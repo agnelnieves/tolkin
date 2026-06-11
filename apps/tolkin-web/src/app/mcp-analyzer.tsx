@@ -6,9 +6,12 @@ import type {
   McpAnalysis,
   McpServerReport,
   McpSlimRecommendation,
+  McpToolInventory,
+  McpToolTokenCount,
   Recommendation,
 } from "../lib/core";
-import { analyzeMcp } from "../lib/core";
+import { analyzeMcp, analyzeToolsInventory, parseToolsList } from "../lib/core";
+import { count as countTokens } from "../lib/tokenize";
 
 // MCP config analyzer. Paste any AI agent's MCP config (Claude Desktop, Claude
 // Code, Cursor, Continue, VS Code / Copilot, Zed) and see the token cost of its
@@ -123,10 +126,207 @@ export function McpAnalyzer() {
         <Results analysis={state.analysis} provider={provider} />
       )}
 
+      <ToolsListSection provider={provider} />
+
       <p className="border-t border-zinc-800 pt-3 text-xs leading-5 text-zinc-500">
         Estimates are input-token-bounded. Your config never leaves the browser.
       </p>
     </section>
+  );
+}
+
+// ---- tools/list manifest analysis (exact per-tool counts) ----
+
+// Paste a server's tools/list JSON for exact tokenized counts. The core
+// parses and canonicalizes each tool ({name, description, input_schema},
+// compact); the browser tokenizes every serialization and description with
+// the panel's o200k_base tokenizer (gpt-tokenizer, in the tokenize worker);
+// the core then builds the per-tool table and description smells. Counts are
+// exact for the canonical serialization and labeled "tokenized manifest
+// (o200k_base)"; they supersede catalog estimates, never blend with them.
+function ToolsListSection({ provider }: { provider: CoreProvider }) {
+  const [manifest, setManifest] = useState("");
+  const [serverName, setServerName] = useState("");
+  const [state, setState] = useState<AnalysisState>({ status: "idle" });
+  const runRef = useRef(0);
+
+  useEffect(() => {
+    if (manifest.trim() === "") {
+      runRef.current++;
+      setState({ status: "idle" });
+      return;
+    }
+    const handle = setTimeout(() => {
+      const runId = ++runRef.current;
+      setState({ status: "loading" });
+      void (async () => {
+        try {
+          const specs = await parseToolsList(manifest);
+          const tools: McpToolTokenCount[] = await Promise.all(
+            specs.map(async (spec) => {
+              const [full, desc] = await Promise.all([
+                countTokens("openai", spec.serialized),
+                countTokens("openai", spec.description),
+              ]);
+              return {
+                name: spec.name,
+                description: spec.description,
+                tokens: full.tokens,
+                description_tokens: desc.tokens,
+              };
+            }),
+          );
+          const analysis = await analyzeToolsInventory(
+            serverName.trim() === "" ? "server" : serverName.trim(),
+            "o200k_base",
+            tools,
+            provider,
+          );
+          if (runRef.current !== runId) return;
+          setState({ status: "ok", analysis });
+        } catch (e: unknown) {
+          if (runRef.current !== runId) return;
+          setState({ status: "error", message: errorMessage(e) });
+        }
+      })();
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [manifest, serverName, provider]);
+
+  const detail = state.status === "ok" ? (state.analysis.servers[0]?.tools_detail ?? null) : null;
+
+  return (
+    <div className="space-y-4 border-t border-zinc-800 pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="space-y-1">
+          <h3 className="text-sm font-medium text-zinc-300">tools/list manifest (exact counts)</h3>
+          <p className="text-xs text-zinc-500">
+            Paste a server's tools/list JSON for exact per-tool counts and description smells.
+            Tokenized with o200k_base in your browser; nothing leaves it.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-zinc-400">
+          <span>Server name</span>
+          <input
+            type="text"
+            value={serverName}
+            onChange={(e) => setServerName(e.target.value)}
+            placeholder="e.g. github"
+            spellCheck={false}
+            className="w-32 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
+          />
+        </label>
+      </div>
+
+      <label className="block">
+        <span className="sr-only">Paste a tools/list JSON manifest to analyze</span>
+        <textarea
+          value={manifest}
+          onChange={(e) => setManifest(e.target.value)}
+          placeholder={
+            'Paste tools/list JSON: {"tools": [...]}, a bare tool array, or the full JSON-RPC response.'
+          }
+          rows={6}
+          spellCheck={false}
+          className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 font-mono text-sm leading-6 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none focus:ring-2 focus:ring-zinc-700"
+        />
+      </label>
+
+      {state.status === "error" ? (
+        <ErrorBox message={state.message} />
+      ) : state.status === "loading" ? (
+        <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-500">
+          tokenizing manifest...
+        </p>
+      ) : state.status === "ok" ? (
+        <div className="space-y-4">
+          <Results analysis={state.analysis} provider={provider} />
+          {detail != null ? <ToolsDetailView detail={detail} /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ToolsDetailView({ detail }: { detail: McpToolInventory }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h4 className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+          Per-tool breakdown
+        </h4>
+        <span className="text-[11px] tabular-nums text-zinc-500">
+          {detail.tool_count} tools, {detail.total_tokens.toLocaleString()} tokens,{" "}
+          <span className="text-emerald-400">{detail.basis}</span>
+        </span>
+      </div>
+
+      <div className="max-h-96 overflow-auto rounded-lg border border-zinc-800">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead className="sticky top-0 bg-zinc-900">
+            <tr className="border-b border-zinc-800 text-[10px] uppercase tracking-wider text-zinc-500">
+              <th className="px-3 py-2 font-medium">Tool</th>
+              <th className="px-3 py-2 text-right font-medium">Tokens</th>
+              <th className="px-3 py-2 text-right font-medium">Share</th>
+              <th className="px-3 py-2 text-right font-medium">Desc tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {detail.tools.map((row) => (
+              <tr key={row.name} className="border-b border-zinc-900 last:border-b-0">
+                <td className="px-3 py-1.5 font-mono text-zinc-200">{row.name}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-zinc-400">
+                  {row.tokens.toLocaleString()}
+                </td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-zinc-400">
+                  {row.share_pct.toFixed(2)}%
+                </td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-zinc-500">
+                  {row.description_tokens.toLocaleString()}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {detail.smells.length === 0 ? (
+        <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 text-xs text-zinc-500">
+          Description smells: none found.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <h4 className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+            Description smells ({detail.smells.length})
+          </h4>
+          {detail.smells.map((smell) => (
+            <div
+              key={`${smell.rule}:${smell.tools.join(",")}`}
+              className="space-y-1 rounded-lg border border-amber-900/50 bg-amber-950/15 p-3"
+            >
+              <p className="text-xs">
+                <span className="rounded bg-amber-950 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-amber-300">
+                  {smell.rule}
+                </span>{" "}
+                <span className="font-mono text-[11px] text-zinc-300">
+                  {smell.tools.length > 6
+                    ? `${smell.tools.slice(0, 6).join(", ")} and ${smell.tools.length - 6} more`
+                    : smell.tools.join(", ")}
+                </span>
+              </p>
+              <p className="text-[11px] leading-5 text-zinc-400">{smell.detail}</p>
+              <p className="text-[11px] leading-5 text-amber-300/80">{smell.recommendation}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="space-y-1 text-[11px] leading-5 text-zinc-500">
+        {detail.notes.map((n) => (
+          <p key={n}>{n}</p>
+        ))}
+      </div>
+    </div>
   );
 }
 
