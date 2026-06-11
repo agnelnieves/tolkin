@@ -20,7 +20,19 @@ type DropState =
 // memory and its extracted text is handed to the parent via onText, which feeds
 // it into the shared textarea. Every parser is lazy-loaded inside parseFile.
 // Nothing is uploaded.
-export function FileDrop({ onText }: { onText: (text: string) => void }) {
+//
+// The dropzone has two presentations: a big first-run state when there is no
+// content on screen, and a compact one-line bar once content is in the
+// textarea. The compact mode is what the analyzer asks for once the user has
+// pasted or loaded something; it keeps the affordance reachable without
+// dominating the column.
+export function FileDrop({
+  onText,
+  compact = false,
+}: {
+  onText: (text: string) => void;
+  compact?: boolean;
+}) {
   const [state, setState] = useState<DropState>({ status: "idle" });
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -59,6 +71,13 @@ export function FileDrop({ onText }: { onText: (text: string) => void }) {
     [handleFile],
   );
 
+  const base =
+    "group/drop block w-full cursor-pointer rounded-lg border border-dashed bg-black/30 text-left transition-colors duration-150 ease-out focus-within:border-lime-300/60 hover:[@media(hover:hover)]:border-white/25";
+  const tone = dragging
+    ? "border-lime-300/60 bg-lime-300/5"
+    : "border-white/15";
+  const size = compact ? "px-4 py-3" : "min-h-32 px-4 py-6";
+
   return (
     <div className="space-y-2">
       <label
@@ -69,11 +88,7 @@ export function FileDrop({ onText }: { onText: (text: string) => void }) {
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        className={
-          dragging
-            ? "flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-indigo-500/60 bg-indigo-500/5 px-4 py-6 text-center transition-colors"
-            : "flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-zinc-700 bg-zinc-950 px-4 py-6 text-center transition-colors hover:border-zinc-600"
-        }
+        className={`${base} ${tone} ${size}`}
       >
         <input
           ref={inputRef}
@@ -87,28 +102,49 @@ export function FileDrop({ onText }: { onText: (text: string) => void }) {
             e.target.value = "";
           }}
         />
-        <span className="text-sm text-zinc-300">
-          Drop a file or <span className="text-indigo-400">browse</span>
-        </span>
-        <span className="mt-1 text-xs text-zinc-500">
-          PDF, DOCX, XLSX, Markdown, JSON, YAML, code. Parsed in your browser.
-        </span>
+        {compact ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+              Drop a file
+              <span className="text-muted-foreground/60"> or </span>
+              <span className="text-lime-300/90">browse</span>
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
+              PDF, DOCX, XLSX, Markdown, JSON, YAML, code
+            </span>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-2 text-center">
+            <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+              Drop a file
+            </span>
+            <span className="text-base text-foreground sm:text-sm">
+              <span className="text-muted-foreground/80">or </span>
+              <span className="text-lime-300/90 underline decoration-lime-300/40 underline-offset-4">
+                browse
+              </span>
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
+              PDF, DOCX, XLSX, Markdown, JSON, YAML, code. Parsed in your browser.
+            </span>
+          </div>
+        )}
       </label>
 
-      <div className="min-h-5 text-xs" aria-live="polite">
+      <div className="min-h-5 px-1 font-mono text-[11px]" aria-live="polite">
         {state.status === "parsing" ? (
-          <span className="inline-flex items-center gap-2 text-zinc-400">
+          <span className="inline-flex items-center gap-2 uppercase tracking-[0.16em] text-muted-foreground">
             <Spinner />
-            Parsing {state.name}...
+            Parsing {state.name}
           </span>
         ) : state.status === "done" ? (
-          <span className="text-zinc-500">
-            Loaded <span className="text-zinc-300">{state.name}</span>{" "}
-            <span className="text-zinc-600">({KIND_LABEL[state.kind]})</span>
+          <span className="uppercase tracking-[0.16em] text-muted-foreground">
+            Loaded <span className="text-foreground">{state.name}</span>{" "}
+            <span className="text-muted-foreground/70">({KIND_LABEL[state.kind]})</span>
           </span>
         ) : state.status === "error" ? (
-          <span className="text-red-400">
-            Could not parse {state.name}: {state.message}
+          <span className="uppercase tracking-[0.16em] text-destructive">
+            Could not parse {state.name}. {state.message}
           </span>
         ) : null}
       </div>
@@ -119,7 +155,7 @@ export function FileDrop({ onText }: { onText: (text: string) => void }) {
 function Spinner() {
   return (
     <span
-      className="inline-block h-3 w-3 animate-spin rounded-full border border-zinc-600 border-t-zinc-300"
+      className="inline-block h-3 w-3 motion-safe:animate-spin rounded-full border border-white/20 border-t-foreground"
       aria-hidden="true"
     />
   );
