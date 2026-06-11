@@ -15,6 +15,14 @@ const CLI_ROOT = resolve(HERE, "..", "..");
 export const REPO_ROOT = resolve(CLI_ROOT, "..", "..");
 export const TOLKIN_BIN = resolve(CLI_ROOT, "target", "release", "tolkin");
 
+// Benchmark runs are measurement infrastructure, not user activity: the
+// spawned binary must never write to the machine's savings ledger. Passed to
+// every Bun.spawn below.
+const SPAWN_ENV: Record<string, string | undefined> = {
+  ...process.env,
+  TOLKIN_NO_LEDGER: "1",
+};
+
 export async function ensureBinary(): Promise<void> {
   if (existsSync(TOLKIN_BIN)) return;
   // Build from the cli manifest so we land the right binary even when this
@@ -28,7 +36,7 @@ export async function ensureBinary(): Promise<void> {
 }
 
 export async function tolkinVersion(): Promise<string> {
-  const proc = Bun.spawn([TOLKIN_BIN, "--version"], { stdout: "pipe" });
+  const proc = Bun.spawn([TOLKIN_BIN, "--version"], { stdout: "pipe", env: SPAWN_ENV });
   await proc.exited;
   const out = await new Response(proc.stdout).text();
   // `tolkin 0.6.0\n` -> `0.6.0`.
@@ -57,6 +65,7 @@ export async function countTokens(
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
+    env: SPAWN_ENV,
   });
   proc.stdin.write(text);
   await proc.stdin.end();
@@ -75,9 +84,11 @@ export async function countTokens(
 
 export interface McpJsonTotals {
   servers: number;
+  measured: number;
   cold: number;
   warm: number;
   tool_search: number;
+  capacity: number;
   savings_tokens: number;
   savings_usd: number;
   slim_savings_tokens: number;
@@ -91,12 +102,22 @@ export interface McpJsonResponse {
   servers: Array<{
     name: string;
     tools: number | null;
-    scenarios: { cold: number; warm: number; tool_search: number } | null;
+    cold_tokens: number | null;
+    scenarios: { cold: number; warm: number; tool_search: number; capacity: number } | null;
     savings_tokens: number;
     cli_alternative: string | null;
     recommendation: string;
     slim: { already_slimmed: boolean; est_tokens_saved: number } | null;
     note: string;
+    basis: string;
+    tools_detail?: {
+      tokenizer: string;
+      basis: string;
+      tool_count: number;
+      total_tokens: number;
+      tools: Array<{ name: string; tokens: number; description_tokens: number; share_pct: number }>;
+      smells: Array<{ rule: string; tools: string[]; detail: string; recommendation: string }>;
+    };
   }>;
   totals: McpJsonTotals;
   notes: string[];
@@ -107,12 +128,35 @@ export async function mcpAnalyze(fixturePath: string): Promise<McpJsonResponse> 
   const proc = Bun.spawn([TOLKIN_BIN, "mcp", "--provider", "anthropic", "--json", fixturePath], {
     stdout: "pipe",
     stderr: "pipe",
+    env: SPAWN_ENV,
   });
   const code = await proc.exited;
   const out = await new Response(proc.stdout).text();
   if (code !== 0) {
     const err = await new Response(proc.stderr).text();
     throw new Error(`tolkin mcp exited ${code}: ${err}`);
+  }
+  return JSON.parse(out) as McpJsonResponse;
+}
+
+/**
+ * Analyze a tools/list manifest through the real CLI path: `tolkin mcp
+ * <manifest> --json`. The CLI auto-detects the tools/list shape,
+ * canonicalizes each tool, and counts with o200k_base (the default manifest
+ * tokenizer; exact). No --provider flag on purpose so the counts stay on the
+ * exact tokenizer; cache scenarios are not used by the bench table.
+ */
+export async function mcpAnalyzeManifest(manifestPath: string): Promise<McpJsonResponse> {
+  const proc = Bun.spawn([TOLKIN_BIN, "mcp", "--json", manifestPath], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: SPAWN_ENV,
+  });
+  const code = await proc.exited;
+  const out = await new Response(proc.stdout).text();
+  if (code !== 0) {
+    const err = await new Response(proc.stderr).text();
+    throw new Error(`tolkin mcp (manifest) exited ${code}: ${err}`);
   }
   return JSON.parse(out) as McpJsonResponse;
 }

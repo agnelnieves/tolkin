@@ -8,7 +8,7 @@
 // the schema.
 
 export interface BenchResults {
-  v: 1;
+  v: 2;
   generated_at: string;
   tolkin_version: string;
   prices_observed: string;
@@ -53,16 +53,30 @@ export interface ConfigurationTrack {
   comparisons: ExternalComparison[];
 }
 
+// Provenance of a vendored tools/list manifest (mirrors bench.ts).
+export interface ManifestProvenance {
+  source: string;
+  license: string;
+  captured: string;
+  server_version: string;
+}
+
 export interface ConfigurationCase {
   id: string;
   fixture: string;
   client_shape: string;
   tokenizer: string;
+  // v2: every row declares its basis; current rows are all
+  // tokenized-manifest. cold_tokens is the exact tokenized weight of the
+  // tool definitions (no provider price multipliers).
+  basis: "tokenized-manifest" | "catalog-estimate";
   servers: number;
+  tools: number;
   cold_tokens: number;
   swap_savings_tokens: number;
   slim_savings_tokens: number;
   pct_of_200k_window: number;
+  manifest: ManifestProvenance;
   notes?: string;
 }
 

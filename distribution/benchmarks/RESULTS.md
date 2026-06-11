@@ -34,7 +34,7 @@ This track measures transforms that cannot change meaning: minification, exact-d
 
 ## Track 2: configuration (MCP)
 
-Every MCP server in a client configuration contributes its tool definitions to every request, whether or not the conversation uses them. This track reports that weight using representative catalog estimates from the tolkin MCP analyzer: cold totals for configurations as found, slim deltas for reduced tool profiles, swap deltas for replacing a server with a CLI equivalent, and the share of a 200K context window each configuration consumes. The numbers are curated representative estimates derived from the analyzer's catalog, not tokenized server manifests. They are refreshable when the catalog is updated. Only the configuration changes; conversation content is untouched. Comparable middleware (caveman-shrink) runs on the same manifests where it can be run headlessly.
+Every MCP server in a client configuration contributes its tool definitions to every request, whether or not the conversation uses them. This track counts that weight against a catalog of real, public server manifests: each fixture is a vendored tools/list output captured live from a named server version (provenance, capture commands, and license texts live next to the fixtures in `fixtures/configuration/manifests/`), tokenized through the real CLI path with o200k_base (exact). Every tool is canonicalized to compact `{name, description, input_schema}` JSON before counting, so the numbers are reproducible byte for byte; a specific client's wire bytes can differ by a few tokens, and that caveat ships in the analyzer output itself. Cold is the tokenized weight of the tool definitions with no provider price multipliers. Swap deltas (replacing a server with a CLI equivalent) derive from the tokenized cold. Slim deltas are the measured difference between two tokenized manifests (the server captured with and without its slim setting) where a slim capture exists; a slim percentage estimate is never applied to a measured cold, because that would blend bases. The tolkin analyzer's curated catalog estimates still exist as a product surface for configs without manifests, and they are labeled as estimates there; they no longer produce benchmark rows. The three earlier config-shape fixtures are retired from this track for exactly that reason, and config-shape parsing is covered by the analyzer's unit tests instead. Only the configuration changes; conversation content is untouched. Comparable middleware (caveman-shrink) runs on the same manifests, headlessly, with measured before and after counts.
 
 ## Track 3: lossy (compression)
 
@@ -66,24 +66,36 @@ Exact before / after token counts via the tolkin CLI's o200k_base tokenizer. Inj
 
 ## Configuration track (lossless-configuration)
 
-Cold token cost and savings come from `tolkin mcp --provider anthropic --json` on each fixture; the analyzer's catalog is the source of truth.
+Each fixture is a vendored, real, public server tools/list manifest (provenance in `fixtures/configuration/manifests/README.md`), tokenized through the real CLI path (`tolkin mcp <manifest> --json`): every tool is canonicalized to compact {name, description, input_schema} JSON and counted with o200k_base (exact). Cold is the tokenized weight of the tool definitions; no provider price multipliers are folded in. Swap savings derive from the tokenized cold; slim savings are the measured difference of two tokenized manifests where a slim capture exists, otherwise 0 (never an estimate applied to a measured base).
 
-| Case | Fixture | Client shape | Tokenizer | Servers | Cold | Swap saves | Slim saves | % of 200K window |
+| Case | Fixture | Basis | Tokenizer | Tools | Cold | Swap saves | Slim saves | % of 200K window |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| configuration/mcp-heavy | `apps/tolkin-cli/benchmarks/fixtures/configuration/mcp-heavy.json` | Claude Desktop mcpServers (4 servers) | catalog estimate (representative, refreshable; not tokenized manifests) | 4 | 86,250 | 69,000 | 35,750 | 43.13% |
-| configuration/vscode-settings | `apps/tolkin-cli/benchmarks/fixtures/configuration/vscode-settings.json` | VS Code settings.json mcp.servers (3 servers) | catalog estimate (representative, refreshable; not tokenized manifests) | 3 | 60,000 | 48,000 | 20,000 | 30.00% |
-| configuration/mcp-slimmed | `apps/tolkin-cli/benchmarks/fixtures/configuration/mcp-slimmed.json` | Claude Desktop mcpServers (1 server, already slimmed) | catalog estimate (representative, refreshable; not tokenized manifests) | 1 | 25,000 | 20,000 | 0 | 12.50% |
+| configuration/server-filesystem | `apps/tolkin-cli/benchmarks/fixtures/configuration/manifests/server-filesystem.tools.json` | tokenized-manifest | o200k_base (exact) | 14 | 1,641 | 1,641 | 0 | 0.82% |
+| configuration/server-memory | `apps/tolkin-cli/benchmarks/fixtures/configuration/manifests/server-memory.tools.json` | tokenized-manifest | o200k_base (exact) | 9 | 904 | 0 | 0 | 0.45% |
+| configuration/server-everything | `apps/tolkin-cli/benchmarks/fixtures/configuration/manifests/server-everything.tools.json` | tokenized-manifest | o200k_base (exact) | 13 | 1,126 | 0 | 0 | 0.56% |
+| configuration/github-mcp-server | `apps/tolkin-cli/benchmarks/fixtures/configuration/manifests/github-mcp-server.tools.json` | tokenized-manifest | o200k_base (exact) | 43 | 8,175 | 8,175 | 3,222 | 4.09% |
+| configuration/github-mcp-server-slim | `apps/tolkin-cli/benchmarks/fixtures/configuration/manifests/github-mcp-server.slim.tools.json` | tokenized-manifest | o200k_base (exact) | 27 | 4,953 | 4,953 | 0 | 2.48% |
+
+Manifest provenance (full detail and license texts in the manifests directory):
+
+- **configuration/server-filesystem**: https://github.com/modelcontextprotocol/servers (src/filesystem), npm @modelcontextprotocol/server-filesystem@2026.1.14; server version secure-filesystem-server 0.2.0 (package 2026.1.14); captured 2026-06-10; license MIT per npm package.json (repo LICENSE records the MIT to Apache-2.0 transition); vendored at fixtures/configuration/manifests/LICENSE-modelcontextprotocol-servers.
+- **configuration/server-memory**: https://github.com/modelcontextprotocol/servers (src/memory), npm @modelcontextprotocol/server-memory@2026.1.26; server version memory-server 0.6.3 (package 2026.1.26); captured 2026-06-10; license MIT per npm package.json (repo LICENSE records the MIT to Apache-2.0 transition); vendored at fixtures/configuration/manifests/LICENSE-modelcontextprotocol-servers.
+- **configuration/server-everything**: https://github.com/modelcontextprotocol/servers (src/everything), npm @modelcontextprotocol/server-everything@2026.1.26; server version mcp-servers/everything 2.0.0 (package 2026.1.26); captured 2026-06-10; license MIT per npm package.json (repo LICENSE records the MIT to Apache-2.0 transition); vendored at fixtures/configuration/manifests/LICENSE-modelcontextprotocol-servers.
+- **configuration/github-mcp-server**: https://github.com/github/github-mcp-server, release v1.2.0 (Darwin arm64 asset); server version github-mcp-server 1.2.0, default toolsets; captured 2026-06-10; license MIT; vendored at fixtures/configuration/manifests/LICENSE-github-mcp-server.
+- **configuration/github-mcp-server-slim**: https://github.com/github/github-mcp-server, release v1.2.0 (Darwin arm64 asset); server version github-mcp-server 1.2.0, GITHUB_TOOLSETS=repos,issues; captured 2026-06-10; license MIT; vendored at fixtures/configuration/manifests/LICENSE-github-mcp-server.
 
 ### Configuration comparisons
 
 | Name | Status | Before | After | Saved % | Reason |
 | --- | --- | ---: | ---: | ---: | --- |
-| caveman-shrink (JuliusBrussee/caveman, src/mcp-servers/caveman-shrink/compress.js) | not-comparable | n/a | n/a | n/a | caveman-shrink is a runtime proxy that mutates description fields inside live tools/list responses; tolkin's MCP track measures the cold cost of registering tools from a static client config file, which has no description payload to shrink. The fixtures do not share a unit. caveman-shrink is runnable headlessly (MIT, pure Node, vendored at benchmarks/external/caveman-shrink-compress.js) and is exercised on the lossy track instead. |
-| wilpel/caveman-compression (NLP method) | not-runnable-headless | n/a | n/a | n/a | MIT-licensed and exposes a Python CLI (caveman_compress_nlp.py) that runs offline, but it requires a Python virtual environment plus the spaCy en_core_web_sm model (~50 MB) which this bun-only harness does not provision. Comparable measurements can be added by running caveman_compress_nlp.py on the same MCP fixtures externally and amending this file. |
+| caveman-shrink (JuliusBrussee/caveman, src/mcp-servers/caveman-shrink/compress.js) | measured | 11,846 | 11,457 | 3.28% | Runnable headlessly (MIT, pure Node, vendored). Its compressDescriptionsInPlace rewrites description fields inside tools/list responses; applied to the four primary vendored manifests (github slim excluded to avoid double-counting one server) and re-tokenized through the same tolkin CLI path (o200k_base). |
+| wilpel/caveman-compression (NLP method) | not-runnable-headless | n/a | n/a | n/a | MIT-licensed and exposes a Python CLI (caveman_compress_nlp.py) that runs offline, but it requires a Python virtual environment plus the spaCy en_core_web_sm model (~50 MB) which this bun-only harness does not provision. Comparable measurements can be added by running caveman_compress_nlp.py on the same manifest descriptions externally and amending this file. |
 
-- **configuration/mcp-heavy**. Heavy multi-server config exercising the github + slack + postgres + filesystem catalog entries. Numbers come from tolkin-core's MCP analyzer (anthropic cache math).
-- **configuration/vscode-settings**. VS Code settings shape where MCP servers live under mcp.servers; same analyzer, different host config. The non-MCP keys (editor.fontSize and friends) are ignored by the analyzer.
-- **configuration/mcp-slimmed**. GITHUB_TOOLSETS env present, so the catalog scales the cold estimate and reports already-slimmed. Exercises the no-double-counting path.
+- **configuration/server-filesystem**. Reference filesystem server, captured live over stdio. Catalog entry says replace with shell builtins, so the swap savings equal the measured cold. The catalog's representative estimate for this server is 2,000 tokens; the measured manifest supersedes it.
+- **configuration/server-memory**. Reference memory server, captured live. Catalog recommendation is keep (no CLI equivalent), so swap savings are 0 by design. The catalog's representative estimate for this server is 3,000 tokens; the measured manifest supersedes it.
+- **configuration/server-everything**. Reference protocol-exercise server. NOT in tolkin's curated catalog: this row exists because manifest measurement covers servers the catalog has never seen, which was the catalog's blind spot. No swap or slim recommendation, so those cells are 0.
+- **configuration/github-mcp-server**. GitHub official server at its v1.2.0 defaults (43 tools). The catalog's representative figure is 40,000 tokens for the all-toolsets era (90 to 162 tools, externally reported 26-55K); the v1.2.0 default registration measures far smaller, which is exactly the staleness manifest measurement exists to correct. Slim savings are measured, not estimated: this cold minus the tokenized GITHUB_TOOLSETS=repos,issues manifest below.
+- **configuration/github-mcp-server-slim**. The same binary captured with the exact slim snippet tolkin recommends (GITHUB_TOOLSETS=repos,issues; the default context toolset stays registered, which is upstream behavior). This row IS the slim profile, so its own slim cell is 0.
 
 ## Lossy track
 
@@ -122,6 +134,6 @@ Quality scoring: scored=false, method=BYOK extraction-QA harness, off by default
 
 ---
 
-Generated at: 2026-06-10T22:35:39.110Z. Tolkin 0.9.0. Prices observed: 2026-06. Runner: bun + tolkin CLI. OS: darwin.
+Generated at: 2026-06-11T01:10:17.387Z. Tolkin 0.10.0. Prices observed: 2026-06. Runner: bun + tolkin CLI. OS: darwin.
 
 To regenerate: `bun apps/tolkin-cli/benchmarks/run.ts` (from the repo root). Verify determinism with `bun apps/tolkin-cli/benchmarks/run.ts --check-determinism`.

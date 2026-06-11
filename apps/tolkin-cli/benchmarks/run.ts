@@ -71,7 +71,8 @@ async function buildResults(generatedAt: string): Promise<BenchResults> {
     runLossyComparisons(),
   ]);
   const r: BenchResults = {
-    v: 1,
+    // v2: configuration track moved to tokenized manifests (see lib/types.ts).
+    v: 2,
     generated_at: generatedAt,
     tolkin_version: tokVersion,
     prices_observed: PRICES_OBSERVED,
