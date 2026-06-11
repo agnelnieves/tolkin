@@ -12,4 +12,5 @@ pub mod report;
 pub mod scan;
 pub mod stats;
 pub mod stats_data;
+pub mod update;
 pub mod viz;
