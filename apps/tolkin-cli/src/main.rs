@@ -9,6 +9,8 @@ mod cli;
 mod commands;
 mod input;
 mod ledger;
+mod mcp_manifests;
+mod mcp_probe;
 mod onboard;
 mod parse;
 mod project;
