@@ -11,10 +11,11 @@ use std::time::Duration;
 
 use crossterm::event::KeyEventKind;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Style;
-use ratatui::text::Line;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Block;
 use ratatui::Frame;
+use tolkin_core::audit::AuditReport;
 
 use crate::advisories::{self, AdvisoryBlock};
 use crate::cache_analysis::CacheReport;
@@ -24,6 +25,7 @@ use crate::tiers::TierReport;
 use crate::usage::cost;
 
 use super::anim::{AnimKey, Animator, Ease};
+use super::components::bars;
 use super::components::chrome::{self, FooterProps, HeaderProps};
 use super::components::empty;
 use super::components::list::Selection;
@@ -41,6 +43,7 @@ use super::theme::{self, Theme, ThemeEnv};
 pub enum Cmd {
     SpawnScan(PathBuf),
     ReloadSnapshot,
+    RunAudit { root: PathBuf, path: String },
     Quit,
 }
 
@@ -67,12 +70,49 @@ pub enum SpendFocus {
     Advisories,
 }
 
-/// A stacked overlay. Wave 1 ships the dialog shell; detail content
-/// arrives with the next wave.
-pub struct Overlay {
+/// A stacked overlay. Detail overlays hold plain data computed once at
+/// open time (in `update`); `view` styles it per frame so theme cycling
+/// stays live and the derived-data rule holds.
+pub enum Overlay {
+    File(FileDetailState),
+    Project(ProjectDetailState),
+    Advisory(AdvisoryDetailState),
+}
+
+/// Lifecycle of the single-file audit a file-detail modal owns.
+pub enum AuditState {
+    NotRun,
+    Running,
+    Done(Box<AuditReport>),
+    Failed(String),
+}
+
+/// File detail for one heavy-files row. The audit worker reports back
+/// keyed on `path`; results land here even while the modal stays open.
+pub struct FileDetailState {
+    pub path: String,
+    pub tokens: u64,
+    pub pct_always: f64,
+    /// Finding rollup from the live scan (count, savings range).
+    pub scan_findings: usize,
+    pub scan_savings: (u64, u64),
+    pub audit: AuditState,
+}
+
+/// Project detail for one Machine-list row.
+pub struct ProjectDetailState {
+    pub key: String,
+    /// Always-loaded tokens per snapshot, oldest first.
+    pub series: Vec<u64>,
+    pub first_ts: u64,
+    pub last_ts: u64,
+    pub sessions: u64,
+}
+
+/// Advisory detail: one section from the advisory block, resolved at open.
+pub struct AdvisoryDetailState {
     pub title: String,
-    pub body: Vec<String>,
-    pub width: ModalWidth,
+    pub paragraphs: Vec<String>,
 }
 
 /// Everything derived from the snapshot and scan, recomputed on data
@@ -91,9 +131,8 @@ pub struct Derived {
     pub spend_models: Vec<ModelRow>,
     pub models_total: usize,
     pub cache: Option<CacheReport>,
-    /// Full advisory block; the compact lines below render today, the
-    /// detail modal (next wave) reads the block itself.
-    #[allow(dead_code)]
+    /// Full advisory block; the compact lines below render in the lists,
+    /// the detail modal resolves its section from the block at open time.
     pub advisories: Option<AdvisoryBlock>,
     pub advisory_lines: Vec<String>,
     pub heavy: Vec<HeavyRow>,
@@ -544,8 +583,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.animator.prune();
             Vec::new()
         }
+        // Relayout happens naturally per frame; the viewport payload feeds
+        // mouse hit-testing once the mouse wiring lands later in this wave.
         Msg::Resize(_, _) => Vec::new(),
-        // Mouse wiring is a later wave; capture is on, events are dropped.
+        // Mouse wiring lands later in this wave; capture is on already.
         Msg::Mouse(_) => Vec::new(),
         Msg::ScanDone {
             result,
@@ -569,6 +610,21 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.snapshot = (*snapshot).map(Box::new);
             model.refreshing = false;
             model.recompute_derived();
+            Vec::new()
+        }
+        Msg::AuditDone { path, result } => {
+            let state = match result {
+                Ok(report) => AuditState::Done(report),
+                Err(msg) => AuditState::Failed(msg),
+            };
+            // Land the result in the matching file-detail overlay; a closed
+            // modal simply drops the result (the worker stays detached).
+            if let Some(f) = model.overlays.iter_mut().find_map(|o| match o {
+                Overlay::File(f) if f.path == path => Some(f),
+                _ => None,
+            }) {
+                f.audit = state;
+            }
             Vec::new()
         }
     }
@@ -647,12 +703,12 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
         Action::CycleTheme => {
             model.theme = theme::cycle(model.theme.name, &model.theme_env);
         }
-        // Wired in later waves: detail modals, audit, report, copy, filter,
-        // sort, help, palette. The bindings exist so help and the palette
-        // stay complete; pressing them is a deliberate no-op today.
-        Action::OpenDetail
-        | Action::AuditSelected
-        | Action::GenerateReport
+        Action::OpenDetail => return open_detail(model),
+        Action::AuditSelected => return audit_selected(model),
+        // Wired later in this wave: report, copy, filter, sort, help,
+        // palette. The bindings exist so help and the palette stay
+        // complete; pressing them is a deliberate no-op until then.
+        Action::GenerateReport
         | Action::CopySelection
         | Action::FilterList
         | Action::CycleSort
@@ -660,6 +716,102 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
         | Action::Palette => {}
     }
     Vec::new()
+}
+
+/// Enter: with a dialog open it confirms (dismisses) it; otherwise it opens
+/// the detail for the focused list's selection.
+fn open_detail(model: &mut Model) -> Vec<Cmd> {
+    if model.overlays.pop().is_some() {
+        return Vec::new();
+    }
+    match model.tab {
+        TabId::Project => {
+            if let Some(row) = model.derived.heavy.get(model.sel_heavy.idx) {
+                model.overlays.push(Overlay::File(FileDetailState {
+                    path: row.path.clone(),
+                    tokens: row.tokens,
+                    pct_always: row.pct_always,
+                    scan_findings: row.findings,
+                    scan_savings: (row.savings_min, row.savings_max),
+                    audit: AuditState::NotRun,
+                }));
+            }
+        }
+        TabId::Machine => {
+            if let Some(p) = model.derived.machine.get(model.sel_machine.idx) {
+                let records = model
+                    .snapshot
+                    .as_deref()
+                    .map(|s| s.records.as_slice())
+                    .unwrap_or(&[]);
+                if let Some(h) = data::project_history(records, &p.key) {
+                    model.overlays.push(Overlay::Project(ProjectDetailState {
+                        key: p.key.clone(),
+                        series: h.series,
+                        first_ts: h.first_ts,
+                        last_ts: h.last_ts,
+                        sessions: p.sessions,
+                    }));
+                }
+            }
+        }
+        TabId::Overview => open_advisory_detail(model, model.sel_overview.idx),
+        TabId::Spend if model.spend_focus == SpendFocus::Advisories => {
+            open_advisory_detail(model, model.sel_spend.idx)
+        }
+        // The day strip's detail is its caption line; enter stays quiet.
+        TabId::Spend => {}
+    }
+    Vec::new()
+}
+
+fn open_advisory_detail(model: &mut Model, idx: usize) {
+    let Some(block) = model.derived.advisories.as_ref() else {
+        return;
+    };
+    // Sections are index-aligned with the compact lines the lists render.
+    let mut sections = advisories::tui_detail_sections(block);
+    if idx < sections.len() {
+        let section = sections.swap_remove(idx);
+        model.overlays.push(Overlay::Advisory(AdvisoryDetailState {
+            title: section.title,
+            paragraphs: section.paragraphs,
+        }));
+    }
+}
+
+/// `a`: audit the file under the open file-detail modal, or the heavy-files
+/// selection (opening its detail). The worker reports back via AuditDone.
+fn audit_selected(model: &mut Model) -> Vec<Cmd> {
+    let root = PathBuf::from(&model.derived.project_key);
+    if let Some(overlay) = model.overlays.last_mut() {
+        if let Overlay::File(f) = overlay {
+            if !matches!(f.audit, AuditState::Running) {
+                f.audit = AuditState::Running;
+                return vec![Cmd::RunAudit {
+                    root,
+                    path: f.path.clone(),
+                }];
+            }
+        }
+        return Vec::new();
+    }
+    if model.tab != TabId::Project {
+        return Vec::new();
+    }
+    let Some(row) = model.derived.heavy.get(model.sel_heavy.idx) else {
+        return Vec::new();
+    };
+    let path = row.path.clone();
+    model.overlays.push(Overlay::File(FileDetailState {
+        path: path.clone(),
+        tokens: row.tokens,
+        pct_always: row.pct_always,
+        scan_findings: row.findings,
+        scan_savings: (row.savings_min, row.savings_max),
+        audit: AuditState::Running,
+    }));
+    vec![Cmd::RunAudit { root, path }]
 }
 
 /// Render the full app: chrome, the active screen (or setup), overlays.
@@ -719,18 +871,239 @@ pub fn view(frame: &mut Frame, model: &Model) {
     chrome::render_footer(frame, rows[2], &footer, &model.theme);
 
     for overlay in &model.overlays {
-        let body: Vec<Line> = overlay
-            .body
-            .iter()
-            .map(|s| {
-                Line::from(ratatui::text::Span::styled(
-                    s.clone(),
-                    Style::default().fg(model.theme.text),
-                ))
-            })
-            .collect();
-        modal::render_modal(frame, &overlay.title, &body, overlay.width, &model.theme);
+        let (title, width) = overlay_chrome(overlay);
+        let body = overlay_body(overlay, area, model.now_epoch, &model.theme);
+        modal::render_modal(frame, &title, &body, width, &model.theme);
     }
+}
+
+/// Title and dialog width per overlay kind. Shared by render and (later)
+/// mouse hit-testing.
+fn overlay_chrome(overlay: &Overlay) -> (String, ModalWidth) {
+    match overlay {
+        Overlay::File(f) => {
+            let (_, name) = format::split_path(&f.path);
+            (format!("file: {name}"), ModalWidth::Large)
+        }
+        Overlay::Project(p) => {
+            let (_, name) = format::split_path(&p.key);
+            (format!("project: {name}"), ModalWidth::Medium)
+        }
+        // Advisory paragraphs carry the longest copy; the xlarge width keeps
+        // wrapping comfortable on wide terminals and clamps on narrow ones.
+        Overlay::Advisory(a) => (format!("advisory: {}", a.title), ModalWidth::XLarge),
+    }
+}
+
+/// Build one overlay's body lines from its plain state. Styling happens
+/// here per frame; the data itself was resolved when the overlay opened.
+fn overlay_body(
+    overlay: &Overlay,
+    area: Rect,
+    now_epoch: u64,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let (_, width) = overlay_chrome(overlay);
+    let wrap = (width.cols().min(area.width.saturating_sub(2)) as usize).saturating_sub(4);
+    match overlay {
+        Overlay::File(f) => file_detail_body(f, theme),
+        Overlay::Project(p) => project_detail_body(p, wrap, now_epoch, theme),
+        Overlay::Advisory(a) => advisory_detail_body(a, wrap, theme),
+    }
+}
+
+fn path_line(path: &str, theme: &Theme) -> Line<'static> {
+    let (dir, name) = format::split_path(path);
+    Line::from(vec![
+        Span::styled(dir.to_string(), Style::default().fg(theme.faint)),
+        Span::styled(
+            name.to_string(),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+fn kv_span(label: &str, value: String, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<11}"), Style::default().fg(theme.muted)),
+        Span::styled(value, Style::default().fg(theme.text)),
+    ])
+}
+
+/// Findings shown inline in the file detail before the list elides.
+const DETAIL_FINDINGS_CAP: usize = 6;
+
+fn file_detail_body(f: &FileDetailState, theme: &Theme) -> Vec<Line<'static>> {
+    let mut lines = vec![path_line(&f.path, theme), Line::default()];
+    lines.push(kv_span(
+        "tokens",
+        format!(
+            "{} tok ({:.1}% of always-loaded)",
+            format::commas(f.tokens),
+            f.pct_always
+        ),
+        theme,
+    ));
+    let scan_value = if f.scan_findings == 0 {
+        "no findings from the last scan".to_string()
+    } else {
+        format!(
+            "{} finding(s), ~{}-{} tok reclaimable (advisory)",
+            f.scan_findings,
+            format::commas(f.scan_savings.0),
+            format::commas(f.scan_savings.1)
+        )
+    };
+    lines.push(kv_span("scan", scan_value, theme));
+    lines.push(Line::default());
+    match &f.audit {
+        AuditState::NotRun => lines.push(Line::from(Span::styled(
+            "audit not run for this file (press a to audit now)".to_string(),
+            Style::default().fg(theme.muted),
+        ))),
+        AuditState::Running => lines.push(Line::from(Span::styled(
+            "auditing...".to_string(),
+            Style::default().fg(theme.accent),
+        ))),
+        AuditState::Failed(msg) => lines.push(Line::from(Span::styled(
+            format!("audit failed: {msg}"),
+            Style::default().fg(theme.err),
+        ))),
+        AuditState::Done(report) => {
+            if report.findings.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "audit: clean, no findings".to_string(),
+                    Style::default().fg(theme.ok),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "audit: {} finding(s), ~{}-{} tok reclaimable (advisory)",
+                        report.findings.len(),
+                        format::commas(report.total_savings_min),
+                        format::commas(report.total_savings_max)
+                    ),
+                    Style::default().fg(theme.accent),
+                )));
+                for finding in report.findings.iter().take(DETAIL_FINDINGS_CAP) {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("  [{}] ", finding.severity),
+                            Style::default().fg(severity_color(&finding.severity, theme)),
+                        ),
+                        Span::styled(finding.rule.clone(), Style::default().fg(theme.text)),
+                        Span::styled(
+                            format!(
+                                "  ~{}-{} tok",
+                                format::commas(finding.savings_min),
+                                format::commas(finding.savings_max)
+                            ),
+                            Style::default().fg(theme.muted),
+                        ),
+                    ]));
+                }
+                if report.findings.len() > DETAIL_FINDINGS_CAP {
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "  +{} more (tolkin audit {})",
+                            report.findings.len() - DETAIL_FINDINGS_CAP,
+                            f.path
+                        ),
+                        Style::default().fg(theme.faint),
+                    )));
+                }
+            }
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "next: a audit   y copy path   esc close".to_string(),
+        Style::default().fg(theme.faint),
+    )));
+    lines
+}
+
+fn severity_color(severity: &str, theme: &Theme) -> ratatui::style::Color {
+    match severity {
+        "high" => theme.err,
+        "medium" => theme.warn,
+        _ => theme.muted,
+    }
+}
+
+fn project_detail_body(
+    p: &ProjectDetailState,
+    wrap: usize,
+    now_epoch: u64,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![path_line(&p.key, theme), Line::default()];
+    let first = p.series.first().copied().unwrap_or(0);
+    let last = p.series.last().copied().unwrap_or(0);
+    lines.push(Line::from(vec![
+        Span::styled(
+            bars::spark_string(&p.series, wrap.saturating_sub(24)),
+            Style::default().fg(theme.bar_fill),
+        ),
+        Span::styled(
+            format!(
+                "  {} -> {} tok always",
+                format::humanize_tokens(first),
+                format::humanize_tokens(last)
+            ),
+            Style::default().fg(theme.muted),
+        ),
+    ]));
+    lines.push(Line::default());
+    lines.push(kv_span(
+        "first seen",
+        format!(
+            "{} ({})",
+            format::relative_time_ago(now_epoch, p.first_ts),
+            data::day_string(p.first_ts)
+        ),
+        theme,
+    ));
+    lines.push(kv_span(
+        "last seen",
+        format::relative_time_ago(now_epoch, p.last_ts),
+        theme,
+    ));
+    lines.push(kv_span("snapshots", p.series.len().to_string(), theme));
+    lines.push(kv_span("sessions", p.sessions.to_string(), theme));
+    lines.push(Line::default());
+    for hint in format::wrap_text(
+        &format!("next: cd {} && tolkin project", p.key),
+        wrap.max(8),
+    ) {
+        lines.push(Line::from(Span::styled(
+            hint,
+            Style::default().fg(theme.faint),
+        )));
+    }
+    lines
+}
+
+fn advisory_detail_body(a: &AdvisoryDetailState, wrap: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, paragraph) in a.paragraphs.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::default());
+        }
+        // The first paragraph is the load-bearing copy; lever sentences
+        // after it render muted.
+        let color = if i == 0 { theme.text } else { theme.muted };
+        for row in format::wrap_text(paragraph, wrap.max(8)) {
+            lines.push(Line::from(Span::styled(row, Style::default().fg(color))));
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "no advisory detail".to_string(),
+            Style::default().fg(theme.faint),
+        )));
+    }
+    lines
 }
 
 /// One blank row above the body plus a one-column margin: panels breathe
@@ -851,11 +1224,10 @@ mod tests {
     #[test]
     fn esc_pops_the_overlay_stack() {
         let (mut model, _clock) = test_model();
-        model.overlays.push(Overlay {
+        model.overlays.push(Overlay::Advisory(AdvisoryDetailState {
             title: "detail".to_string(),
-            body: vec!["x".to_string()],
-            width: ModalWidth::Medium,
-        });
+            paragraphs: vec!["x".to_string()],
+        }));
         assert_eq!(model.context(), Context::Modal);
         update(&mut model, key(KeyCode::Esc));
         assert!(model.overlays.is_empty());
@@ -924,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn unwired_actions_are_safe_no_ops() {
+    fn actions_without_data_are_safe_no_ops() {
         let (mut model, _clock) = test_model();
         for code in [
             KeyCode::Enter,
@@ -936,6 +1308,237 @@ mod tests {
             KeyCode::Char('?'),
         ] {
             assert!(update(&mut model, key(code)).is_empty());
+            assert!(model.overlays.is_empty(), "{code:?} must not open a dialog");
         }
+    }
+
+    fn seeded_heavy_row() -> HeavyRow {
+        HeavyRow {
+            path: ".claude/rules.md".to_string(),
+            tokens: 6_300,
+            pct_always: 63.0,
+            findings: 2,
+            savings_min: 100,
+            savings_max: 400,
+        }
+    }
+
+    #[test]
+    fn enter_on_heavy_list_opens_file_detail_and_esc_closes() {
+        let (mut model, _clock) = test_model();
+        model.tab = TabId::Project;
+        model.derived.heavy = vec![seeded_heavy_row()];
+        model.derived.project_key = "/repo".to_string();
+        let cmds = update(&mut model, key(KeyCode::Enter));
+        assert!(cmds.is_empty());
+        let Some(Overlay::File(f)) = model.overlays.last() else {
+            panic!("file detail must open");
+        };
+        assert_eq!(f.path, ".claude/rules.md");
+        assert_eq!(f.tokens, 6_300);
+        assert!(matches!(f.audit, AuditState::NotRun));
+        // Enter inside the dialog confirms (dismisses) it.
+        update(&mut model, key(KeyCode::Enter));
+        assert!(model.overlays.is_empty());
+    }
+
+    #[test]
+    fn audit_key_opens_file_detail_running_and_routes_the_result() {
+        let (mut model, _clock) = test_model();
+        model.tab = TabId::Project;
+        model.derived.heavy = vec![seeded_heavy_row()];
+        model.derived.project_key = "/repo".to_string();
+        let cmds = update(&mut model, key(KeyCode::Char('a')));
+        assert_eq!(
+            cmds,
+            vec![Cmd::RunAudit {
+                root: PathBuf::from("/repo"),
+                path: ".claude/rules.md".to_string(),
+            }]
+        );
+        assert!(matches!(
+            model.overlays.last(),
+            Some(Overlay::File(f)) if matches!(f.audit, AuditState::Running)
+        ));
+        // A second `a` while running stays quiet (Modal context binding).
+        assert!(update(&mut model, key(KeyCode::Char('a'))).is_empty());
+        // The worker result lands in the open modal, keyed on the path.
+        update(
+            &mut model,
+            Msg::AuditDone {
+                path: ".claude/rules.md".to_string(),
+                result: Err("io error".to_string()),
+            },
+        );
+        assert!(matches!(
+            model.overlays.last(),
+            Some(Overlay::File(f)) if matches!(&f.audit, AuditState::Failed(m) if m == "io error")
+        ));
+        // After failure, `a` retries from inside the modal.
+        let cmds = update(&mut model, key(KeyCode::Char('a')));
+        assert_eq!(cmds.len(), 1);
+    }
+
+    #[test]
+    fn enter_on_machine_list_opens_project_detail_with_history() {
+        use crate::ledger::{self, Config};
+        use serde_json::json;
+        use std::fs;
+
+        let dir = std::env::temp_dir().join(format!(
+            "tolkin-app-detail-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let cfg = Config::new(true, false);
+        ledger::save_config_to(&dir, &cfg).unwrap();
+        let project = dir.join("repo");
+        fs::create_dir_all(&project).unwrap();
+        ledger::append_in(&dir, "project", &project, json!({ "always_tokens": 9_000 })).unwrap();
+        ledger::append_in(&dir, "project", &project, json!({ "always_tokens": 7_500 })).unwrap();
+        let snapshot = StatsSnapshot::load_in(&dir);
+
+        let clock = ManualClock::new();
+        let animator = Animator::new(Box::new(clock.clone()), true);
+        let theme = theme::by_name("tolkin-dark", true).unwrap();
+        let mut model = Model::new(
+            Some(Box::new(snapshot)),
+            theme,
+            ThemeEnv::default(),
+            animator,
+            1_780_000_000,
+        );
+        model.tab = TabId::Machine;
+        assert_eq!(model.derived.machine.len(), 1);
+        update(&mut model, key(KeyCode::Enter));
+        let Some(Overlay::Project(p)) = model.overlays.last() else {
+            panic!("project detail must open");
+        };
+        assert_eq!(p.series, vec![9_000, 7_500]);
+        assert!(p.first_ts <= p.last_ts);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn advisory_fixture() -> AdvisoryBlock {
+        use crate::advisories::{ModelMix, OutputShare};
+        AdvisoryBlock {
+            label: "measured advisories (ground truth basis)",
+            model_mix: ModelMix {
+                label: "ground truth",
+                priced_spend_total: 10.0,
+                unpriced_models_excluded: vec![],
+                frontier: None,
+                cheap: None,
+                frontier_advisory: Some(
+                    "advisory (community heuristic): the frontier model opus carries 90.0% of priced spend."
+                        .to_string(),
+                ),
+                cheap_advisory: None,
+            },
+            output_share: OutputShare {
+                label: "ground truth",
+                output_tokens: 200,
+                output_cost_usd: 1.5,
+                priced_bill_usd: 10.0,
+                share: 0.15,
+                framing: "Output tokens are 15.0% of the priced bill.".to_string(),
+            },
+            cap_runway: None,
+        }
+    }
+
+    #[test]
+    fn enter_on_advisory_lists_opens_the_aligned_section() {
+        let (mut model, _clock) = test_model();
+        let block = advisory_fixture();
+        model.derived.advisory_lines = advisories::tui_compact_lines(&block);
+        model.derived.advisories = Some(block);
+        assert_eq!(model.derived.advisory_lines.len(), 1);
+
+        // Overview list.
+        update(&mut model, key(KeyCode::Enter));
+        let Some(Overlay::Advisory(a)) = model.overlays.last() else {
+            panic!("advisory detail must open from Overview");
+        };
+        assert_eq!(a.title, "output share");
+        assert!(a.paragraphs[0].contains("Output tokens are"));
+        assert!(a.paragraphs[1].contains("frontier model"));
+        update(&mut model, key(KeyCode::Esc));
+
+        // Spend advisories panel (after cycling focus to it).
+        update(&mut model, key(KeyCode::Char('4')));
+        update(&mut model, key(KeyCode::Char(']')));
+        update(&mut model, key(KeyCode::Enter));
+        assert!(matches!(model.overlays.last(), Some(Overlay::Advisory(_))));
+    }
+
+    #[test]
+    fn file_detail_modal_renders_tokens_findings_and_next_actions() {
+        let (mut model, _clock) = test_model();
+        model.tab = TabId::Project;
+        model.derived.heavy = vec![seeded_heavy_row()];
+        model.derived.project_key = "/repo".to_string();
+        update(&mut model, key(KeyCode::Enter));
+
+        let backend = ratatui::backend::TestBackend::new(110, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| view(frame, &model)).unwrap();
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..30 {
+            for x in 0..110 {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        assert!(text.contains("file: rules.md"), "title missing: {text}");
+        assert!(text.contains("6,300 tok"), "tokens missing");
+        assert!(text.contains("2 finding(s)"), "scan findings missing");
+        assert!(text.contains("press a to audit"), "audit hint missing");
+        assert!(text.contains("esc close"), "esc affordance missing");
+    }
+
+    #[test]
+    fn spend_day_caption_shows_the_selected_days_exact_numbers() {
+        let (mut model, _clock) = test_model();
+        model.derived.setup_needed = false;
+        model.derived.ingestion_on = true;
+        model.derived.day_details = (0..5)
+            .map(|i| DayDetail {
+                day: format!("2026-06-0{}", i + 1),
+                input_side: 1_000 * (i as u64 + 1),
+                input_fresh: 400,
+                cache_read: 600,
+                output: 50,
+                cost_usd: 1.25,
+            })
+            .collect();
+        model.day_cursor = 4;
+        model.tab = TabId::Spend;
+        update(&mut model, key(KeyCode::Char('h')));
+        update(&mut model, key(KeyCode::Char('h')));
+        assert_eq!(model.day_cursor, 2);
+
+        let backend = ratatui::backend::TestBackend::new(110, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| view(frame, &model)).unwrap();
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..30 {
+            for x in 0..110 {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        assert!(text.contains("2026-06-03"), "selected day missing: {text}");
+        assert!(text.contains("in 3.0k"), "input total missing");
+        assert!(text.contains("fresh 400"), "fresh split missing");
+        assert!(text.contains("cache 600"), "cache split missing");
+        assert!(text.contains("out 50"), "output missing");
+        assert!(text.contains("~$1.25"), "cost missing");
     }
 }

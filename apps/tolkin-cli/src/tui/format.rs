@@ -115,9 +115,50 @@ pub fn split_path(path: &str) -> (&str, &str) {
     }
 }
 
+/// Greedy word wrap at `width` display columns (character count). Words
+/// longer than the width hard-break. Always returns at least one line so
+/// callers can rely on the paragraph occupying a row.
+pub fn wrap_text(s: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![s.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut line_len = 0usize;
+    for word in s.split_whitespace() {
+        let mut word: Vec<char> = word.chars().collect();
+        // Hard-break words wider than the wrap width.
+        while word.len() > width {
+            if line_len > 0 {
+                out.push(std::mem::take(&mut line));
+                line_len = 0;
+            }
+            out.push(word[..width].iter().collect());
+            word = word[width..].to_vec();
+        }
+        let wlen = word.len();
+        if line_len == 0 {
+            line = word.into_iter().collect();
+            line_len = wlen;
+        } else if line_len + 1 + wlen <= width {
+            line.push(' ');
+            line.extend(word);
+            line_len += 1 + wlen;
+        } else {
+            out.push(std::mem::take(&mut line));
+            line = word.into_iter().collect();
+            line_len = wlen;
+        }
+    }
+    if !line.is_empty() || out.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
 /// RFC 4648 standard base64 with padding. Used by the OSC52 clipboard
-/// escape (wired next wave); tiny on purpose so the zero-dependency
-/// contract holds.
+/// escape (wired with the copy path later in this wave); tiny on purpose
+/// so the zero-dependency contract holds.
 #[allow(dead_code)]
 pub fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -204,6 +245,25 @@ mod tests {
         assert_eq!(split_path("a/b/c.md"), ("a/b/", "c.md"));
         assert_eq!(split_path("CLAUDE.md"), ("", "CLAUDE.md"));
         assert_eq!(split_path(".claude/rules.md"), (".claude/", "rules.md"));
+    }
+
+    #[test]
+    fn wrap_text_wraps_words_and_hard_breaks_long_tokens() {
+        assert_eq!(wrap_text("short line", 20), vec!["short line"]);
+        assert_eq!(
+            wrap_text("alpha beta gamma", 10),
+            vec!["alpha beta", "gamma"]
+        );
+        // A word wider than the width hard-breaks instead of overflowing.
+        assert_eq!(
+            wrap_text("aaaaaaaaaabbbbb tail", 10),
+            vec!["aaaaaaaaaa", "bbbbb tail"]
+        );
+        assert_eq!(wrap_text("", 10), vec![""]);
+        assert_eq!(wrap_text("anything", 0), vec!["anything"]);
+        for line in wrap_text("one two three four five six seven", 9) {
+            assert!(line.chars().count() <= 9, "line too wide: {line}");
+        }
     }
 
     #[test]

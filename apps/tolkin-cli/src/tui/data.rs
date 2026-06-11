@@ -295,7 +295,8 @@ pub fn top_heavy_files(report: &ProjectReport) -> Vec<(String, u64)> {
 }
 
 /// One heavy-file row for the Project tab's selectable list: path, tokens,
-/// and the share of the always-loaded profile this file represents.
+/// the share of the always-loaded profile this file represents, plus the
+/// scan's per-file finding rollup (the file-detail modal renders it).
 #[derive(Clone, Debug)]
 pub struct HeavyRow {
     pub path: String,
@@ -303,6 +304,11 @@ pub struct HeavyRow {
     /// tokens / always-profile tokens, as a percentage. 0.0 when the
     /// always profile is empty.
     pub pct_always: f64,
+    /// Finding count from the live scan's per-file audit.
+    pub findings: usize,
+    /// Identified-tier savings range from the scan's findings.
+    pub savings_min: u64,
+    pub savings_max: u64,
 }
 
 /// Heavy-file rows with percent-of-always for the Project tab. Uncapped:
@@ -320,8 +326,44 @@ pub fn heavy_file_rows(report: &ProjectReport) -> Vec<HeavyRow> {
             } else {
                 0.0
             },
+            findings: h.findings,
+            savings_min: h.savings_min,
+            savings_max: h.savings_max,
         })
         .collect()
+}
+
+/// Always-loaded weight across one project's `project` snapshots, oldest
+/// first, with the bracketing timestamps. The Machine tab's project-detail
+/// modal renders the series as a sparkline. `None` when the project has no
+/// snapshot carrying `always_tokens`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectHistory {
+    pub series: Vec<u64>,
+    pub first_ts: u64,
+    pub last_ts: u64,
+}
+
+pub fn project_history(records: &[LedgerRecord], project_key: &str) -> Option<ProjectHistory> {
+    let mut snaps: Vec<(u64, u64)> = records
+        .iter()
+        .filter(|r| r.command == "project" && r.project_key == project_key)
+        .filter_map(|r| {
+            r.headline
+                .get("always_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|always| (r.ts, always))
+        })
+        .collect();
+    if snaps.is_empty() {
+        return None;
+    }
+    snaps.sort_by_key(|s| s.0);
+    Some(ProjectHistory {
+        first_ts: snaps[0].0,
+        last_ts: snaps[snaps.len() - 1].0,
+        series: snaps.into_iter().map(|(_, always)| always).collect(),
+    })
 }
 
 /// One day in the Spend window with everything the day caption renders.
@@ -575,9 +617,9 @@ mod tests {
                 HeavyFile {
                     path: "CLAUDE.md".to_string(),
                     tokens: 6_300,
-                    findings: 0,
-                    savings_min: 0,
-                    savings_max: 0,
+                    findings: 3,
+                    savings_min: 120,
+                    savings_max: 480,
                 },
                 HeavyFile {
                     path: "docs/big.md".to_string(),
@@ -602,6 +644,27 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!((rows[0].pct_always - 63.0).abs() < 0.01);
         assert!((rows[1].pct_always - 1.0).abs() < 0.01);
+        // The scan's per-file finding rollup rides along for the detail modal.
+        assert_eq!(rows[0].findings, 3);
+        assert_eq!((rows[0].savings_min, rows[0].savings_max), (120, 480));
+        assert_eq!(rows[1].findings, 0);
+    }
+
+    #[test]
+    fn project_history_orders_series_and_brackets_timestamps() {
+        let ledger = vec![
+            snap_record("/p", 3_000, 7_000),
+            snap_record("/p", 1_000, 10_000),
+            snap_record("/p", 2_000, 9_000),
+            // Other projects and non-project records never bleed in.
+            snap_record("/other", 1_500, 5_000),
+        ];
+        let h = project_history(&ledger, "/p").expect("history exists");
+        assert_eq!(h.series, vec![10_000, 9_000, 7_000]);
+        assert_eq!(h.first_ts, 1_000);
+        assert_eq!(h.last_ts, 3_000);
+        assert!(project_history(&ledger, "/missing").is_none());
+        assert!(project_history(&[], "/p").is_none());
     }
 
     #[test]

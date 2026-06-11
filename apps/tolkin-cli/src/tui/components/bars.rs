@@ -56,6 +56,31 @@ pub fn hbar_line(
     ])
 }
 
+/// Render a value series as one string of eight-level glyphs. When the
+/// series is longer than `width` the newest values win (the tail renders).
+/// All-zero series render flat; an empty series renders empty.
+pub fn spark_string(values: &[u64], width: usize) -> String {
+    if values.is_empty() || width == 0 {
+        return String::new();
+    }
+    let tail = if values.len() > width {
+        &values[values.len() - width..]
+    } else {
+        values
+    };
+    let max = tail.iter().copied().max().unwrap_or(0);
+    tail.iter()
+        .map(|v| {
+            if max == 0 {
+                LEVELS[0]
+            } else {
+                let idx = ((*v as f64 / max as f64) * (LEVELS.len() - 1) as f64).round() as usize;
+                LEVELS[idx.min(LEVELS.len() - 1)]
+            }
+        })
+        .collect()
+}
+
 /// Styling role of one day cell in the strip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DayRole {
@@ -135,6 +160,20 @@ mod tests {
         let line = hbar_line("docs", 14, 0.001, 20, "3 tok", 8, &theme);
         let text = line_text(&line);
         assert_eq!(text.chars().filter(|c| *c == '█').count(), 1);
+    }
+
+    #[test]
+    fn spark_string_scales_and_keeps_the_newest_tail() {
+        assert_eq!(spark_string(&[], 10), "");
+        assert_eq!(spark_string(&[5, 5], 0), "");
+        assert_eq!(spark_string(&[0, 0, 0], 8), "▁▁▁");
+        let s = spark_string(&[0, 4, 8], 8);
+        assert_eq!(s.chars().count(), 3);
+        assert!(s.starts_with('▁') && s.ends_with('█'), "scaled: {s}");
+        // Longer than width: only the newest values render.
+        let s = spark_string(&[9, 9, 9, 1, 2], 2);
+        assert_eq!(s.chars().count(), 2);
+        assert!(s.ends_with('█'), "tail max normalizes: {s}");
     }
 
     #[test]

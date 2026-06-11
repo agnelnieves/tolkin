@@ -1,6 +1,6 @@
-//! Modal dialog shell: centered box over a dimmed scrim. Detail content
-//! arrives in a later wave; the shell (scrim, widths, esc affordance) is
-//! complete here so overlays stack correctly from day one.
+//! Modal dialog shell: centered box over a dimmed scrim. The detail bodies
+//! are composed by the app layer; this module owns the scrim, the widths,
+//! the placement, and the esc affordance, so overlays stack correctly.
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -10,10 +10,7 @@ use ratatui::Frame;
 
 use crate::tui::theme::{self, Theme};
 
-/// The three dialog widths from the design contract. Production code
-/// constructs these when detail modals ship (next wave); the shell and
-/// its tests exercise all three today.
-#[allow(dead_code)]
+/// The three dialog widths from the design contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModalWidth {
     Medium,
@@ -22,12 +19,28 @@ pub enum ModalWidth {
 }
 
 impl ModalWidth {
-    fn cols(self) -> u16 {
+    pub fn cols(self) -> u16 {
         match self {
             ModalWidth::Medium => 60,
             ModalWidth::Large => 88,
             ModalWidth::XLarge => 116,
         }
+    }
+}
+
+/// The dialog rectangle for a body of `lines` rows: width clamped to the
+/// frame minus 2, top at height/4. Mouse hit-testing shares this with the
+/// render path so a click can never disagree with what was drawn.
+pub fn dialog_rect(area: Rect, width: ModalWidth, lines: u16) -> Rect {
+    let w = width.cols().min(area.width.saturating_sub(2));
+    let h = (lines + 4).min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = (area.height / 4).min(area.height.saturating_sub(h));
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
     }
 }
 
@@ -64,16 +77,7 @@ pub fn render_modal(
 ) {
     apply_scrim(frame, theme);
     let area = frame.area();
-    let w = width.cols().min(area.width.saturating_sub(2));
-    let h = (body.len() as u16 + 4).min(area.height.saturating_sub(2));
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = (area.height / 4).min(area.height.saturating_sub(h));
-    let dialog = Rect {
-        x,
-        y,
-        width: w,
-        height: h,
-    };
+    let dialog = dialog_rect(area, width, body.len() as u16);
 
     frame.render_widget(Clear, dialog);
     let block = Block::new()

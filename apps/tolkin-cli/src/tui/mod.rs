@@ -149,6 +149,7 @@ fn dispatch(tx: &Sender<Msg>, cmds: Vec<Cmd>) -> bool {
             Cmd::Quit => return true,
             Cmd::SpawnScan(root) => event::spawn_scan(tx.clone(), root),
             Cmd::ReloadSnapshot => event::spawn_reload(tx.clone()),
+            Cmd::RunAudit { root, path } => event::spawn_audit(tx.clone(), root, path),
         }
     }
     false

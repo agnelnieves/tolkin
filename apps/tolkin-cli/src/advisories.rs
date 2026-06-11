@@ -629,6 +629,91 @@ pub fn tui_compact_lines(block: &AdvisoryBlock) -> Vec<String> {
     lines
 }
 
+/// One advisory's detail content for the TUI modal: a short title plus the
+/// full advisory paragraphs (the framing sentence and the lever sentences
+/// reused verbatim from the existing advisory copy).
+#[derive(Clone, Debug)]
+pub struct AdvisorySection {
+    pub title: String,
+    pub paragraphs: Vec<String>,
+}
+
+/// Detail sections for the TUI advisory modal, index-aligned with
+/// [`tui_compact_lines`]: section i is the detail for compact line i. The
+/// inclusion conditions are mirrored exactly so the selectable list and the
+/// detail view can never disagree.
+pub fn tui_detail_sections(block: &AdvisoryBlock) -> Vec<AdvisorySection> {
+    let mut out = Vec::with_capacity(2);
+
+    let os = &block.output_share;
+    if os.priced_bill_usd > 0.0 {
+        let mut paragraphs = vec![os.framing.clone()];
+        // The model-mix lever sentences ride along with the output-share
+        // detail: they are the existing advisory copy naming what to pull.
+        if let Some(ref adv) = block.model_mix.frontier_advisory {
+            paragraphs.push(adv.clone());
+        }
+        if let Some(ref adv) = block.model_mix.cheap_advisory {
+            paragraphs.push(adv.clone());
+        }
+        out.push(AdvisorySection {
+            title: "output share".to_string(),
+            paragraphs,
+        });
+    }
+
+    if let Some(ref cap) = block.cap_runway {
+        let mut paragraphs = Vec::new();
+        if cap.cap_already_reached {
+            paragraphs.push(format!(
+                "cap ${:.2} already reached this month (MTD ${:.2}).",
+                cap.monthly_cap_usd, cap.mtd_spend_usd
+            ));
+        } else {
+            paragraphs.push(format!(
+                "MTD spend ${:.2}, remaining ${:.2} of cap ${:.2}.",
+                cap.mtd_spend_usd, cap.remaining_usd, cap.monthly_cap_usd
+            ));
+            match (
+                &cap.rate_7d.projected_cap_date,
+                &cap.rate_7d.projection_note,
+            ) {
+                (Some(date), _) => paragraphs.push(format!(
+                    "at your 7-day rate (${:.2}/day) you reach ${:.2} on {}.",
+                    cap.rate_7d.avg_daily_usd, cap.monthly_cap_usd, date
+                )),
+                (None, Some(note)) => paragraphs.push(format!("7-day projection: {note}.")),
+                (None, None) => {}
+            }
+            match (
+                &cap.rate_30d.projected_cap_date,
+                &cap.rate_30d.projection_note,
+            ) {
+                (Some(date), _) => paragraphs.push(format!(
+                    "at your 30-day rate (${:.2}/day) you reach ${:.2} on {}.",
+                    cap.rate_30d.avg_daily_usd, cap.monthly_cap_usd, date
+                )),
+                (None, Some(note)) => paragraphs.push(format!("30-day projection: {note}.")),
+                (None, None) => {}
+            }
+        }
+        // Mirror the compact-line condition: the line renders only when the
+        // cap is reached or at least one projection is available.
+        let included = cap.cap_already_reached
+            || cap.rate_7d.projected_cap_date.is_some()
+            || cap.rate_30d.projected_cap_date.is_some();
+        if included {
+            out.push(AdvisorySection {
+                title: "cap runway".to_string(),
+                paragraphs,
+            });
+        }
+    }
+
+    out.truncate(2);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1288,5 +1373,43 @@ mod tests {
             "first line must be output share: {:?}",
             lines
         );
+
+        // Detail sections stay index-aligned with the compact lines: same
+        // count, same order, full framing copy in the first paragraph.
+        let sections = tui_detail_sections(&block);
+        assert_eq!(sections.len(), lines.len(), "sections align to lines");
+        assert_eq!(sections[0].title, "output share");
+        assert!(
+            sections[0].paragraphs[0].contains("Output tokens are"),
+            "framing sentence missing: {:?}",
+            sections[0].paragraphs
+        );
+        if sections.len() == 2 {
+            assert_eq!(sections[1].title, "cap runway");
+            assert!(
+                sections[1].paragraphs.iter().any(|p| p.contains("MTD")),
+                "cap detail missing MTD line: {:?}",
+                sections[1].paragraphs
+            );
+        }
+    }
+
+    /// Detail sections mirror the compact-line inclusion conditions when no
+    /// priced spend exists: both surfaces stay empty together.
+    #[test]
+    fn tui_detail_sections_empty_without_priced_bill() {
+        let measured = measured_two_models("m1", 0.0, "m2", 0.0, 100);
+        let inputs = AdvisoryInputs {
+            measured: &measured,
+            sessions: &[],
+            cost_fn: &no_cost,
+            input_rate_fn: &no_rate,
+            monthly_cap_usd: None,
+            now: 2_000,
+        };
+        let block = compute(&inputs);
+        // cost_usd_total is 0 here, so the output-share line is suppressed.
+        assert_eq!(tui_compact_lines(&block).len(), 0);
+        assert_eq!(tui_detail_sections(&block).len(), 0);
     }
 }

@@ -11,6 +11,7 @@ use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{Event, KeyEvent, MouseEvent};
+use tolkin_core::audit::AuditReport;
 
 use crate::commands::stats_data::StatsSnapshot;
 use crate::project::{self, ProjectOptions, ProjectReport};
@@ -18,9 +19,11 @@ use crate::project::{self, ProjectOptions, ProjectReport};
 /// Everything the update loop can receive.
 pub enum Msg {
     Key(KeyEvent),
-    /// Payload read when mouse wiring ships (next wave); capture is on.
+    /// Payload consumed when the mouse wiring lands later in this wave;
+    /// capture is on and events flow already.
     Mouse(#[allow(dead_code)] MouseEvent),
-    /// Relayout happens naturally per frame; the payload is informational.
+    /// Relayout happens naturally per frame; the payload feeds the mouse
+    /// hit-testing viewport later in this wave.
     Resize(#[allow(dead_code)] u16, #[allow(dead_code)] u16),
     /// Synthesized by the main loop on recv timeout: wall-clock epoch for
     /// relative times plus elapsed milliseconds for spinner cadence.
@@ -36,6 +39,12 @@ pub enum Msg {
     },
     /// Snapshot reload worker finished. `None` means no data dir exists.
     SnapshotLoaded(Box<Option<StatsSnapshot>>),
+    /// Single-file audit worker finished. `path` is the project-relative
+    /// path the file detail modal is keyed on.
+    AuditDone {
+        path: String,
+        result: Result<Box<AuditReport>, String>,
+    },
 }
 
 /// Current unix epoch seconds. Clock reads live here and in workers, never
@@ -93,5 +102,17 @@ pub fn spawn_reload(tx: Sender<Msg>) {
     thread::spawn(move || {
         let snapshot = StatsSnapshot::load();
         let _ = tx.send(Msg::SnapshotLoaded(Box::new(snapshot)));
+    });
+}
+
+/// Single-file audit worker: tokenize and audit `root/path` off the main
+/// thread, reporting back keyed on the project-relative path.
+pub fn spawn_audit(tx: Sender<Msg>, root: PathBuf, path: String) {
+    thread::spawn(move || {
+        let full = root.join(&path);
+        let result = crate::commands::audit::audit_file(&full)
+            .map(Box::new)
+            .map_err(|e| e.to_string());
+        let _ = tx.send(Msg::AuditDone { path, result });
     });
 }

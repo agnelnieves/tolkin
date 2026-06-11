@@ -379,6 +379,15 @@ pub static BINDINGS: &[Binding] = &[
         hint: "confirm",
         group: Group::Act,
     },
+    // Inside the file-detail modal, `a` (re)runs the audit worker.
+    Binding {
+        keys: &[(KeyCode::Char('a'), NONE)],
+        action: Action::AuditSelected,
+        context: Context::Modal,
+        keys_label: "a",
+        hint: "audit",
+        group: Group::Act,
+    },
 ];
 
 /// True for contexts where the user is typing free text: printable keys
