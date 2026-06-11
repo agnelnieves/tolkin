@@ -8,7 +8,8 @@ Every claim is cross-referenced to the source file that implements it.
 The CLI runs entirely on the local machine. No token counts, file contents,
 project paths, or user identifiers are transmitted to any remote server.
 
-Exactly two outbound requests are sanctioned, both user-controlled:
+Exactly two tolkin-chosen outbound endpoints are sanctioned, both
+user-controlled:
 
 1. The opt-in BYOK token verification: `tolkin count --verify <file>` sends
    the file's text to `https://api.anthropic.com/v1/messages/count_tokens`
@@ -16,6 +17,10 @@ Exactly two outbound requests are sanctioned, both user-controlled:
    never runs without an explicit `--verify` flag and an explicit key
    argument.
 2. The version update check described in the next section.
+
+One further class of traffic goes only where the user already pointed their
+own tools: the MCP probe described below contacts servers taken verbatim
+from the user's own MCP configuration, never an endpoint tolkin chose.
 
 The rest of the CLI, including all audit, scan, stats, cache, and project
 commands, makes no network calls.
@@ -49,6 +54,36 @@ Source: `apps/tolkin-cli/src/update.rs` (`check_now`, `fetch_latest`,
 `passive_notice_line`); `apps/tolkin-cli/src/ledger.rs` (the
 `consent_update_check`, `last_update_check`, and `last_seen_latest` config
 fields).
+
+## The MCP probe
+
+`tolkin mcp --probe <server>` (or `--probe-all`) measures a configured MCP
+server exactly by speaking the standard MCP handshake (initialize, then
+tools/list) and tokenizing the returned tool manifest. It contacts ONLY
+servers already present in the user's own MCP configuration: for stdio
+servers that means executing the user's own configured command locally; for
+HTTP servers that means requests to the configured URL with the configured
+headers. Before anything runs, tolkin prints exactly what it is about to
+execute or contact (the full command and arguments, or the URL; environment
+variable names are shown, values never) and asks for per-server
+confirmation. The global yes flag skips the confirmation; CI refuses the
+probe entirely and points at committed manifests instead.
+
+What is transmitted in the handshake: the MCP protocol version and a client
+identifier (the string "tolkin" plus its version). No repository content,
+token counts, or analysis results are sent. What is stored: the server's
+own tool manifest, passed through the always-on secret redaction, written to
+`.tolkin/mcp-manifests/<server>.json` in the project, date-stamped, and safe
+to commit so teammates get exact numbers without probing. Subsequent
+`tolkin mcp` runs use the cached manifest with the basis label
+"measured (probed manifest, captured <date>)" and warn when it is older
+than 90 days. The probe never runs inside `tolkin scan`, which remains
+read-only and network-silent.
+
+Source: `apps/tolkin-cli/src/mcp_probe.rs` (handshake client, stdio and
+streamable HTTP); `apps/tolkin-cli/src/mcp_manifests.rs` (redacted,
+committable cache); `apps/tolkin-cli/src/commands/mcp.rs` (confirmation and
+CI refusal).
 
 ## The local model sidecar (optimize)
 
