@@ -1,6 +1,6 @@
 {
   "v": 2,
-  "generated_at": "2026-06-11T02:50:29.307Z",
+  "generated_at": "2026-06-11T02:51:46.496Z",
   "tolkin_version": "0.11.0",
   "prices_observed": "2026-06",
   "runs": 3,
@@ -240,7 +240,7 @@
       "rct_caveat": "Aggressive compression can increase total cost because outputs grow; every number here is input-token bounded.",
       "quality_scoring": {
         "scored": false,
-        "method": "BYOK extraction-QA harness, off by default (reason: ANTHROPIC_API_KEY not set; --score-quality requires the operator's own key (BYOK contract))"
+        "method": "BYOK extraction-QA harness, off by default (reason: --score-quality flag not passed (default off))"
       },
       "cases": [
         {

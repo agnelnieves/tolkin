@@ -123,7 +123,7 @@ Manifest provenance (full detail and license texts in the manifests directory):
 
 > Aggressive compression can increase total cost because outputs grow; every number here is input-token bounded.
 
-Quality scoring: scored=false, method=BYOK extraction-QA harness, off by default (reason: ANTHROPIC_API_KEY not set; --score-quality requires the operator's own key (BYOK contract)). Each ratio runs the compressor once and tokenizes the output three times to enforce the deterministic-count contract.
+Quality scoring: scored=false, method=BYOK extraction-QA harness, off by default (reason: --score-quality flag not passed (default off)). Each ratio runs the compressor once and tokenizes the output three times to enforce the deterministic-count contract.
 
 | Case | Fixture | Technique | Tokenizer | Target | Before | After | Achieved | Saved % |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -158,6 +158,6 @@ Quality scoring: scored=false, method=BYOK extraction-QA harness, off by default
 
 ---
 
-Generated at: 2026-06-11T02:50:29.307Z. Tolkin 0.11.0. Prices observed: 2026-06. Runner: bun + tolkin CLI. OS: darwin.
+Generated at: 2026-06-11T02:51:46.496Z. Tolkin 0.11.0. Prices observed: 2026-06. Runner: bun + tolkin CLI. OS: darwin.
 
 To regenerate: `bun apps/tolkin-cli/benchmarks/run.ts` (from the repo root). Verify determinism with `bun apps/tolkin-cli/benchmarks/run.ts --check-determinism`.
