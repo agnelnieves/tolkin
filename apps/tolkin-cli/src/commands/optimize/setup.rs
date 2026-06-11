@@ -139,27 +139,32 @@ fn setup_guide_apple(rec: &Recommendation) -> String {
         \n\
         Steps to get started on Apple silicon:\n\
         \n\
-        1. Install uv (if you do not have it):\n\
-           brew install uv\n\
+        1. Install mlx-lm (bottled in homebrew-core):\n\
+           brew install mlx-lm\n\
+           Without Homebrew: brew install uv, then uv tool install mlx-lm.\n\
         \n\
-        2. Install mlx-lm:\n\
-           uv tool install mlx-lm\n\
-        \n\
-        3. Start the local model server (keep this terminal open):\n\
+        2. Start the local model server (keep this terminal open):\n\
            mlx_lm.server --model {model} --max-tokens 1200\n\
            The first run downloads about {dl_gb} GB to ~/.cache/huggingface.\n\
         \n\
-        4. In another terminal, re-run:\n\
+        3. In another terminal, re-run:\n\
            tolkin optimize\n\
            Tolkin auto-detects 127.0.0.1:8080 and asks consent before sending any file content.\n\
            Narration takes {wall} on this machine.\n\
         \n\
+        On a restricted corporate network: Homebrew is usually allowlisted while PyPI\n\
+        and direct downloads get proxied. If uv fails to fetch, retry as\n\
+        uv tool install --native-tls mlx-lm (trusts the proxy via the system keychain).\n\
+        If the model download fails, point SSL_CERT_FILE and REQUESTS_CA_BUNDLE at your\n\
+        company CA bundle, or copy the model folder into ~/.cache/huggingface/hub from\n\
+        a machine that can fetch it (confirm the transfer is within policy first).\n\
+        \n\
         Alternative: LM Studio (free for work) can serve the same model on port 1234;\n\
         tolkin detects that port automatically too.\n\
         \n\
-        To remove: uv tool uninstall mlx-lm, then delete the model weights from\n\
-        ~/.cache/huggingface/hub. To permanently disable, set enabled = false under\n\
-        [sidecar] in your tolkin config.toml.\n"
+        To remove: brew uninstall mlx-lm (or uv tool uninstall mlx-lm), then delete\n\
+        the model weights from ~/.cache/huggingface/hub. To permanently disable, set\n\
+        enabled = false under [sidecar] in your tolkin config.toml.\n"
     )
 }
 
@@ -282,6 +287,25 @@ mod tests {
         assert!(
             guide.starts_with("Nothing leaves your machine"),
             "guide must open with the privacy statement"
+        );
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn apple_guide_is_brew_first_with_a_restricted_network_path() {
+        let rec = recommend(Some(16));
+        let guide = setup_guide(&rec);
+        assert!(
+            guide.contains("brew install mlx-lm"),
+            "homebrew-core bottle is the primary install path"
+        );
+        assert!(
+            guide.contains("--native-tls"),
+            "corporate TLS interception needs the uv native-tls escape"
+        );
+        assert!(
+            guide.contains("REQUESTS_CA_BUNDLE"),
+            "model downloads behind a proxy need the CA bundle pointer"
         );
     }
 
