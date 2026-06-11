@@ -278,6 +278,13 @@ function isDir(p: string): boolean {
   }
 }
 
+/**
+ * Walk parent session files AND subagent transcripts:
+ *   <projectsDir>/<slug>/<session>.jsonl                  (parent sessions)
+ *   <projectsDir>/<slug>/<session>/subagents/agent-*.jsonl (subagent streams)
+ *
+ * Returns files in the order discovered (the caller sorts before merging).
+ */
 function walkClaudeFiles(projectsDir: string): string[] {
   const files: string[] = [];
   if (!isDir(projectsDir)) return files;
@@ -285,10 +292,39 @@ function walkClaudeFiles(projectsDir: string): string[] {
     const dir = join(projectsDir, entry);
     if (!isDir(dir)) continue;
     for (const f of readdirSync(dir)) {
-      if (f.endsWith(".jsonl") && f !== ".jsonl") files.push(join(dir, f));
+      const child = join(dir, f);
+      if (isDir(child)) {
+        // <session_id>/ next to <session_id>.jsonl: look for subagents/.
+        const subagents = join(child, "subagents");
+        if (!isDir(subagents)) continue;
+        for (const s of readdirSync(subagents)) {
+          // Only `agent-<id>.jsonl` files; skip the `.meta.json` companions.
+          if (s.startsWith("agent-") && s.endsWith(".jsonl")) {
+            files.push(join(subagents, s));
+          }
+        }
+        continue;
+      }
+      if (f.endsWith(".jsonl") && f !== ".jsonl") files.push(child);
     }
   }
   return files;
+}
+
+/**
+ * Detect whether a path matches the subagent layout
+ * `.../<parent_session_id>/subagents/agent-*.jsonl`. Returns the parent
+ * session id when it does, null otherwise.
+ */
+function parentSessionIdFromPath(path: string): string | null {
+  const segs = path.split("/");
+  // [.., <parent>, subagents, agent-*.jsonl]
+  if (segs.length < 3) return null;
+  const last = segs[segs.length - 1];
+  const dir = segs[segs.length - 2];
+  if (dir !== "subagents") return null;
+  if (!last.startsWith("agent-") || !last.endsWith(".jsonl")) return null;
+  return segs[segs.length - 3];
 }
 
 type Session = {
@@ -306,10 +342,14 @@ function buildSessions(home: string): Session[] {
   // Global merge: iterate files ascending; replace only on strictly larger
   // ts, or equal ts with strictly larger output (the holder, from an
   // earlier file, wins full ties).
-  const winners = new Map<string, { rec: Rec; stem: string }>();
+  const winners = new Map<
+    string,
+    { rec: Rec; stem: string; isSubagent: boolean }
+  >();
   for (const path of files) {
     const name = path.slice(path.lastIndexOf("/") + 1);
     const stem = name.slice(0, -".jsonl".length);
+    const isSubagent = parentSessionIdFromPath(path) !== null;
     for (const [key, rec] of parseFile(path)) {
       const held = winners.get(key);
       if (
@@ -317,14 +357,16 @@ function buildSessions(home: string): Session[] {
         rec.ts > held.rec.ts ||
         (rec.ts === held.rec.ts && rec.output > held.rec.output)
       ) {
-        winners.set(key, { rec, stem });
+        winners.set(key, { rec, stem, isSubagent });
       }
     }
   }
-  // Group winners by (stem, cwd).
+  // Group winners by (isSubagent, stem, cwd). Each subagent file becomes
+  // its own session timeline so cache analysis treats each prefix stream
+  // independently.
   const grouped = new Map<string, Session>();
-  for (const { rec, stem } of winners.values()) {
-    const gkey = `${stem}\u0000${rec.cwd}`;
+  for (const { rec, stem, isSubagent } of winners.values()) {
+    const gkey = `${isSubagent ? "S" : "P"}\u0000${stem}\u0000${rec.cwd}`;
     let session = grouped.get(gkey);
     if (!session) {
       session = {
