@@ -13,6 +13,7 @@ mod onboard;
 mod parse;
 mod project;
 mod scan;
+mod sidecar;
 mod tiers;
 mod tokenize;
 mod tui;
