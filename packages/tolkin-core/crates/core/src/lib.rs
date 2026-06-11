@@ -10,6 +10,7 @@ pub mod audit;
 pub mod cost;
 pub mod format;
 pub mod mcp;
+pub mod mcp_tools;
 pub mod pricing;
 pub mod redact;
 

@@ -265,7 +265,12 @@ fn minhash_seeds() -> &'static [u64; MINHASH_FNS] {
     })
 }
 
-fn minhash_signature(bytes: &[u8]) -> [u64; MINHASH_FNS] {
+/// MinHash signature array. Public within the crate so the MCP tools/list
+/// near-duplicate lint (mcp_tools.rs) reuses the same estimator instead of
+/// growing a second one.
+pub(crate) type MinHashSignature = [u64; MINHASH_FNS];
+
+pub(crate) fn minhash_signature(bytes: &[u8]) -> MinHashSignature {
     let seeds = minhash_seeds();
     let mut sig = [u64::MAX; MINHASH_FNS];
     for window in bytes.windows(SHINGLE_BYTES) {
@@ -280,7 +285,7 @@ fn minhash_signature(bytes: &[u8]) -> [u64; MINHASH_FNS] {
     sig
 }
 
-fn estimated_jaccard(a: &[u64; MINHASH_FNS], b: &[u64; MINHASH_FNS]) -> f64 {
+pub(crate) fn estimated_jaccard(a: &MinHashSignature, b: &MinHashSignature) -> f64 {
     let equal = a.iter().zip(b.iter()).filter(|(x, y)| x == y).count();
     equal as f64 / MINHASH_FNS as f64
 }

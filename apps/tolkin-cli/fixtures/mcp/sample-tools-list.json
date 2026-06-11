@@ -1,0 +1,47 @@
+{
+  "tools": [
+    {
+      "name": "create_ticket",
+      "description": "Create a ticket in the tracker. Returns the new ticket id as JSON.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "Ticket title" },
+          "body": { "type": "string", "description": "Ticket body, markdown" }
+        },
+        "required": ["title"]
+      }
+    },
+    {
+      "name": "helpful_search",
+      "description": "This tool is a helpful way to look things up in the index.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "list_tickets_open",
+      "description": "List every ticket in the tracker that is currently open and assigned to the requesting user account.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": { "type": "number" }
+        }
+      }
+    },
+    {
+      "name": "list_tickets_closed",
+      "description": "List every ticket in the tracker that is currently closed and assigned to the requesting user account.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": { "type": "number" }
+        }
+      }
+    }
+  ]
+}
