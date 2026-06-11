@@ -68,12 +68,45 @@ pub fn audit(text: &str, options_json: &str) -> Result<String, JsError> {
 /// | "gemini"; anything else defaults to anthropic). Returns a JSON `McpAnalysis`.
 #[wasm_bindgen]
 pub fn analyze_mcp(config_text: &str, provider: &str) -> Result<String, JsError> {
-    let provider = match provider {
+    let provider = parse_provider(provider);
+    let analysis =
+        tolkin_core::mcp::analyze(config_text, provider).map_err(|e| JsError::new(&e))?;
+    serde_json::to_string(&analysis).map_err(|e| JsError::new(&e.to_string()))
+}
+
+fn parse_provider(provider: &str) -> tolkin_core::Provider {
+    match provider {
         "openai" => tolkin_core::Provider::OpenAi,
         "gemini" => tolkin_core::Provider::Gemini,
         _ => tolkin_core::Provider::Anthropic,
-    };
-    let analysis =
-        tolkin_core::mcp::analyze(config_text, provider).map_err(|e| JsError::new(&e))?;
+    }
+}
+
+/// Parse a tools/list payload (the MCP `{"tools": [...]}` result shape, a bare
+/// array of tool objects, or a full JSON-RPC envelope) into a JSON array of
+/// `ToolSpec` (`{name, description, serialized}`). The browser tokenizes each
+/// `serialized` string and each `description` itself; tokenization stays
+/// platform-native by design.
+#[wasm_bindgen]
+pub fn parse_tools_list(tools_json: &str) -> Result<String, JsError> {
+    let specs =
+        tolkin_core::mcp_tools::parse_tools_list(tools_json).map_err(|e| JsError::new(&e))?;
+    serde_json::to_string(&specs).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Analyze a pre-tokenized tool inventory. `request_json` is a JSON
+/// `InventoryRequest`: `{ "server": str, "provider": "openai" | "anthropic" |
+/// "gemini" (optional, defaults anthropic), "tokenizer": str, "tools":
+/// [{ "name", "description", "tokens", "description_tokens" }] }`. Returns a
+/// JSON `McpAnalysis` with one server carrying exact tokenized-manifest counts
+/// plus the per-tool table and description smells in `tools_detail`.
+#[wasm_bindgen]
+pub fn analyze_tools_inventory(request_json: &str) -> Result<String, JsError> {
+    let req: tolkin_core::mcp_tools::InventoryRequest =
+        serde_json::from_str(request_json).map_err(|e| JsError::new(&e.to_string()))?;
+    let inventory = tolkin_core::mcp_tools::analyze_tool_inventory(&req.tools, &req.tokenizer)
+        .map_err(|e| JsError::new(&e))?;
+    let provider = req.provider.unwrap_or(tolkin_core::Provider::Anthropic);
+    let analysis = tolkin_core::mcp::analysis_from_inventory(&req.server, provider, inventory);
     serde_json::to_string(&analysis).map_err(|e| JsError::new(&e.to_string()))
 }

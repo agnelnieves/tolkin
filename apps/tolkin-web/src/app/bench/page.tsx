@@ -17,21 +17,21 @@ const results = rawResults as BenchResults;
 export const metadata: Metadata = {
   title: "Benchmark",
   description:
-    "Measured, reproducible input-token savings for Tolkin's lossless and lossy techniques. Configuration track uses catalog estimates. Methodology and raw numbers included.",
+    "Measured, reproducible input-token savings for Tolkin. Configuration track counts tokenized manifests of real MCP servers. Methodology and raw numbers included.",
   alternates: {
     canonical: "/bench",
   },
   openGraph: {
     title: "Benchmark",
     description:
-      "Measured, reproducible input-token savings for Tolkin's lossless and lossy techniques. Configuration track uses catalog estimates. Methodology and raw numbers included.",
+      "Measured, reproducible input-token savings for Tolkin. Configuration track counts tokenized manifests of real MCP servers. Methodology and raw numbers included.",
     url: "/bench",
   },
   twitter: {
     card: "summary_large_image",
     title: "Benchmark",
     description:
-      "Measured, reproducible input-token savings for Tolkin's lossless and lossy techniques. Configuration track uses catalog estimates. Methodology and raw numbers included.",
+      "Measured, reproducible input-token savings for Tolkin. Configuration track counts tokenized manifests of real MCP servers. Methodology and raw numbers included.",
   },
 };
 
@@ -228,41 +228,59 @@ function ConfigurationSection({ cases }: { cases: ConfigurationCase[] }) {
   if (cases.length === 0) return <PendingNote />;
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-zinc-800">
-      <table className="w-full border-collapse text-left text-xs">
-        <thead>
-          <tr className="border-b border-zinc-800 bg-zinc-900/40 text-[10px] uppercase tracking-wider text-zinc-500">
-            <th className="px-3 py-2 font-medium">Case</th>
-            <th className="px-3 py-2 font-medium">Shape</th>
-            <th className="px-3 py-2 text-right font-medium">Servers</th>
-            <th className="px-3 py-2 text-right font-medium">Cold tokens</th>
-            <th className="px-3 py-2 text-right font-medium">Swap savings</th>
-            <th className="px-3 py-2 text-right font-medium">Slim savings</th>
-            <th className="px-3 py-2 text-right font-medium">% of 200K</th>
-          </tr>
-        </thead>
-        <tbody>
-          {cases.map((c) => (
-            <tr key={c.id} className="border-b border-zinc-900 last:border-b-0">
-              <td className="px-3 py-2 font-mono text-zinc-200">{c.fixture}</td>
-              <td className="px-3 py-2 text-zinc-300">{c.client_shape}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-zinc-400">{c.servers}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-zinc-400">
-                {fmt(c.cold_tokens)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
-                {fmt(c.swap_savings_tokens)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
-                {fmt(c.slim_savings_tokens)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums text-zinc-400">
-                {pct(c.pct_of_200k_window)}
-              </td>
+    <div className="space-y-3">
+      <div className="overflow-x-auto rounded-lg border border-zinc-800">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead>
+            <tr className="border-b border-zinc-800 bg-zinc-900/40 text-[10px] uppercase tracking-wider text-zinc-500">
+              <th className="px-3 py-2 font-medium">Case</th>
+              <th className="px-3 py-2 font-medium">Basis</th>
+              <th className="px-3 py-2 font-medium">Tokenizer</th>
+              <th className="px-3 py-2 text-right font-medium">Tools</th>
+              <th className="px-3 py-2 text-right font-medium">Cold tokens</th>
+              <th className="px-3 py-2 text-right font-medium">Swap savings</th>
+              <th className="px-3 py-2 text-right font-medium">Slim savings</th>
+              <th className="px-3 py-2 text-right font-medium">% of 200K</th>
             </tr>
+          </thead>
+          <tbody>
+            {cases.map((c) => (
+              <tr key={c.id} className="border-b border-zinc-900 last:border-b-0">
+                <td className="px-3 py-2 font-mono text-zinc-200">{c.fixture}</td>
+                <td className="px-3 py-2 text-zinc-300">{c.basis}</td>
+                <td className="px-3 py-2 text-zinc-400">{c.tokenizer}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-zinc-400">{c.tools}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-zinc-400">
+                  {fmt(c.cold_tokens)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
+                  {fmt(c.swap_savings_tokens)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
+                  {fmt(c.slim_savings_tokens)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-zinc-400">
+                  {pct(c.pct_of_200k_window)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="space-y-1">
+        <h4 className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+          Manifest provenance
+        </h4>
+        <ul className="space-y-1 text-[11px] leading-5 text-zinc-500">
+          {cases.map((c) => (
+            <li key={c.id}>
+              <span className="font-mono text-zinc-400">{c.id}</span>: {c.manifest.source};{" "}
+              {c.manifest.server_version}; captured {c.manifest.captured}; {c.manifest.license}.
+            </li>
           ))}
-        </tbody>
-      </table>
+        </ul>
+      </div>
     </div>
   );
 }
@@ -330,7 +348,8 @@ export default function BenchPage() {
         <header className="space-y-3">
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Benchmark</h1>
           <p className="text-sm text-zinc-400 sm:text-base">
-            Measured, reproducible, input-token bounded. Configuration track uses catalog estimates.
+            Measured, reproducible, input-token bounded. The configuration track counts tokenized
+            manifests of real, public MCP servers.
           </p>
           <p className="text-xs font-mono text-zinc-600">
             {isPending ? (
@@ -402,9 +421,11 @@ export default function BenchPage() {
             <FidelityBadge fidelity={tracks.configuration.fidelity} />
           </div>
           <p className="text-xs text-zinc-500">
-            MCP server and agent config analysis: cold-session token cost, CLI swap savings, and
-            slim-profile savings per fixture. Numbers are representative catalog estimates, not
-            tokenized manifests. Refreshable when the catalog is updated.
+            Vendored tools/list manifests from real, public MCP servers, tokenized with o200k_base
+            through the tolkin CLI (each tool canonicalized to compact name, description,
+            input_schema JSON). Cold is the tokenized weight of the tool definitions; swap savings
+            derive from it, and slim savings are the measured difference of two tokenized manifests
+            where a slim capture exists. Provenance and license texts ship next to the fixtures.
           </p>
           <ConfigurationSection cases={tracks.configuration.cases} />
           <ExternalComparisons comparisons={tracks.configuration.comparisons} />

@@ -62,16 +62,24 @@ export function renderResults(r: BenchResults): string {
   lines.push("## Configuration track (lossless-configuration)");
   lines.push("");
   lines.push(
-    "Cold token cost and savings come from `tolkin mcp --provider anthropic --json` on each fixture; the analyzer's catalog is the source of truth.",
+    "Each fixture is a vendored, real, public server tools/list manifest (provenance in `fixtures/configuration/manifests/README.md`), tokenized through the real CLI path (`tolkin mcp <manifest> --json`): every tool is canonicalized to compact {name, description, input_schema} JSON and counted with o200k_base (exact). Cold is the tokenized weight of the tool definitions; no provider price multipliers are folded in. Swap savings derive from the tokenized cold; slim savings are the measured difference of two tokenized manifests where a slim capture exists, otherwise 0 (never an estimate applied to a measured base).",
   );
   lines.push("");
   lines.push(
-    "| Case | Fixture | Client shape | Tokenizer | Servers | Cold | Swap saves | Slim saves | % of 200K window |",
+    "| Case | Fixture | Basis | Tokenizer | Tools | Cold | Swap saves | Slim saves | % of 200K window |",
   );
   lines.push("| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |");
   for (const c of r.tracks.configuration.cases) {
     lines.push(
-      `| ${c.id} | \`${c.fixture}\` | ${c.client_shape} | ${c.tokenizer} | ${commas(c.servers)} | ${commas(c.cold_tokens)} | ${commas(c.swap_savings_tokens)} | ${commas(c.slim_savings_tokens)} | ${pct(c.pct_of_200k_window)} |`,
+      `| ${c.id} | \`${c.fixture}\` | ${c.basis} | ${c.tokenizer} | ${commas(c.tools)} | ${commas(c.cold_tokens)} | ${commas(c.swap_savings_tokens)} | ${commas(c.slim_savings_tokens)} | ${pct(c.pct_of_200k_window)} |`,
+    );
+  }
+  lines.push("");
+  lines.push("Manifest provenance (full detail and license texts in the manifests directory):");
+  lines.push("");
+  for (const c of r.tracks.configuration.cases) {
+    lines.push(
+      `- **${c.id}**: ${c.manifest.source}; server version ${c.manifest.server_version}; captured ${c.manifest.captured}; license ${c.manifest.license}.`,
     );
   }
   lines.push("");

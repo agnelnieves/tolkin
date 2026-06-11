@@ -8,14 +8,22 @@
 //! catalog of representative cold-cache estimates (refreshable); for an unknown
 //! server the surface asks the user to paste its `tools/list`.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::mcp_tools::ToolInventory;
 use crate::pricing;
 use crate::Provider;
 
 /// 200K is the reference context window the percentage is measured against.
 const WINDOW: f64 = 200_000.0;
+
+/// Basis label for servers priced from the curated catalog.
+const BASIS_CATALOG: &str = "catalog estimate (representative)";
+/// Basis label for servers with no number at all (unknown, no manifest).
+const BASIS_NONE: &str = "none (unknown server, no manifest supplied)";
 
 /// What to do with a server: swap for a CLI, swap for ad hoc use only, or keep.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -529,6 +537,15 @@ pub struct ServerReport {
     /// savings: when a server has both, the swap is primary and slim is the
     /// "if you keep it, slim it" fallback.
     pub slim: Option<SlimRecommendation>,
+    /// What kind of number `cold_tokens` is: "catalog estimate
+    /// (representative)" or "tokenized manifest (<tokenizer>)". The two bases
+    /// are never blended in one figure.
+    pub basis: String,
+    /// Exact per-tool breakdown, present only when a tools/list manifest was
+    /// supplied for this server. Absent keys keep the no-manifest JSON shape
+    /// byte-identical to previous releases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools_detail: Option<ToolInventory>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -536,6 +553,10 @@ pub struct McpTotals {
     pub servers: usize,
     pub matched: usize,
     pub unknown: usize,
+    /// Servers whose counts come from a supplied tools/list manifest (exact),
+    /// as opposed to the catalog estimate. Unknown-but-measured servers count
+    /// here and in `unknown`, and their exact numbers ARE in the totals.
+    pub measured: usize,
     pub cold: u64,
     pub warm: u64,
     pub tool_search: u64,
@@ -572,8 +593,40 @@ struct McpServer {
 }
 
 /// Analyze an MCP config (JSON or JSONC) for `provider`. Detects the client
-/// shape automatically.
+/// shape automatically. Every server is priced from the curated catalog;
+/// use [`analyze_with_inventories`] to supersede catalog estimates with
+/// exact tokenized manifests.
 pub fn analyze(config_text: &str, provider: Provider) -> Result<McpAnalysis, String> {
+    analyze_with_inventories(config_text, provider, &BTreeMap::new())
+}
+
+/// Names of the servers in an MCP config, in the analyzer's iteration order
+/// (serde_json's map sorts keys, so this is name order, deterministic). Lets
+/// a caller validate a tools/list attachment target before tokenizing.
+pub fn server_names(config_text: &str) -> Result<Vec<String>, String> {
+    let cleaned = strip_jsonc(config_text);
+    let value: Value = serde_json::from_str(&cleaned)
+        .map_err(|e| format!("could not parse config as JSON/JSONC: {e}"))?;
+    let (_, servers_val) = locate_servers(&value).ok_or_else(|| {
+        "no MCP servers found (expected a mcpServers, servers, or context_servers object)"
+            .to_string()
+    })?;
+    Ok(parse_servers(servers_val)
+        .into_iter()
+        .map(|s| s.name)
+        .collect())
+}
+
+/// Analyze an MCP config with exact tool inventories attached to some servers
+/// (keyed by the server name exactly as it appears in the config). Servers
+/// with an inventory report exact tokenized-manifest counts that supersede
+/// the catalog estimate; everything else keeps the catalog path. Errors when
+/// an inventory key matches no server in the config.
+pub fn analyze_with_inventories(
+    config_text: &str,
+    provider: Provider,
+    inventories: &BTreeMap<String, ToolInventory>,
+) -> Result<McpAnalysis, String> {
     let cleaned = strip_jsonc(config_text);
     let value: Value = serde_json::from_str(&cleaned)
         .map_err(|e| format!("could not parse config as JSON/JSONC: {e}"))?;
@@ -587,127 +640,289 @@ pub fn analyze(config_text: &str, provider: Provider) -> Result<McpAnalysis, Str
     if servers.is_empty() {
         return Err("the config has a server section but no servers in it".to_string());
     }
-
-    let rate = pricing::default_for(provider).input;
-    let per_million = |t: u64| (t as f64) / 1_000_000.0 * rate;
-
-    let mut reports = Vec::with_capacity(servers.len());
-    let (mut t_cold, mut t_warm, mut t_search, mut t_cap, mut t_save) =
-        (0u64, 0u64, 0u64, 0u64, 0u64);
-    let mut t_slim = 0u64;
-    let (mut matched, mut unknown) = (0usize, 0usize);
-    let mut any_no_filtering = false;
-
-    for s in &servers {
-        let haystack = format!(
-            "{} {} {} {}",
-            s.name,
-            s.command.clone().unwrap_or_default(),
-            s.args.join(" "),
-            s.url.clone().unwrap_or_default()
-        )
-        .to_lowercase();
-
-        match match_catalog(&haystack) {
-            Some(entry) => {
-                matched += 1;
-                if entry.no_filtering {
-                    any_no_filtering = true;
-                }
-
-                // Already-slimmed configs pay less than the catalog default:
-                // scale the cold estimate down by the slim reduction before
-                // any scenario or savings math.
-                let already_slimmed = entry.slim.as_ref().is_some_and(|spec| spec.detected(s));
-                let cold_tokens = if already_slimmed {
-                    let pct = entry.slim.as_ref().map_or(0, |spec| spec.est_reduction_pct);
-                    (u64::from(entry.cold_tokens) * u64::from(100 - pct.min(100)) / 100) as u32
-                } else {
-                    entry.cold_tokens
-                };
-
-                let sc = scenarios(provider, entry.tools, cold_tokens);
-                let savings =
-                    if entry.recommendation.replaceable() && entry.cli_alternative.is_some() {
-                        u64::from(cold_tokens)
-                    } else {
-                        0
-                    };
-                let slim = entry.slim.as_ref().map(|spec| {
-                    let est_tokens_saved = if already_slimmed {
-                        0
-                    } else {
-                        u64::from(cold_tokens) * u64::from(spec.est_reduction_pct) / 100
-                    };
-                    SlimRecommendation {
-                        already_slimmed,
-                        option: spec.to_option(),
-                        est_tokens_saved,
-                    }
-                });
-
-                let mut note = if entry.no_filtering {
-                    format!("{}{NO_FILTER_NOTE}", entry.note)
-                } else {
-                    entry.note.to_string()
-                };
-                if already_slimmed {
-                    let spec = entry.slim.as_ref().expect("already_slimmed implies slim");
-                    note.push_str(&format!(
-                        " Cold estimate adjusted down {}% because {} is already set in this config.",
-                        spec.est_reduction_pct, spec.mechanism
-                    ));
-                }
-
-                t_cold += sc.cold;
-                t_warm += sc.warm;
-                t_search += sc.tool_search;
-                t_cap += sc.capacity;
-                t_save += savings;
-                t_slim += slim.as_ref().map_or(0, |x| x.est_tokens_saved);
-                reports.push(ServerReport {
-                    name: s.name.clone(),
-                    matched_id: Some(entry.id.to_string()),
-                    display: entry.display.to_string(),
-                    transport: s.transport.clone(),
-                    tools: Some(entry.tools),
-                    cold_tokens: Some(cold_tokens),
-                    scenarios: Some(sc),
-                    cli_alternative: entry.cli_alternative.map(String::from),
-                    recommendation: entry.recommendation,
-                    note,
-                    savings_tokens: savings,
-                    savings_usd: per_million(savings),
-                    slim,
-                });
-            }
-            None => {
-                unknown += 1;
-                reports.push(ServerReport {
-                    name: s.name.clone(),
-                    matched_id: None,
-                    display: s.name.clone(),
-                    transport: s.transport.clone(),
-                    tools: None,
-                    cold_tokens: None,
-                    scenarios: None,
-                    cli_alternative: None,
-                    recommendation: Recommendation::Unknown,
-                    note: "Not in the catalog. Paste this server's tools/list output to get an exact count."
-                        .to_string(),
-                    savings_tokens: 0,
-                    savings_usd: 0.0,
-                    slim: None,
-                });
-            }
+    for key in inventories.keys() {
+        if !servers.iter().any(|s| &s.name == key) {
+            let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
+            return Err(format!(
+                "tools/list inventory targets server \"{key}\" but the config has: {}",
+                names.join(", ")
+            ));
         }
     }
 
-    let mut notes = vec![
-        "Cold-cache token costs are representative catalog estimates. Paste a server's tools/list for an exact count.".to_string(),
+    let reports: Vec<ServerReport> = servers
+        .iter()
+        .map(|s| {
+            let haystack = format!(
+                "{} {} {} {}",
+                s.name,
+                s.command.clone().unwrap_or_default(),
+                s.args.join(" "),
+                s.url.clone().unwrap_or_default()
+            )
+            .to_lowercase();
+            build_report(
+                s,
+                match_catalog(&haystack),
+                inventories.get(&s.name),
+                provider,
+            )
+        })
+        .collect();
+
+    Ok(assemble(client.to_string(), provider, reports))
+}
+
+/// Wrap a single tokenized tool inventory in the standard analysis shape:
+/// one server named `server_name`, matched against the catalog by name so
+/// swap and slim recommendations still attach when the name is recognizable.
+/// This is the no-config path ("here is a tools/list manifest, analyze it").
+pub fn analysis_from_inventory(
+    server_name: &str,
+    provider: Provider,
+    inventory: ToolInventory,
+) -> McpAnalysis {
+    let server = McpServer {
+        name: server_name.to_string(),
+        command: None,
+        args: Vec::new(),
+        url: None,
+        transport: "manifest".to_string(),
+        env_keys: Vec::new(),
+    };
+    let haystack = server_name.to_lowercase();
+    let report = build_report(
+        &server,
+        match_catalog(&haystack),
+        Some(&inventory),
+        provider,
+    );
+    assemble(
+        "tools/list manifest (single server)".to_string(),
+        provider,
+        vec![report],
+    )
+}
+
+/// Build one server's report from its catalog entry (if matched) and exact
+/// inventory (if supplied). The four combinations share this single path so
+/// the basis labeling can never drift between them.
+fn build_report(
+    s: &McpServer,
+    entry: Option<&'static CatalogEntry>,
+    inventory: Option<&ToolInventory>,
+    provider: Provider,
+) -> ServerReport {
+    let rate = pricing::default_for(provider).input;
+    let per_million = |t: u64| (t as f64) / 1_000_000.0 * rate;
+
+    match (entry, inventory) {
+        (Some(entry), None) => {
+            // Catalog estimate path, unchanged semantics.
+            let already_slimmed = entry.slim.as_ref().is_some_and(|spec| spec.detected(s));
+            let cold_tokens = if already_slimmed {
+                let pct = entry.slim.as_ref().map_or(0, |spec| spec.est_reduction_pct);
+                (u64::from(entry.cold_tokens) * u64::from(100 - pct.min(100)) / 100) as u32
+            } else {
+                entry.cold_tokens
+            };
+
+            let sc = scenarios(provider, entry.tools, cold_tokens);
+            let savings = if entry.recommendation.replaceable() && entry.cli_alternative.is_some()
+            {
+                u64::from(cold_tokens)
+            } else {
+                0
+            };
+            let slim = entry.slim.as_ref().map(|spec| {
+                let est_tokens_saved = if already_slimmed {
+                    0
+                } else {
+                    u64::from(cold_tokens) * u64::from(spec.est_reduction_pct) / 100
+                };
+                SlimRecommendation {
+                    already_slimmed,
+                    option: spec.to_option(),
+                    est_tokens_saved,
+                }
+            });
+
+            let mut note = if entry.no_filtering {
+                format!("{}{NO_FILTER_NOTE}", entry.note)
+            } else {
+                entry.note.to_string()
+            };
+            if already_slimmed {
+                let spec = entry.slim.as_ref().expect("already_slimmed implies slim");
+                note.push_str(&format!(
+                    " Cold estimate adjusted down {}% because {} is already set in this config.",
+                    spec.est_reduction_pct, spec.mechanism
+                ));
+            }
+
+            ServerReport {
+                name: s.name.clone(),
+                matched_id: Some(entry.id.to_string()),
+                display: entry.display.to_string(),
+                transport: s.transport.clone(),
+                tools: Some(entry.tools),
+                cold_tokens: Some(cold_tokens),
+                scenarios: Some(sc),
+                cli_alternative: entry.cli_alternative.map(String::from),
+                recommendation: entry.recommendation,
+                note,
+                savings_tokens: savings,
+                savings_usd: per_million(savings),
+                slim,
+                basis: BASIS_CATALOG.to_string(),
+                tools_detail: None,
+            }
+        }
+        (entry, Some(inv)) => {
+            // Exact tokenized-manifest path: the manifest is the measured
+            // truth, so no already-slimmed downscaling applies (whatever
+            // filtering the config carries is already reflected in the
+            // manifest the server emitted).
+            let cold_tokens = u32::try_from(inv.total_tokens).unwrap_or(u32::MAX);
+            let sc = scenarios(provider, inv.tool_count, cold_tokens);
+            let (recommendation, cli_alternative, display, matched_id) = match entry {
+                Some(e) => (
+                    e.recommendation,
+                    e.cli_alternative.map(String::from),
+                    e.display.to_string(),
+                    Some(e.id.to_string()),
+                ),
+                None => (Recommendation::Unknown, None, s.name.clone(), None),
+            };
+            let savings = if recommendation.replaceable() && cli_alternative.is_some() {
+                u64::from(cold_tokens)
+            } else {
+                0
+            };
+            let slim = entry.and_then(|e| e.slim.as_ref()).map(|spec| {
+                let already_slimmed = spec.detected(s);
+                let est_tokens_saved = if already_slimmed {
+                    0
+                } else {
+                    u64::from(cold_tokens) * u64::from(spec.est_reduction_pct) / 100
+                };
+                SlimRecommendation {
+                    already_slimmed,
+                    option: spec.to_option(),
+                    est_tokens_saved,
+                }
+            });
+
+            let mut note = match entry {
+                Some(e) if e.no_filtering => format!("{}{NO_FILTER_NOTE}", e.note),
+                Some(e) => e.note.to_string(),
+                None => "Not in the catalog.".to_string(),
+            };
+            note.push_str(
+                " Exact counts from the supplied tools/list manifest supersede the catalog estimate for this server.",
+            );
+            if slim.as_ref().is_some_and(|x| x.est_tokens_saved > 0) {
+                note.push_str(
+                    " The slim figure applies the catalog's estimated reduction percentage to the measured total; re-run with a manifest captured from the slimmed server for an exact slim count.",
+                );
+            }
+
+            ServerReport {
+                name: s.name.clone(),
+                matched_id,
+                display,
+                transport: s.transport.clone(),
+                tools: Some(inv.tool_count),
+                cold_tokens: Some(cold_tokens),
+                scenarios: Some(sc),
+                cli_alternative,
+                recommendation,
+                note,
+                savings_tokens: savings,
+                savings_usd: per_million(savings),
+                slim,
+                basis: inv.basis.clone(),
+                tools_detail: Some(inv.clone()),
+            }
+        }
+        (None, None) => ServerReport {
+            name: s.name.clone(),
+            matched_id: None,
+            display: s.name.clone(),
+            transport: s.transport.clone(),
+            tools: None,
+            cold_tokens: None,
+            scenarios: None,
+            cli_alternative: None,
+            recommendation: Recommendation::Unknown,
+            note: "Not in the catalog. Save this server's tools/list output as JSON and re-run with --tools-list <path> (or pass the manifest file directly) for exact tokenized counts."
+                .to_string(),
+            savings_tokens: 0,
+            savings_usd: 0.0,
+            slim: None,
+            basis: BASIS_NONE.to_string(),
+            tools_detail: None,
+        },
+    }
+}
+
+/// Fold per-server reports into totals and analysis-level notes.
+fn assemble(client: String, provider: Provider, reports: Vec<ServerReport>) -> McpAnalysis {
+    let rate = pricing::default_for(provider).input;
+    let per_million = |t: u64| (t as f64) / 1_000_000.0 * rate;
+
+    let (mut t_cold, mut t_warm, mut t_search, mut t_cap, mut t_save) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut t_slim = 0u64;
+    let (mut matched, mut unknown, mut measured) = (0usize, 0usize, 0usize);
+    let mut uncounted_unknown = 0usize;
+    let mut any_no_filtering = false;
+    let mut any_catalog_priced = false;
+
+    for r in &reports {
+        if r.matched_id.is_some() {
+            matched += 1;
+        } else {
+            unknown += 1;
+            if r.tools_detail.is_none() {
+                uncounted_unknown += 1;
+            }
+        }
+        if r.tools_detail.is_some() {
+            measured += 1;
+        } else if r.matched_id.is_some() {
+            any_catalog_priced = true;
+        }
+        if r.note.contains("No native tool filtering") {
+            any_no_filtering = true;
+        }
+        if let Some(sc) = &r.scenarios {
+            t_cold += sc.cold;
+            t_warm += sc.warm;
+            t_search += sc.tool_search;
+            t_cap += sc.capacity;
+        }
+        t_save += r.savings_tokens;
+        t_slim += r.slim.as_ref().map_or(0, |x| x.est_tokens_saved);
+    }
+
+    let mut notes = Vec::new();
+    if any_catalog_priced {
+        notes.push(
+            "Cold-cache token costs for catalog-matched servers are representative estimates. Supply a server's tools/list (CLI: --tools-list <path>, or pass the manifest file directly) for exact tokenized counts.".to_string(),
+        );
+    }
+    if measured > 0 {
+        notes.push(
+            "Servers labeled \"tokenized manifest\" carry exact counts of the supplied tools/list (each tool serialized compactly as {name, description, input_schema}) and supersede catalog estimates. Estimates and exact counts are never blended into one figure.".to_string(),
+        );
+    }
+    notes.push(
         "Tool Search (defer-loading) collapses tool definitions to a roughly 500-token stub plus a few tools loaded on demand.".to_string(),
+    );
+    notes.push(
         "Savings are input-token-bounded: swapping an MCP server for its CLI frees the tool-definition budget, but the agent must already know the CLI.".to_string(),
-    ];
+    );
     if t_slim > 0 {
         notes.push(
             "Slim savings assume you keep the server and register fewer tools. For a server that also has a CLI swap, the swap is the primary recommendation and slim is the fallback; never add the two figures for the same server.".to_string(),
@@ -718,16 +933,17 @@ pub fn analyze(config_text: &str, provider: Provider) -> Result<McpAnalysis, Str
             "Some servers here have no native tool filtering. The client-side lever is MCP tool search: Claude Code 2.1 ships it on by default (ENABLE_TOOL_SEARCH, with a per-server alwaysLoad opt-out), and the Claude API equivalent is the tool search tool with per-tool defer_loading: true. Cursor and VS Code expose per-tool toggles in their UIs.".to_string(),
         );
     }
-    if unknown > 0 {
+    if uncounted_unknown > 0 {
         notes.push(format!(
-            "{unknown} server(s) were not recognized and are excluded from the totals."
+            "{uncounted_unknown} server(s) were not recognized and are excluded from the totals."
         ));
     }
 
     let totals = McpTotals {
-        servers: servers.len(),
+        servers: reports.len(),
         matched,
         unknown,
+        measured,
         cold: t_cold,
         warm: t_warm,
         tool_search: t_search,
@@ -740,16 +956,16 @@ pub fn analyze(config_text: &str, provider: Provider) -> Result<McpAnalysis, Str
         slim_savings_usd: per_million(t_slim),
     };
 
-    Ok(McpAnalysis {
-        client: client.to_string(),
+    McpAnalysis {
+        client,
         provider,
         servers: reports,
         totals,
         notes,
-    })
+    }
 }
 
-fn scenarios(provider: Provider, tools: u32, cold: u32) -> Scenarios {
+pub(crate) fn scenarios(provider: Provider, tools: u32, cold: u32) -> Scenarios {
     // Cold and warm multipliers derive from the pricing table so this surface
     // stays in sync with the cost calculator. Cold is the first-turn cache
     // write surcharge (cache_write_5m / input, 1.0 when the provider does
@@ -867,8 +1083,9 @@ fn parse_one(name: &str, obj: &Value) -> McpServer {
 /// Strip `//` and `/* */` comments and trailing commas so common JSONC configs
 /// (VS Code, Cursor, Zed) parse with serde_json. String-aware, so delimiters
 /// inside string values are preserved. Byte-level but UTF-8 safe: multibyte
-/// sequences inside strings are copied verbatim.
-fn strip_jsonc(s: &str) -> String {
+/// sequences inside strings are copied verbatim. Crate-visible so the
+/// tools/list parser (mcp_tools.rs) gets the same paste resilience.
+pub(crate) fn strip_jsonc(s: &str) -> String {
     let b = s.as_bytes();
     let n = b.len();
     let mut out: Vec<u8> = Vec::with_capacity(n);
@@ -1325,6 +1542,191 @@ mod tests {
         // The computed Tool Search scenario stays the canonical figure.
         let sc = gh.scenarios.as_ref().unwrap();
         assert_eq!(sc.tool_search, 500 + 5 * 600);
+    }
+
+    fn sample_inventory(total: u64, count: u32) -> ToolInventory {
+        use crate::mcp_tools::{analyze_tool_inventory, ToolTokenCount};
+        // Spread the total over `count` synthetic tools; remainder on the
+        // first tool so the sum is exact.
+        let base = total / u64::from(count);
+        let mut tools: Vec<ToolTokenCount> = (0..count)
+            .map(|i| ToolTokenCount {
+                name: format!("tool_{i}"),
+                description: format!("Get item {i} from the store. Returns JSON."),
+                tokens: base,
+                description_tokens: 9,
+            })
+            .collect();
+        tools[0].tokens += total - base * u64::from(count);
+        analyze_tool_inventory(&tools, "o200k_base").unwrap()
+    }
+
+    #[test]
+    fn inventory_supersedes_catalog_for_that_server() {
+        let inv = sample_inventory(5_049, 14);
+        let mut map = BTreeMap::new();
+        map.insert("files".to_string(), inv);
+        let a = analyze_with_inventories(CLAUDE_DESKTOP, Provider::Anthropic, &map).unwrap();
+
+        let files = a.servers.iter().find(|s| s.name == "files").unwrap();
+        // Catalog says filesystem cold is 2_000; the manifest says 5_049.
+        assert_eq!(files.cold_tokens, Some(5_049));
+        assert_eq!(files.tools, Some(14));
+        assert_eq!(files.basis, "tokenized manifest (o200k_base)");
+        assert!(files.tools_detail.is_some());
+        assert!(files.note.contains("supersede the catalog estimate"));
+        // Replaceable, so swap savings equal the exact cold.
+        assert_eq!(files.savings_tokens, 5_049);
+
+        // The github server keeps the catalog path and label.
+        let gh = a.servers.iter().find(|s| s.name == "github").unwrap();
+        assert_eq!(gh.basis, "catalog estimate (representative)");
+        assert!(gh.tools_detail.is_none());
+
+        // Totals mix correctly: capacity = 40_000 catalog + 5_049 exact.
+        assert_eq!(a.totals.capacity, 45_049);
+        assert_eq!(a.totals.measured, 1);
+        assert_eq!(a.totals.matched, 2);
+        // Both basis notes present for the mixed analysis.
+        assert!(a
+            .notes
+            .iter()
+            .any(|n| n.contains("representative estimates")));
+        assert!(a.notes.iter().any(|n| n.contains("never blended")));
+    }
+
+    #[test]
+    fn inventory_for_unknown_server_is_counted() {
+        let cfg = r#"{ "mcpServers": { "homegrown": { "command": "node", "args": ["./my-server.js"] } } }"#;
+        let inv = sample_inventory(1_200, 3);
+        let mut map = BTreeMap::new();
+        map.insert("homegrown".to_string(), inv);
+        let a = analyze_with_inventories(cfg, Provider::Anthropic, &map).unwrap();
+        let s = &a.servers[0];
+        assert_eq!(s.recommendation, Recommendation::Unknown);
+        assert_eq!(s.cold_tokens, Some(1_200));
+        assert_eq!(a.totals.capacity, 1_200);
+        assert_eq!(a.totals.unknown, 1);
+        assert_eq!(a.totals.measured, 1);
+        // Measured unknowns are not "excluded from the totals".
+        assert!(!a
+            .notes
+            .iter()
+            .any(|n| n.contains("excluded from the totals")));
+    }
+
+    #[test]
+    fn inventory_key_must_match_a_server() {
+        let inv = sample_inventory(100, 1);
+        let mut map = BTreeMap::new();
+        map.insert("nope".to_string(), inv);
+        let err = analyze_with_inventories(CLAUDE_DESKTOP, Provider::Anthropic, &map).unwrap_err();
+        assert!(err.contains("nope"));
+        assert!(err.contains("github"));
+    }
+
+    #[test]
+    fn inventory_skips_already_slimmed_downscale() {
+        // GITHUB_TOOLSETS is set, but the manifest is the measured truth:
+        // no downscaling, no adjustment note, slim est 0 (already slimmed).
+        let cfg = r#"{ "mcpServers": { "github": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": { "GITHUB_TOOLSETS": "repos,issues" }
+        } } }"#;
+        let inv = sample_inventory(9_000, 27);
+        let mut map = BTreeMap::new();
+        map.insert("github".to_string(), inv);
+        let a = analyze_with_inventories(cfg, Provider::Anthropic, &map).unwrap();
+        let gh = &a.servers[0];
+        assert_eq!(gh.cold_tokens, Some(9_000));
+        assert!(!gh.note.contains("Cold estimate adjusted down"));
+        let slim = gh.slim.as_ref().unwrap();
+        assert!(slim.already_slimmed);
+        assert_eq!(slim.est_tokens_saved, 0);
+    }
+
+    #[test]
+    fn inventory_slim_estimate_is_labeled_mixed_basis() {
+        let inv = sample_inventory(13_700, 43);
+        let mut map = BTreeMap::new();
+        map.insert("github".to_string(), inv);
+        let a = analyze_with_inventories(CLAUDE_DESKTOP, Provider::Anthropic, &map).unwrap();
+        let gh = a.servers.iter().find(|s| s.name == "github").unwrap();
+        let slim = gh.slim.as_ref().unwrap();
+        // 50% of the measured 13_700.
+        assert_eq!(slim.est_tokens_saved, 6_850);
+        assert!(gh
+            .note
+            .contains("applies the catalog's estimated reduction percentage"));
+    }
+
+    #[test]
+    fn server_names_lists_deterministic_name_order() {
+        let names = server_names(CLAUDE_DESKTOP).unwrap();
+        assert_eq!(names, vec!["files".to_string(), "github".to_string()]);
+        assert!(server_names(r#"{ "foo": 1 }"#).is_err());
+    }
+
+    #[test]
+    fn analysis_from_inventory_matches_catalog_by_name() {
+        let inv = sample_inventory(5_049, 14);
+        let a = analysis_from_inventory("server-filesystem", Provider::Anthropic, inv);
+        assert_eq!(a.client, "tools/list manifest (single server)");
+        assert_eq!(a.totals.servers, 1);
+        assert_eq!(a.totals.measured, 1);
+        let s = &a.servers[0];
+        assert_eq!(s.matched_id.as_deref(), Some("filesystem"));
+        assert_eq!(s.recommendation, Recommendation::Replace);
+        assert_eq!(s.cold_tokens, Some(5_049));
+        assert_eq!(s.savings_tokens, 5_049);
+        assert_eq!(s.basis, "tokenized manifest (o200k_base)");
+        let sc = s.scenarios.as_ref().unwrap();
+        assert_eq!(sc.capacity, 5_049);
+        // Anthropic cold surcharge applies to the exact total.
+        let (cold_mult, _) = cache_multipliers(Provider::Anthropic);
+        assert_eq!(sc.cold, (5_049.0 * cold_mult).round() as u64);
+    }
+
+    #[test]
+    fn analysis_from_inventory_unmatched_name_stays_unknown() {
+        let inv = sample_inventory(900, 2);
+        let a = analysis_from_inventory("homegrown-tools", Provider::Anthropic, inv);
+        let s = &a.servers[0];
+        assert_eq!(s.matched_id, None);
+        assert_eq!(s.recommendation, Recommendation::Unknown);
+        assert_eq!(s.cold_tokens, Some(900));
+        assert_eq!(s.savings_tokens, 0);
+        assert_eq!(a.totals.capacity, 900);
+    }
+
+    #[test]
+    fn unknown_server_prompt_points_at_tools_list_flag() {
+        let cfg = r#"{ "mcpServers": { "homegrown": { "command": "node", "args": ["./my-server.js"] } } }"#;
+        let a = analyze(cfg, Provider::Anthropic).unwrap();
+        assert!(a.servers[0].note.contains("--tools-list"));
+        assert_eq!(a.servers[0].basis, BASIS_NONE);
+    }
+
+    #[test]
+    fn basis_and_measured_serialize() {
+        let inv = sample_inventory(100, 1);
+        let a = analysis_from_inventory("server-memory", Provider::Anthropic, inv);
+        let json = serde_json::to_string(&a).unwrap();
+        for key in [
+            "\"basis\"",
+            "\"tools_detail\"",
+            "\"measured\"",
+            "\"smells\"",
+        ] {
+            assert!(json.contains(key), "missing {key}");
+        }
+        // The no-manifest output omits tools_detail entirely (shape parity
+        // with previous releases).
+        let plain = analyze(CLAUDE_DESKTOP, Provider::Anthropic).unwrap();
+        let plain_json = serde_json::to_string(&plain).unwrap();
+        assert!(!plain_json.contains("tools_detail"));
+        assert!(plain_json.contains("\"basis\""));
     }
 
     #[test]
