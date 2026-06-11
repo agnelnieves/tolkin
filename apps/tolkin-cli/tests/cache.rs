@@ -370,3 +370,99 @@ fn stats_json_gains_additive_cache_block_without_moving_keys() {
     assert_eq!(cache["write_churn"]["total_write_tokens"], 12_000);
     assert_eq!(cache["ttl_counterfactual"]["label"], "advisory estimate");
 }
+
+/// Subagent transcripts written under `<session>/subagents/agent-*.jsonl`
+/// must enter measured totals AND register as their own cache-analysis
+/// streams. This integration test seeds a parent session plus a subagent
+/// transcript on the same cwd and asserts that the binary's stats + cache
+/// outputs include the subagent's tokens.
+#[test]
+fn subagent_transcripts_enter_measured_totals_and_cache_analysis() {
+    let data = tmp("sub-data");
+    let home = tmp("sub-home");
+    seed_config(&data, true);
+
+    // Parent session: one write of 5000 (1h TTL).
+    let proj = home.join(".claude").join("projects").join("synthetic");
+    fs::create_dir_all(&proj).unwrap();
+    fs::write(
+        proj.join("sess.jsonl"),
+        record("mp1", "rp1", "2026-06-10T12:00:00Z", 100, 0, 0, 5_000),
+    )
+    .unwrap();
+
+    // Subagent: two records on the same cwd, with its own write + read.
+    let sub_dir = proj.join("sess").join("subagents");
+    fs::create_dir_all(&sub_dir).unwrap();
+    let sub_lines = [
+        record("ms1", "rs1", "2026-06-10T12:00:30Z", 50, 0, 1_500, 0),
+        record("ms2", "rs2", "2026-06-10T12:01:00Z", 25, 1_500, 0, 0),
+    ];
+    fs::write(sub_dir.join("agent-aaa.jsonl"), sub_lines.join("\n")).unwrap();
+
+    // A meta.json companion that MUST be ignored.
+    fs::write(
+        sub_dir.join("agent-aaa.meta.json"),
+        r#"{"agentId":"agent-aaa"}"#,
+    )
+    .unwrap();
+
+    let out = cmd(&data, &home)
+        .args(["cache", "--global", "--json"])
+        .output()
+        .expect("binary runs");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+
+    let cache = &v["cache"];
+    // Parent stream + subagent stream = 2 sessions analyzed by the cache.
+    assert_eq!(cache["sessions_analyzed"], 2);
+    // 3 requests total: parent's 1 + subagent's 2.
+    assert_eq!(cache["requests_analyzed"], 3);
+
+    // Observed writes include the subagent's 5m write (1500); the parent's
+    // 1h write (5000) is also there.
+    let ttl = &cache["ttl_counterfactual"];
+    assert_eq!(ttl["observed_write_tokens_5m"], 1_500);
+    assert_eq!(ttl["observed_write_tokens_1h"], 5_000);
+
+    // Cache reads include the subagent's read; input_side_tokens sums both
+    // streams.
+    let hr = &cache["hit_rate"];
+    assert_eq!(hr["cache_read_tokens"], 1_500);
+
+    // No em-dash or en-dash anywhere in the output.
+    assert!(!stdout.contains('\u{2014}'));
+    assert!(!stdout.contains('\u{2013}'));
+
+    // Stats --json should expose both rows via sessions_scanned (parent +
+    // subagent stream = 2). Stats needs a ledger record to produce JSON, so
+    // seed one for the same cwd.
+    fs::write(
+        data.join("ledger.jsonl"),
+        concat!(
+            r#"{"v":2,"ts":1781100000,"command":"project","project_key":"/work/proj-cache","#,
+            r#""headline":{"always_tokens":1000,"reclaimable_min":10,"reclaimable_max":20},"#,
+            r#""tolkin_version":"test","prices_observed":"test"}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let out2 = cmd(&data, &home)
+        .args(["stats", "--global", "--json"])
+        .output()
+        .expect("binary runs");
+    assert!(
+        out2.status.success(),
+        "stats stderr: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+    let v2: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out2.stdout)).expect("valid JSON");
+    assert_eq!(v2["ingestion"]["sessions_scanned"], 2);
+}

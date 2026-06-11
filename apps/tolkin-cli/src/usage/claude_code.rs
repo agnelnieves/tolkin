@@ -1,14 +1,54 @@
 //! Claude Code session log reader.
 //!
-//! Layout: `<projects_dir>/<slug>/<session_id>.jsonl`. Each assistant record
-//! carries `cwd`, `requestId`, `timestamp`, `message.id`, `message.model`, and
-//! `message.usage`. We attribute by the per-record `cwd` (NOT by reversing the
-//! directory slug) because users `cd` mid-session.
+//! # Layout
 //!
-//! Two-stage ingestion. Stage one parses one file and returns its within-file
-//! last-wins deduped records. Stage two merges every file's records into one
-//! global dedup map keyed on (`message.id`, `requestId`), then groups winners
-//! by (session_id, cwd) into [`SessionUsage`].
+//! Parent sessions:
+//!   `<projects_dir>/<slug>/<session_id>.jsonl`
+//!
+//! Subagent streams (Task-tool fan-out, one file per spawned subagent):
+//!   `<projects_dir>/<slug>/<session_id>/subagents/agent-<agent_id>.jsonl`
+//!
+//! Both shapes carry assistant records with the same field set: `cwd`,
+//! `requestId`, `timestamp`, `message.id`, `message.model`, `message.usage`.
+//! We attribute by the per-record `cwd` (NOT by reversing the directory
+//! slug) because users `cd` mid-session, and subagent records observed in
+//! the wild ALWAYS carry their own `cwd` (a 47-session, 299-file, 13.8K
+//! record probe found zero records missing the field). If a subagent ever
+//! ships without `cwd` we fall through the same "extract returns None"
+//! gate used by parent records, so no special-cased fallback is required.
+//!
+//! # Why subagents are their own SessionUsage rows
+//!
+//! Each subagent file is its own prompt stream: its own system prompt, its
+//! own growing prefix, its own cache lifetime. Folding subagent requests
+//! into the parent session's request vector would interleave unrelated
+//! prefixes and corrupt churn / TTL / gap math. So we emit one SessionUsage
+//! per subagent file. The discrimination lives in
+//! [`UsageData::subagent_session_keys`] (not on SessionUsage itself, so
+//! downstream code that already constructs SessionUsage via struct
+//! literals stays unchanged). The headline "working session" count uses
+//! `UsageData::parent_session_count()`; the fan-out spend is reachable via
+//! `subagent_stream_count()`.
+//!
+//! # Disjointness with parent records
+//!
+//! Subagent transcripts are written from the subagent's own request/response
+//! stream, not duplicated into the parent session jsonl. An exhaustive
+//! probe of one workstation's logs (47 parent sessions with subagents,
+//! 299 subagent files) found zero (`message.id`, `requestId`) overlap
+//! between any parent and any subagent. The global last-wins dedup spans
+//! BOTH file kinds anyway, so a future Claude Code release that DID
+//! duplicate records would collapse safely under the existing winner
+//! rule; the unit test `subagent_records_disjoint_from_parent_in_practice`
+//! pins the observed shape and a synthetic-collision test exercises the
+//! dedup-collapses-collision path.
+//!
+//! # Two-stage ingestion
+//!
+//! Stage one parses one file and returns its within-file last-wins deduped
+//! records. Stage two merges every file's records (parent and subagent)
+//! into one global dedup map keyed on (`message.id`, `requestId`), then
+//! groups winners by (is_subagent, file stem, cwd) into [`SessionUsage`].
 //!
 //! Within-file dedup contract: streaming writes emit 3 to 4 intermediate
 //! snapshots with the same (`message.id`, `requestId`) pair where
@@ -63,11 +103,16 @@ pub struct DedupedRecord {
     pub usage: UsageTotals,
 }
 
-/// Walks `<projects_dir>/*/*.jsonl`. Missing or unreadable dir produces an
-/// empty UsageData. One file may contribute multiple SessionUsage records
-/// (one per distinct surviving cwd inside it). Runs stage one per file and
-/// stage two over the combined record set; the cache layer can reuse stage
-/// one and feed stage two from cached records.
+/// Walks parent session files and subagent transcripts:
+///
+///   `<projects_dir>/<slug>/*.jsonl`                       (parent sessions)
+///   `<projects_dir>/<slug>/<session>/subagents/agent-*.jsonl`  (subagents)
+///
+/// Missing or unreadable dir produces an empty UsageData. One file may
+/// contribute multiple SessionUsage records (one per distinct surviving cwd
+/// inside it). Runs stage one per file and stage two over the combined
+/// record set; the cache layer can reuse stage one and feed stage two from
+/// cached records.
 #[allow(dead_code)] // direct no-cache entry, exercised by tests; production path is cache::read_all_cached
 pub fn read(projects_dir: &Path) -> UsageData {
     let mut data = UsageData::default();
@@ -88,6 +133,34 @@ pub fn read(projects_dir: &Path) -> UsageData {
         };
         for f in files.flatten() {
             let path = f.path();
+            if path.is_dir() {
+                // A `<session_id>/` directory beside its `<session_id>.jsonl`
+                // file holds subagent transcripts under `subagents/`. Other
+                // sibling subdirectories (none observed today; left harmless)
+                // are ignored.
+                let subagents_dir = path.join("subagents");
+                if subagents_dir.is_dir() {
+                    let Ok(subs) = fs::read_dir(&subagents_dir) else {
+                        continue;
+                    };
+                    for sub in subs.flatten() {
+                        let sub_path = sub.path();
+                        if !is_subagent_jsonl(&sub_path) {
+                            // Subagent dirs sometimes carry `*.meta.json`
+                            // companions; skip everything but the jsonl
+                            // streams the parser is built for.
+                            continue;
+                        }
+                        let records = parse_file_records(
+                            &sub_path,
+                            &mut data.skipped_lines,
+                            &mut data.skipped_files,
+                        );
+                        per_file.push((sub_path, records));
+                    }
+                }
+                continue;
+            }
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
@@ -98,6 +171,33 @@ pub fn read(projects_dir: &Path) -> UsageData {
     }
     aggregate_records(per_file, &mut data);
     data
+}
+
+/// Returns true for `agent-<id>.jsonl` files inside a `subagents/` dir.
+/// Excludes the `.meta.json` companions Claude Code drops next to each
+/// subagent transcript.
+pub fn is_subagent_jsonl(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    name.starts_with("agent-") && name.ends_with(".jsonl")
+}
+
+/// Inspect a file path and return the parent_session_id if the path
+/// matches the subagent layout (`.../<parent_session_id>/subagents/agent-*.jsonl`),
+/// or None for a parent session file. Used by stage two to tag each
+/// SessionUsage with its provenance without re-walking directories.
+pub fn parent_session_id_from_path(path: &Path) -> Option<String> {
+    // We need to detect that the immediate grandparent dir is "subagents".
+    let parent = path.parent()?;
+    if parent.file_name().and_then(|n| n.to_str()) != Some("subagents") {
+        return None;
+    }
+    let grandparent = parent.parent()?;
+    grandparent
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
 }
 
 /// Stage one: parse one Claude Code session JSONL into its within-file
@@ -167,15 +267,26 @@ pub fn parse_file_records(
 }
 
 /// Stage two: merge per-file deduped records globally on (message_id,
-/// request_id), then group winners by (session_id, cwd) into SessionUsage.
+/// request_id), then group winners by (is_subagent, session_id, cwd) into
+/// SessionUsage.
 ///
 /// Winner rule across files for the same key:
 /// 1. larger `ts` wins;
 /// 2. tie on `ts`: larger `output_tokens` wins;
 /// 3. further tie: lexicographically first file path wins.
 ///
-/// Each file's session_id is its path stem. Inputs are taken by value because
-/// the cache layer fills them by cloning out of cache entries already.
+/// Each file contributes its `session_id` as follows:
+/// - parent session file stem (e.g. `<uuid>.jsonl` -> `<uuid>`), or
+/// - subagent file stem (e.g. `agent-<id>.jsonl` -> `agent-<id>`).
+///
+/// Subagent-derived SessionUsage rows are recorded in
+/// `UsageData::subagent_session_keys` and the originating parent's id is
+/// recorded in `UsageData::subagent_parent_ids`, so a surface can present
+/// fan-out spend without conflating it with the parent's working-session
+/// count. The SessionUsage struct itself stays unchanged (the
+/// discrimination lives next to the collection it discriminates, not on
+/// every member). Inputs are taken by value because the cache layer fills
+/// them by cloning out of cache entries already.
 pub fn aggregate_records(per_file: Vec<(PathBuf, Vec<DedupedRecord>)>, data: &mut UsageData) {
     // Stable file-path sort so the tie-break is deterministic. The outer Vec
     // is the only source of "which file did this come from" information, so
@@ -189,6 +300,8 @@ pub fn aggregate_records(per_file: Vec<(PathBuf, Vec<DedupedRecord>)>, data: &mu
         record: DedupedRecord,
         file_index: usize,
         session_id: String,
+        is_subagent: bool,
+        parent_session_id: Option<String>,
     }
     let mut winners: BTreeMap<(String, String), Winner> = BTreeMap::new();
     for (idx, (path, records)) in files.iter().enumerate() {
@@ -197,6 +310,8 @@ pub fn aggregate_records(per_file: Vec<(PathBuf, Vec<DedupedRecord>)>, data: &mu
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
+        let parent_session_id = parent_session_id_from_path(path);
+        let is_subagent = parent_session_id.is_some();
         for rec in records {
             let key = (rec.message_id.clone(), rec.request_id.clone());
             match winners.get(&key) {
@@ -207,6 +322,8 @@ pub fn aggregate_records(per_file: Vec<(PathBuf, Vec<DedupedRecord>)>, data: &mu
                             record: rec.clone(),
                             file_index: idx,
                             session_id: session_id.clone(),
+                            is_subagent,
+                            parent_session_id: parent_session_id.clone(),
                         },
                     );
                 }
@@ -218,6 +335,8 @@ pub fn aggregate_records(per_file: Vec<(PathBuf, Vec<DedupedRecord>)>, data: &mu
                                 record: rec.clone(),
                                 file_index: idx,
                                 session_id: session_id.clone(),
+                                is_subagent,
+                                parent_session_id: parent_session_id.clone(),
                             },
                         );
                     }
@@ -226,59 +345,89 @@ pub fn aggregate_records(per_file: Vec<(PathBuf, Vec<DedupedRecord>)>, data: &mu
         }
     }
 
-    // Group winners by (session_id, cwd) and emit SessionUsage rows in a
-    // deterministic order driven by the key.
-    let mut grouped: BTreeMap<(String, String), SessionUsage> = BTreeMap::new();
+    // Group winners by (is_subagent, session_id, cwd) and emit SessionUsage
+    // rows in a deterministic order driven by the key. The is_subagent flag
+    // bucket-discriminates parent vs subagent files that might share a stem
+    // only if a parent session was literally named `agent-<hex>` (vanishingly
+    // unlikely; the discriminator stays cheap insurance). We carry the
+    // parent_session_id alongside each grouped entry so the side-tables on
+    // UsageData can be populated after this loop without a second pass.
+    let mut grouped: BTreeMap<(bool, String, String), (SessionUsage, Option<String>)> =
+        BTreeMap::new();
     for winner in winners.into_values() {
         let totals = winner.record.usage;
-        let key = (winner.session_id.clone(), winner.record.cwd.clone());
-        let entry = grouped.entry(key).or_insert_with(|| SessionUsage {
-            source: UsageSource::ClaudeCode,
-            session_id: winner.session_id.clone(),
-            project_key: winner.record.cwd.clone(),
-            first_ts: winner.record.ts,
-            last_ts: winner.record.ts,
-            totals: UsageTotals::default(),
-            by_model: BTreeMap::new(),
-            by_day: BTreeMap::new(),
-            requests: Vec::new(),
+        let key = (
+            winner.is_subagent,
+            winner.session_id.clone(),
+            winner.record.cwd.clone(),
+        );
+        let parent_id = winner.parent_session_id.clone();
+        let entry = grouped.entry(key).or_insert_with(|| {
+            (
+                SessionUsage {
+                    source: UsageSource::ClaudeCode,
+                    session_id: winner.session_id.clone(),
+                    project_key: winner.record.cwd.clone(),
+                    first_ts: winner.record.ts,
+                    last_ts: winner.record.ts,
+                    totals: UsageTotals::default(),
+                    by_model: BTreeMap::new(),
+                    by_day: BTreeMap::new(),
+                    requests: Vec::new(),
+                },
+                parent_id.clone(),
+            )
         });
-        entry.totals.add(&totals);
-        entry
+        let session = &mut entry.0;
+        session.totals.add(&totals);
+        session
             .by_model
             .entry(winner.record.model.clone())
             .or_default()
             .add(&totals);
-        entry
+        session
             .by_day
             .entry(winner.record.day.clone())
             .or_default()
             .add(&totals);
         // Per-request retention for cache analysis. This happens AFTER the
         // global cross-file dedup above, so a resumed session's copied
-        // records contribute exactly one tuple each.
-        entry.requests.push(RequestUsage {
+        // records contribute exactly one tuple each. Subagent rows retain
+        // their own stream's tuples too: each subagent has its own prefix
+        // and the cache analyzer treats each as its own timeline.
+        session.requests.push(RequestUsage {
             ts: winner.record.ts,
             input_tokens: totals.input_tokens,
             cache_read_tokens: totals.cache_read_tokens,
             cache_write_5m_tokens: totals.cache_write_5m_tokens,
             cache_write_1h_tokens: totals.cache_write_1h_tokens,
         });
-        if winner.record.ts < entry.first_ts {
-            entry.first_ts = winner.record.ts;
+        if winner.record.ts < session.first_ts {
+            session.first_ts = winner.record.ts;
         }
-        if winner.record.ts > entry.last_ts {
-            entry.last_ts = winner.record.ts;
+        if winner.record.ts > session.last_ts {
+            session.last_ts = winner.record.ts;
         }
     }
-    for session in grouped.values_mut() {
+    for (session, _) in grouped.values_mut() {
         // Deterministic within-session request order: ascending by the full
         // tuple (ts first). Log files can carry out-of-order timestamps and
         // the winners map iterates by (message_id, request_id), neither of
         // which is time order.
         session.requests.sort_unstable();
     }
-    data.sessions.extend(grouped.into_values());
+    // Populate side-tables BEFORE moving sessions out of the grouped map.
+    for ((is_subagent, _, _), (session, parent_id)) in &grouped {
+        if *is_subagent {
+            let key = (session.session_id.clone(), session.project_key.clone());
+            data.subagent_session_keys.insert(key.clone());
+            if let Some(pid) = parent_id {
+                data.subagent_parent_ids.insert(key, pid.clone());
+            }
+        }
+    }
+    data.sessions
+        .extend(grouped.into_values().map(|(session, _)| session));
 }
 
 /// Returns true if `cand` from file index `cand_idx` should replace `held`
@@ -990,6 +1139,233 @@ mod tests {
             .expect("b-winner survives the merge");
         assert_eq!(winner_session.totals.cache_read_tokens, 3000);
         assert_eq!(winner_session.totals.cache_write_1h_tokens, 7000);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ------------------------------------------------------------------
+    // Subagent stream discovery and attribution.
+    //
+    // Fixture layout under `fixtures/usage/claude-code/`:
+    //   proj-a/streaming-and-cwd.jsonl    (original fixture, no subagents)
+    //   proj-b/parent-session.jsonl       (parent jsonl)
+    //   proj-b/parent-session/subagents/agent-aaa.jsonl   (subagent, same cwd)
+    //   proj-b/parent-session/subagents/agent-aaa.meta.json  (companion;
+    //                                                         must be ignored)
+    //   proj-b/parent-session/subagents/agent-bbb.jsonl   (subagent, different cwd)
+    //   proj-b-empty/parent-empty.jsonl  (parent jsonl)
+    //   proj-b-empty/parent-empty/subagents/  (empty dir)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn subagent_streams_emit_their_own_session_rows() {
+        let data = read(&fixtures_dir());
+        // The parent session row lives where it always did: same cwd as the
+        // parent jsonl's records, session_id = file stem.
+        let parent = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "parent-session" && s.project_key == "/work/proj-b")
+            .expect("parent-session row present");
+        // Parent records: msg_P1 (output 50) + msg_P2 (output 30).
+        assert_eq!(parent.totals.output_tokens, 80);
+        // The agent-aaa row is its own SessionUsage and lands on /work/proj-b
+        // because the record's own cwd matched the parent's. We attribute by
+        // per-record cwd, not by reversing the slug.
+        let sub_a = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "agent-aaa" && s.project_key == "/work/proj-b")
+            .expect("agent-aaa row present");
+        assert_eq!(sub_a.totals.output_tokens, 35);
+        assert_eq!(sub_a.totals.input_tokens, 5 + 3);
+        // The agent-bbb row carries the subagent's OWN cwd (/work/proj-b-deep),
+        // not the parent's. This is the key attribution rule: per-record cwd.
+        let sub_b = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "agent-bbb" && s.project_key == "/work/proj-b-deep")
+            .expect("agent-bbb row present on its own cwd");
+        assert_eq!(sub_b.totals.output_tokens, 25);
+        // The side-table identifies them as subagents and points to the
+        // originating parent jsonl stem.
+        assert!(data.is_subagent(sub_a));
+        assert!(data.is_subagent(sub_b));
+        assert!(!data.is_subagent(parent));
+        assert_eq!(
+            data.subagent_parent_ids
+                .get(&(sub_a.session_id.clone(), sub_a.project_key.clone())),
+            Some(&"parent-session".to_string()),
+        );
+        assert_eq!(
+            data.subagent_parent_ids
+                .get(&(sub_b.session_id.clone(), sub_b.project_key.clone())),
+            Some(&"parent-session".to_string()),
+        );
+    }
+
+    #[test]
+    fn subagent_stream_count_distinguishes_from_parent_count() {
+        let data = read(&fixtures_dir());
+        // Fixture parent session rows:
+        //   proj-a/streaming-and-cwd.jsonl emits TWO rows (one per surviving
+        //     cwd: /work/proj-a and /work/proj-b),
+        //   proj-b/parent-session.jsonl emits one row,
+        //   proj-b-empty/parent-empty.jsonl emits one row.
+        // Subagent rows: agent-aaa on /work/proj-b, agent-bbb on /work/proj-b-deep.
+        assert_eq!(data.parent_session_count(), 4);
+        assert_eq!(data.subagent_stream_count(), 2);
+        // Total sessions vector includes both kinds.
+        assert_eq!(data.sessions.len(), 6);
+    }
+
+    #[test]
+    fn subagent_meta_json_files_are_ignored_in_walk() {
+        // The fixture has agent-aaa.meta.json; it must not become a session.
+        let data = read(&fixtures_dir());
+        let any_meta = data
+            .sessions
+            .iter()
+            .any(|s| s.session_id.ends_with(".meta") || s.session_id == "agent-aaa.meta");
+        assert!(!any_meta, "meta.json must not show up as a session row");
+    }
+
+    #[test]
+    fn empty_subagents_dir_does_not_break_ingestion() {
+        // proj-b-empty has an empty `parent-empty/subagents/` dir; the parent
+        // jsonl still ingests and no subagent rows are added for that parent.
+        let data = read(&fixtures_dir());
+        let parent = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "parent-empty" && s.project_key == "/work/proj-b-empty")
+            .expect("parent-empty present");
+        assert_eq!(parent.totals.output_tokens, 13);
+        // No subagent row points to parent-empty.
+        let any_pointer = data
+            .subagent_parent_ids
+            .values()
+            .any(|p| p == "parent-empty");
+        assert!(
+            !any_pointer,
+            "empty subagents dir must not register any stream"
+        );
+    }
+
+    #[test]
+    fn subagent_retention_populated_for_cache_analysis() {
+        let data = read(&fixtures_dir());
+        let sub_a = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "agent-aaa")
+            .expect("agent-aaa present");
+        // Two retained requests for agent-aaa (msg_A1 with a write, msg_A2
+        // with a read). Sorted by ts ascending.
+        assert_eq!(sub_a.requests.len(), 2);
+        assert!(sub_a.requests[0].ts < sub_a.requests[1].ts);
+        // The first request's cache_write_5m equals 500 (the prefix proxy);
+        // the second's cache_read equals 500.
+        assert_eq!(sub_a.requests[0].cache_write_5m_tokens, 500);
+        assert_eq!(sub_a.requests[1].cache_read_tokens, 500);
+    }
+
+    #[test]
+    fn parent_session_id_from_path_extracts_correctly() {
+        // The classification rule: a path whose immediate parent dir is
+        // `subagents/` belongs to the parent session named by the
+        // grandparent directory.
+        let p =
+            PathBuf::from("/x/.claude/projects/-project/parent-session/subagents/agent-aaa.jsonl");
+        assert_eq!(
+            parent_session_id_from_path(&p),
+            Some("parent-session".to_string()),
+        );
+        // Parent jsonl: NOT a subagent.
+        let parent = PathBuf::from("/x/.claude/projects/-project/parent-session.jsonl");
+        assert_eq!(parent_session_id_from_path(&parent), None);
+        // Unrelated nested layout: not classified as subagent.
+        let other = PathBuf::from("/x/.claude/projects/-project/something/else/file.jsonl");
+        assert_eq!(parent_session_id_from_path(&other), None);
+    }
+
+    #[test]
+    fn is_subagent_jsonl_recognizes_only_agent_jsonl() {
+        assert!(is_subagent_jsonl(&PathBuf::from("agent-abc.jsonl")));
+        assert!(is_subagent_jsonl(&PathBuf::from("/x/agent-abc123.jsonl")));
+        assert!(!is_subagent_jsonl(&PathBuf::from("agent-abc.meta.json")));
+        assert!(!is_subagent_jsonl(&PathBuf::from("agent-abc.txt")));
+        // Files inside subagents/ that don't start with `agent-` are not ours.
+        assert!(!is_subagent_jsonl(&PathBuf::from("session.jsonl")));
+        assert!(!is_subagent_jsonl(&PathBuf::from("agent.jsonl")));
+    }
+
+    /// Synthetic collision: pin the dedup rule across the parent/subagent
+    /// boundary. Empirically (47 sessions, 299 files, 6.3K subagent keys, 9K
+    /// parent keys observed on this workstation) the two domains are
+    /// strictly disjoint on (message_id, request_id). But if a future Claude
+    /// Code release ever DID duplicate, the global last-wins dedup must
+    /// still collapse safely under the existing winner rule. This test
+    /// forces a collision and asserts the count.
+    #[test]
+    fn cross_parent_subagent_dedup_collapses_collisions() {
+        let root = tmp_tree("parent-vs-subagent");
+        let proj = root.join("proj-x");
+        let parent = proj.join("parent-X.jsonl");
+        let sub_dir = proj.join("parent-X").join("subagents");
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub = sub_dir.join("agent-yyy.jsonl");
+        // Parent and subagent BOTH carry (m1, r1). The subagent has a later
+        // timestamp, so it wins on the first tier of the winner rule.
+        write_record(&parent, "m1", "r1", "2026-06-10T12:00:00Z", 100, "/work/x");
+        write_record(&sub, "m1", "r1", "2026-06-10T12:00:01Z", 200, "/work/x");
+        let data = read(&root);
+        // Exactly one logical record after dedup.
+        let total_out: u64 = data.sessions.iter().map(|s| s.totals.output_tokens).sum();
+        assert_eq!(total_out, 200, "collision must collapse to one winner");
+        let total_records: usize = data.sessions.iter().map(|s| s.requests.len()).sum();
+        assert_eq!(total_records, 1, "retention must reflect the single winner");
+        // The winner (later ts) was in the subagent file, so a subagent row
+        // exists with that record and the parent row may be absent.
+        let sub_session = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "agent-yyy")
+            .expect("subagent winner present");
+        assert_eq!(sub_session.totals.output_tokens, 200);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Synthetic disjointness: pin the practically-observed shape that
+    /// parent and subagent keys do NOT overlap, by checking that two
+    /// distinct keys remain distinct after global dedup. This is the
+    /// "fixture" version of the workstation probe documented in the
+    /// module rustdoc.
+    #[test]
+    fn subagent_records_disjoint_from_parent_in_practice() {
+        let root = tmp_tree("disjoint");
+        let proj = root.join("proj-x");
+        let parent = proj.join("disjoint-parent.jsonl");
+        let sub_dir = proj.join("disjoint-parent").join("subagents");
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub = sub_dir.join("agent-zzz.jsonl");
+        write_record(&parent, "mp", "rp", "2026-06-10T12:00:00Z", 100, "/work/x");
+        write_record(&sub, "ms", "rs", "2026-06-10T12:01:00Z", 200, "/work/x");
+        let data = read(&root);
+        // Both rows survive: one parent, one subagent.
+        let parent_session = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "disjoint-parent")
+            .expect("parent row");
+        let sub_session = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "agent-zzz")
+            .expect("subagent row");
+        assert_eq!(parent_session.totals.output_tokens, 100);
+        assert_eq!(sub_session.totals.output_tokens, 200);
+        assert!(!data.is_subagent(parent_session));
+        assert!(data.is_subagent(sub_session));
         let _ = fs::remove_dir_all(&root);
     }
 

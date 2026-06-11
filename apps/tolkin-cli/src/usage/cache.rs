@@ -32,6 +32,17 @@ use super::types::{RequestUsage, SessionUsage, UsageData, UsageSource, UsageTota
 /// Codex payload): any pre-retention cache is discarded wholesale by the
 /// version gate instead of reasoning about partial compatibility, so v2
 /// caches self-heal by silent full reparse exactly like v1 did.
+///
+/// The subagent-discovery release does NOT bump the version. The Claude
+/// payload is still a `Vec<DedupedRecord>`, exactly the same shape (a
+/// subagent record carries the same fields as a parent record). The Codex
+/// payload's SessionUsageMirror is unchanged. The walk now visits more
+/// files (subagent transcripts), and the cache fills new entries for them
+/// on the first warm read after the upgrade; existing parent-file entries
+/// stay valid. The subagent stream identifiers live in
+/// `UsageData::subagent_session_keys`, which is rebuilt fresh on every
+/// stage-two run (the cache stores stage-one records, not the aggregated
+/// UsageData), so the side-table is correct on warm reads too.
 const CACHE_VERSION: u32 = 3;
 
 const CACHE_FILE: &str = "usage-cache.json";
@@ -404,6 +415,29 @@ fn ingest_claude(
         };
         for f in files.flatten() {
             let path = f.path();
+            if path.is_dir() {
+                // `<session_id>/subagents/agent-*.jsonl` lives one level
+                // deeper than the parent files. Discover and ingest each
+                // subagent transcript so its tokens enter every measured
+                // surface. See usage::claude_code for the attribution rules.
+                let subagents_dir = path.join("subagents");
+                if subagents_dir.is_dir() {
+                    let Ok(subs) = fs::read_dir(&subagents_dir) else {
+                        continue;
+                    };
+                    for sub in subs.flatten() {
+                        let sub_path = sub.path();
+                        if !claude_code::is_subagent_jsonl(&sub_path) {
+                            // Skip the `.meta.json` companions and anything
+                            // else Claude Code may drop alongside subagent
+                            // transcripts.
+                            continue;
+                        }
+                        handle_claude_file(&sub_path, cache, next, data, claude_records);
+                    }
+                }
+                continue;
+            }
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
