@@ -94,8 +94,8 @@ pub enum Context {
     DayStrip,
     Modal,
     PaletteInput,
-    /// Constructed when the list filter ships (later in this wave).
-    #[allow(dead_code)]
+    /// A list filter line is typing: printable keys edit the query, so
+    /// only the escape hatches (esc, ctrl+c) resolve here.
     FilterInput,
 }
 

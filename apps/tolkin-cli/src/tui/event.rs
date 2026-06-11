@@ -5,6 +5,7 @@
 //! detached and exit when their send fails (the receiver dropped because
 //! the loop ended).
 
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::thread;
@@ -19,12 +20,11 @@ use crate::project::{self, ProjectOptions, ProjectReport};
 /// Everything the update loop can receive.
 pub enum Msg {
     Key(KeyEvent),
-    /// Payload consumed when the mouse wiring lands later in this wave;
-    /// capture is on and events flow already.
-    Mouse(#[allow(dead_code)] MouseEvent),
-    /// Relayout happens naturally per frame; the payload feeds the mouse
-    /// hit-testing viewport later in this wave.
-    Resize(#[allow(dead_code)] u16, #[allow(dead_code)] u16),
+    /// Mouse input: wheel scroll, row and tab clicks (`app::handle_mouse`).
+    Mouse(MouseEvent),
+    /// Terminal resized; the payload keeps `Model::viewport` honest for
+    /// mouse hit-testing (relayout itself happens naturally per frame).
+    Resize(u16, u16),
     /// Synthesized by the main loop on recv timeout: wall-clock epoch for
     /// relative times plus elapsed milliseconds for spinner cadence.
     Tick {
@@ -37,8 +37,10 @@ pub enum Msg {
         at_epoch: u64,
         elapsed_ms: u64,
     },
-    /// Snapshot reload worker finished. `None` means no data dir exists.
-    SnapshotLoaded(Box<Option<StatsSnapshot>>),
+    /// Snapshot reload worker finished. `Ok(None)` means no data dir
+    /// exists; `Err` is a reload failure (including a panicked worker), so
+    /// the busy state resolves without dropping the data already loaded.
+    SnapshotLoaded(Result<Box<Option<StatsSnapshot>>, String>),
     /// Single-file audit worker finished. `path` is the project-relative
     /// path the file detail modal is keyed on.
     AuditDone {
@@ -56,6 +58,21 @@ pub fn now_epoch() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Run a worker body, converting an unwind into the worker's `Err` so the
+/// busy state always resolves through the message channel. The panic hook
+/// (mod.rs) restores the terminal only for main-thread panics; a worker
+/// unwinding under the live event loop must never cook the terminal.
+fn catch<T>(body: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    panic::catch_unwind(AssertUnwindSafe(body)).unwrap_or_else(|payload| {
+        let msg = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic".to_string());
+        Err(format!("worker panicked: {msg}"))
+    })
 }
 
 /// Input thread: blocks on crossterm reads forever, forwarding key, mouse,
@@ -83,16 +100,18 @@ pub fn spawn_scan(tx: Sender<Msg>, root: PathBuf) {
         // the "last scan (1.2s)" line, not animation; the Clock seam stays
         // animation-only.
         let started = Instant::now();
-        let opts = ProjectOptions {
-            experimental: false,
-            max_file_bytes: 2_000_000,
-            top: 16,
-        };
-        let result = if root.is_dir() {
-            Ok(Box::new(project::analyze(&root, &opts)))
-        } else {
-            Err(format!("not a directory: {}", root.display()))
-        };
+        let result = catch(|| {
+            let opts = ProjectOptions {
+                experimental: false,
+                max_file_bytes: 2_000_000,
+                top: 16,
+            };
+            if root.is_dir() {
+                Ok(Box::new(project::analyze(&root, &opts)))
+            } else {
+                Err(format!("not a directory: {}", root.display()))
+            }
+        });
         let _ = tx.send(Msg::ScanDone {
             result,
             at_epoch: now_epoch(),
@@ -105,8 +124,8 @@ pub fn spawn_scan(tx: Sender<Msg>, root: PathBuf) {
 /// thread (the cold read can take a beat on big logs).
 pub fn spawn_reload(tx: Sender<Msg>) {
     thread::spawn(move || {
-        let snapshot = StatsSnapshot::load();
-        let _ = tx.send(Msg::SnapshotLoaded(Box::new(snapshot)));
+        let result = catch(|| Ok(Box::new(StatsSnapshot::load())));
+        let _ = tx.send(Msg::SnapshotLoaded(result));
     });
 }
 
@@ -115,9 +134,11 @@ pub fn spawn_reload(tx: Sender<Msg>) {
 pub fn spawn_audit(tx: Sender<Msg>, root: PathBuf, path: String) {
     thread::spawn(move || {
         let full = root.join(&path);
-        let result = crate::commands::audit::audit_file(&full)
-            .map(Box::new)
-            .map_err(|e| e.to_string());
+        let result = catch(|| {
+            crate::commands::audit::audit_file(&full)
+                .map(Box::new)
+                .map_err(|e| e.to_string())
+        });
         let _ = tx.send(Msg::AuditDone { path, result });
     });
 }
@@ -126,9 +147,10 @@ pub fn spawn_audit(tx: Sender<Msg>, root: PathBuf, path: String) {
 /// current directory, exactly like `tolkin report --html`.
 pub fn spawn_report(tx: Sender<Msg>) {
     thread::spawn(move || {
-        let output = PathBuf::from(crate::commands::report::DEFAULT_OUTPUT);
-        let result =
-            crate::commands::report::write_report(&output, false).map_err(|e| e.to_string());
+        let result = catch(|| {
+            let output = PathBuf::from(crate::commands::report::DEFAULT_OUTPUT);
+            crate::commands::report::write_report(&output, false).map_err(|e| e.to_string())
+        });
         let _ = tx.send(Msg::ReportDone(result));
     });
 }
@@ -145,4 +167,25 @@ pub fn persist_theme(name: &str) {
     };
     cfg.ui_theme = Some(name.to_string());
     let _ = crate::ledger::save_config(&cfg);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catch_converts_worker_panics_into_err_results() {
+        assert_eq!(catch(|| Ok::<u32, String>(7)), Ok(7));
+        assert_eq!(
+            catch(|| Err::<u32, String>("plain failure".to_string())),
+            Err("plain failure".to_string())
+        );
+        // A &str panic payload (the default hook prints it to stderr in
+        // test output; the unwind itself is contained here).
+        let err = catch::<u32>(|| panic!("boom")).unwrap_err();
+        assert_eq!(err, "worker panicked: boom");
+        // A formatted panic carries a String payload.
+        let err = catch::<u32>(|| panic!("bad index {}", 3)).unwrap_err();
+        assert_eq!(err, "worker panicked: bad index 3");
+    }
 }

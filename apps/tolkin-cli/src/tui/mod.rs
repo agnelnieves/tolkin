@@ -192,11 +192,24 @@ fn dispatch(
 
 fn enter_raw() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let terminal = Terminal::new(backend)?;
-    Ok(terminal)
+    // Anything failing after enable_raw_mode() succeeded must put the
+    // terminal back before erroring, or the shell is left in raw-mode
+    // no-echo with no event loop ever reaching restore_terminal().
+    let setup = || -> Result<Terminal<CrosstermBackend<Stdout>>> {
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        Ok(Terminal::new(CrosstermBackend::new(stdout))?)
+    };
+    match setup() {
+        Ok(terminal) => Ok(terminal),
+        Err(err) => {
+            let _ = disable_raw_mode();
+            // Best effort: the alternate screen may or may not have
+            // flipped before the failure; leaving it twice is harmless.
+            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            Err(err)
+        }
+    }
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
@@ -215,7 +228,11 @@ type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'sta
 /// Install a panic hook that puts the terminal back into a usable state
 /// before delegating to the previously-installed hook. Idempotent:
 /// subsequent calls in the same process leave the prior hook chain in
-/// place.
+/// place. Only a MAIN-thread panic restores: it kills the event loop, so
+/// cooked is correct. Worker threads catch their own unwinds (event.rs)
+/// and report through the channel; the hook still fires before their
+/// catch_unwind lands, and restoring from under the live loop would leave
+/// the dashboard drawing into a cooked main-screen terminal.
 fn install_panic_hook() {
     static HOOK: OnceLock<()> = OnceLock::new();
     static PREV: Mutex<Option<PanicHook>> = Mutex::new(None);
@@ -223,8 +240,10 @@ fn install_panic_hook() {
         let prev = std::panic::take_hook();
         *PREV.lock().expect("panic hook mutex poisoned") = Some(prev);
         std::panic::set_hook(Box::new(|info| {
-            let _ = disable_raw_mode();
-            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            if std::thread::current().name() == Some("main") {
+                let _ = disable_raw_mode();
+                let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            }
             if let Some(prev) = PREV.lock().expect("panic hook mutex poisoned").as_ref() {
                 prev(info);
             }

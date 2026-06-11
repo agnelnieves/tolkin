@@ -1042,16 +1042,23 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.recompute_derived();
             Vec::new()
         }
-        Msg::SnapshotLoaded(snapshot) => {
+        Msg::SnapshotLoaded(result) => {
             let was_refreshing = model.refreshing;
-            model.snapshot = (*snapshot).map(Box::new);
             model.refreshing = false;
-            model.recompute_derived();
-            if was_refreshing {
-                model.toast(
-                    ToastKind::Ok,
-                    "refreshed ledger and usage reloaded".to_string(),
-                );
+            match result {
+                Ok(snapshot) => {
+                    model.snapshot = (*snapshot).map(Box::new);
+                    model.recompute_derived();
+                    if was_refreshing {
+                        model.toast(
+                            ToastKind::Ok,
+                            "refreshed ledger and usage reloaded".to_string(),
+                        );
+                    }
+                }
+                // A failed (or panicked) reload resolves the busy state but
+                // keeps the data already on screen; it only reports.
+                Err(msg) => model.toast(ToastKind::Err, format!("error refresh failed: {msg}")),
             }
             Vec::new()
         }
@@ -2055,9 +2062,37 @@ mod tests {
         assert!(model.refreshing && model.is_busy());
         // A second r while busy is a no-op.
         assert!(update(&mut model, key(KeyCode::Char('r'))).is_empty());
-        update(&mut model, Msg::SnapshotLoaded(Box::new(None)));
+        update(&mut model, Msg::SnapshotLoaded(Ok(Box::new(None))));
         assert!(!model.refreshing);
         assert!(model.derived.setup_needed);
+    }
+
+    #[test]
+    fn failed_reload_resolves_busy_and_keeps_the_current_data() {
+        let (mut model, _clock) = test_model();
+        model.derived.setup_needed = false;
+        model.derived.advisory_lines = vec!["kept line".to_string()];
+        update(&mut model, key(KeyCode::Char('r')));
+        assert!(model.refreshing);
+        // A panicked reload worker reports through the same channel; the
+        // busy state resolves and nothing on screen is dropped.
+        update(
+            &mut model,
+            Msg::SnapshotLoaded(Err("worker panicked: boom".to_string())),
+        );
+        assert!(!model.refreshing, "busy resolves on a failed reload");
+        assert_eq!(
+            model.derived.advisory_lines,
+            vec!["kept line".to_string()],
+            "current data survives the failure"
+        );
+        let texts: Vec<&str> = model.toasts.iter().map(|t| t.text.as_str()).collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("refresh failed") && t.contains("worker panicked: boom")),
+            "error toast names the panic: {texts:?}"
+        );
     }
 
     #[test]
@@ -2456,7 +2491,7 @@ mod tests {
     fn refresh_and_scan_completion_push_toasts_that_expire() {
         let (mut model, clock) = test_model();
         update(&mut model, key(KeyCode::Char('r')));
-        update(&mut model, Msg::SnapshotLoaded(Box::new(None)));
+        update(&mut model, Msg::SnapshotLoaded(Ok(Box::new(None))));
         assert_eq!(model.toasts.iter().count(), 1, "refresh done toast");
         update(
             &mut model,
@@ -2716,7 +2751,7 @@ mod tests {
         // it already rests at: nothing restarts, the loop stays at the
         // 1 s idle cadence instead of pinning 30 fps for ~2 s.
         let same = StatsSnapshot::load_in(&dir);
-        update(&mut model, Msg::SnapshotLoaded(Box::new(Some(same))));
+        update(&mut model, Msg::SnapshotLoaded(Ok(Box::new(Some(same)))));
         assert!(
             !model.animator.active(),
             "unchanged data must not pin the loop"
@@ -2768,7 +2803,7 @@ mod tests {
 
         // The wired path: a recompute that empties the derived sets sweeps
         // everything identity-keyed.
-        update(&mut model, Msg::SnapshotLoaded(Box::new(None)));
+        update(&mut model, Msg::SnapshotLoaded(Ok(Box::new(None))));
         assert_eq!(
             model.animator.value(new, 0.25),
             0.25,
