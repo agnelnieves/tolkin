@@ -1,7 +1,7 @@
 {
   "v": 2,
-  "generated_at": "2026-06-11T02:30:17.885Z",
-  "tolkin_version": "0.10.0",
+  "generated_at": "2026-06-11T02:34:07.846Z",
+  "tolkin_version": "0.11.0",
   "prices_observed": "2026-06",
   "runs": 3,
   "environment": {

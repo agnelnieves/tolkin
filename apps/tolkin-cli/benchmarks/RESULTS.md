@@ -158,6 +158,6 @@ Quality scoring: scored=false, method=BYOK extraction-QA harness, off by default
 
 ---
 
-Generated at: 2026-06-11T02:30:17.885Z. Tolkin 0.10.0. Prices observed: 2026-06. Runner: bun + tolkin CLI. OS: darwin.
+Generated at: 2026-06-11T02:34:07.846Z. Tolkin 0.11.0. Prices observed: 2026-06. Runner: bun + tolkin CLI. OS: darwin.
 
 To regenerate: `bun apps/tolkin-cli/benchmarks/run.ts` (from the repo root). Verify determinism with `bun apps/tolkin-cli/benchmarks/run.ts --check-determinism`.
