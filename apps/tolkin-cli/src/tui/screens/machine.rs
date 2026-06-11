@@ -7,8 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use crate::tui::anim::AnimKey;
-use crate::tui::app::{FilterTarget, Model};
+use crate::tui::anim::{self, AnimKey};
+use crate::tui::app::{reveal, FilterTarget, Model};
 use crate::tui::components::card::{render_stat_card, value_line, StatCard};
 use crate::tui::components::list::render_select_list;
 use crate::tui::format;
@@ -176,25 +176,18 @@ fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
         .saturating_sub((3 + NAME_W + 1 + VALUE_W) as u16);
     let rows: Vec<Line> = visible
         .iter()
-        .enumerate()
-        .map(|(i, p)| {
+        .map(|p| {
             let target = if max > 0 {
                 p.always_tokens as f32 / max as f32
             } else {
                 0.0
             };
-            // Rows beyond the animated key space render at rest.
-            let frac = if i < 64 {
-                model.animator.value(
-                    AnimKey::Bar {
-                        panel: 1,
-                        row: i as u8,
-                    },
-                    target,
-                )
-            } else {
-                target
-            };
+            // Weight tweens key on the project identity, so filtering and
+            // sorting reorder rows without reassigning their animations;
+            // never-animated keys fall back to the data target.
+            let frac = model
+                .animator
+                .value(AnimKey::Weight(anim::ident(&p.key)), target);
             let shown = format::truncate_left(&p.key, NAME_W);
             let (dir, name) = format::split_path(&shown);
             let pad = NAME_W.saturating_sub(shown.chars().count()) + 1;
@@ -210,7 +203,7 @@ fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
             );
             let frac = frac.clamp(0.0, 1.0);
             let filled = ((frac * bar_width as f32).round() as u16).min(bar_width);
-            Line::from(vec![
+            let line = Line::from(vec![
                 Span::styled(dir.to_string(), Style::default().fg(theme.faint)),
                 Span::styled(name.to_string(), Style::default().fg(theme.text)),
                 Span::raw(" ".repeat(pad)),
@@ -226,7 +219,8 @@ fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
                     format!("{value:>VALUE_W$}"),
                     Style::default().fg(theme.muted),
                 ),
-            ])
+            ]);
+            super::reveal_row(model, reveal::MACHINE, &p.key, line, theme)
         })
         .collect();
     render_select_list(

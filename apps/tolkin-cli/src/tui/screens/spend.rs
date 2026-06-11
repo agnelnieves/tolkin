@@ -10,7 +10,7 @@ use ratatui::Frame;
 
 use crate::cache_analysis::CacheReport;
 use crate::tui::anim::AnimKey;
-use crate::tui::app::{Model, SpendFocus};
+use crate::tui::app::{reveal, Model, SpendFocus};
 use crate::tui::components::bars::{self, DayRole};
 use crate::tui::components::empty;
 use crate::tui::components::gauge;
@@ -198,7 +198,7 @@ fn render_models(frame: &mut Frame, area: Rect, model: &Model) {
                 Style::default().fg(theme.faint),
             ),
         };
-        lines.push(Line::from(vec![
+        let line = Line::from(vec![
             Span::styled(format!("{name:<name_w$}"), Style::default().fg(theme.text)),
             Span::styled(
                 format!("{:>COL_IN$}", format::commas(row.totals.input_side())),
@@ -209,7 +209,14 @@ fn render_models(frame: &mut Frame, area: Rect, model: &Model) {
                 Style::default().fg(theme.muted),
             ),
             cost_span,
-        ]));
+        ]);
+        lines.push(super::reveal_row(
+            model,
+            reveal::MODELS,
+            &row.model,
+            line,
+            theme,
+        ));
     }
     let shown = derived.spend_models.len().min(MODELS_SHOWN);
     if derived.models_total > shown {
@@ -306,7 +313,10 @@ fn render_advisories(frame: &mut Frame, area: Rect, model: &Model) {
         .derived
         .advisory_lines
         .iter()
-        .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(theme.text))))
+        .map(|l| {
+            let line = Line::from(Span::styled(l.clone(), Style::default().fg(theme.text)));
+            super::reveal_row(model, reveal::ADVISORIES, l, line, theme)
+        })
         .collect();
     render_select_list(
         frame,

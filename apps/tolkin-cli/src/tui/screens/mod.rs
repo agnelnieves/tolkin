@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Padding};
 use ratatui::Frame;
 
+use super::anim::{self, AnimKey};
 use super::app::Model;
 use super::keymap::TabId;
 use super::theme::Theme;
@@ -78,6 +79,39 @@ pub fn muted_line(text: &str, theme: &Theme) -> Line<'static> {
         text.to_string(),
         Style::default().fg(theme.faint),
     ))
+}
+
+/// Apply the staggered-reveal ramp to one list row. Samples the row's
+/// reveal tween by identity (`subject`): pre-birth rows render blank, the
+/// ramp walks faint then muted, and a finished (or disabled-animator) row
+/// passes through untouched at its real styling.
+pub fn reveal_row(
+    model: &Model,
+    panel: u8,
+    subject: &str,
+    line: Line<'static>,
+    theme: &Theme,
+) -> Line<'static> {
+    let v = model.animator.value(
+        AnimKey::Reveal {
+            panel,
+            id: anim::ident(subject),
+        },
+        1.0,
+    );
+    if v >= 1.0 {
+        return line;
+    }
+    if v <= 0.0 {
+        return Line::default();
+    }
+    let fg = if v < 0.5 { theme.faint } else { theme.muted };
+    let spans: Vec<Span<'static>> = line
+        .spans
+        .iter()
+        .map(|s| Span::styled(s.content.to_string(), Style::default().fg(fg)))
+        .collect();
+    Line::from(spans)
 }
 
 /// The list area under an active filter line (the line takes the first

@@ -27,7 +27,7 @@ use crate::tiers::TierReport;
 use crate::update;
 use crate::usage::cost;
 
-use super::anim::{AnimKey, Animator, Ease};
+use super::anim::{self, AnimKey, Animator, Ease};
 use super::components::bars;
 use super::components::chrome::{self, FooterProps, HeaderProps};
 use super::components::empty;
@@ -329,6 +329,32 @@ impl Derived {
 /// fixed page keeps update independent of layout).
 const PAGE: usize = 16;
 
+/// Per-row birth delay for staggered bars and reveals (section 5).
+const STAGGER_MS: u64 = 30;
+/// Rows that receive a stagger tween per list; later rows render at rest
+/// (they sit below the fold anyway) so a huge list cannot pin the loop.
+const ANIMATED_ROWS: usize = 64;
+/// Reveal ramp duration: about four 30 fps frames through the
+/// faint -> muted -> normal steps.
+const REVEAL_MS: u64 = 120;
+/// Toast slide-in duration (section 5).
+const TOAST_SLIDE_MS: u64 = 150;
+
+/// Birth delay for row `i`, capped at [`ANIMATED_ROWS`].
+fn stagger(i: usize) -> Duration {
+    Duration::from_millis(STAGGER_MS * (i.min(ANIMATED_ROWS) as u64))
+}
+
+/// Reveal list namespaces (the `panel` of [`AnimKey::Reveal`]).
+pub mod reveal {
+    pub const HEAVY: u8 = 0;
+    pub const MACHINE: u8 = 1;
+    /// Advisory lines are identical on Overview and Spend; they share one
+    /// namespace so a single data arrival reveals both surfaces.
+    pub const ADVISORIES: u8 = 2;
+    pub const MODELS: u8 = 3;
+}
+
 pub struct Model {
     pub snapshot: Option<Box<StatsSnapshot>>,
     pub derived: Derived,
@@ -628,7 +654,8 @@ impl Model {
     }
 
     /// Retarget every data-driven tween: hero count-ups, bar grow-ins, the
-    /// cache gauge, the day strip. Runs on data messages only.
+    /// cache gauge, the day strip, and the staggered row reveals. Runs on
+    /// data messages only.
     fn fire_data_animations(&mut self) {
         let d400 = Duration::from_millis(400);
         let d300 = Duration::from_millis(300);
@@ -655,15 +682,16 @@ impl Model {
             .go(AnimKey::Card(3), rmin as f32, d400, Ease::OutCubic);
         self.animator
             .go(AnimKey::Card(4), rmax as f32, d400, Ease::OutCubic);
+        // Gauges share the bar timing from the inventory: 300 ms OutCubic.
         self.animator.go(
             AnimKey::Gauge(0),
             (self.derived.cache_pct().unwrap_or(0.0) / 100.0) as f32,
-            d400,
+            d300,
             Ease::OutCubic,
         );
 
-        // Load profile bars (panel 0): fill fraction per bucket. The row
-        // stagger is approximated by lengthening duration per row.
+        // Load profile bars (panel 0): fill fraction per bucket, true birth
+        // stagger of 30 ms per row.
         let max_load = self.derived.load.iter().map(|(_, v)| *v).max().unwrap_or(0);
         for (i, (_, value)) in self.derived.load.iter().enumerate() {
             let frac = if max_load > 0 {
@@ -671,18 +699,22 @@ impl Model {
             } else {
                 0.0
             };
-            self.animator.go(
+            self.animator.go_delayed(
                 AnimKey::Bar {
                     panel: 0,
                     row: i as u8,
                 },
                 frac,
-                d300 + Duration::from_millis(30 * i as u64),
+                d300,
                 Ease::OutCubic,
+                stagger(i),
             );
         }
 
-        // Machine project weight bars (panel 1), capped at the key space.
+        // Machine project weight bars, keyed by project identity so sorts
+        // and filters never reassign a tween to a different row. The
+        // stagger follows the CURRENT derived order, capped so a long tail
+        // of projects cannot pin the loop at 30 fps for seconds.
         let max_weight = self
             .derived
             .machine
@@ -690,22 +722,25 @@ impl Model {
             .map(|p| p.always_tokens)
             .max()
             .unwrap_or(0);
-        for (i, p) in self.derived.machine.iter().take(64).enumerate() {
+        for (i, p) in self.derived.machine.iter().take(ANIMATED_ROWS).enumerate() {
             let frac = if max_weight > 0 {
                 p.always_tokens as f32 / max_weight as f32
             } else {
                 0.0
             };
-            self.animator.go(
-                AnimKey::Bar {
-                    panel: 1,
-                    row: i as u8,
-                },
+            self.animator.go_delayed(
+                AnimKey::Weight(anim::ident(&p.key)),
                 frac,
-                d300 + Duration::from_millis(30 * (i as u64).min(8)),
+                d300,
                 Ease::OutCubic,
+                stagger(i),
             );
         }
+
+        // Staggered row reveals (faint -> muted -> normal at birth). Keys
+        // derive from each row's identity: a row that already revealed sits
+        // settled at 1.0 and a refresh ramps only genuinely new rows.
+        self.fire_reveals();
 
         // Day strip levels (panel 2): one tween per day cell.
         let max_day = self
@@ -755,6 +790,62 @@ impl Model {
             );
         }
     }
+
+    /// Start the staggered birth tween for every reveal-animated list row.
+    fn fire_reveals(&mut self) {
+        let ramp = Duration::from_millis(REVEAL_MS);
+        let fire = |animator: &mut Animator, panel: u8, i: usize, subject: &str| {
+            animator.go_delayed(
+                AnimKey::Reveal {
+                    panel,
+                    id: anim::ident(subject),
+                },
+                1.0,
+                ramp,
+                Ease::Linear,
+                stagger(i),
+            );
+        };
+        for (i, row) in self.derived.heavy.iter().take(ANIMATED_ROWS).enumerate() {
+            fire(&mut self.animator, reveal::HEAVY, i, &row.path);
+        }
+        for (i, p) in self.derived.machine.iter().take(ANIMATED_ROWS).enumerate() {
+            fire(&mut self.animator, reveal::MACHINE, i, &p.key);
+        }
+        for (i, line) in self
+            .derived
+            .advisory_lines
+            .iter()
+            .take(ANIMATED_ROWS)
+            .enumerate()
+        {
+            fire(&mut self.animator, reveal::ADVISORIES, i, line);
+        }
+        for (i, row) in self
+            .derived
+            .spend_models
+            .iter()
+            .take(ANIMATED_ROWS)
+            .enumerate()
+        {
+            fire(&mut self.animator, reveal::MODELS, i, &row.model);
+        }
+    }
+
+    /// Push a toast and fire its 150 ms OutCubic slide-in; an evicted
+    /// toast's animator state goes with it.
+    fn toast(&mut self, kind: ToastKind, text: String) {
+        let (id, evicted) = self.toasts.push(kind, text, self.animator.now());
+        if let Some(old) = evicted {
+            self.animator.forget(AnimKey::Toast(old));
+        }
+        self.animator.go(
+            AnimKey::Toast(id),
+            1.0,
+            Duration::from_millis(TOAST_SLIDE_MS),
+            Ease::OutCubic,
+        );
+    }
 }
 
 /// Mutate the model for one message and return the side effects to run.
@@ -787,7 +878,9 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 model.busy_ms = model.busy_ms.saturating_add(delta_ms);
             }
             model.animator.prune();
-            model.toasts.prune(model.animator.now());
+            for id in model.toasts.prune(model.animator.now()) {
+                model.animator.forget(AnimKey::Toast(id));
+            }
             Vec::new()
         }
         Msg::Resize(w, h) => {
@@ -828,14 +921,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                             ),
                         )
                     };
-                    model.toasts.push(kind, text, model.animator.now());
+                    model.toast(kind, text);
                 }
                 Err(msg) => {
-                    model.toasts.push(
-                        ToastKind::Err,
-                        format!("error scan failed: {msg}"),
-                        model.animator.now(),
-                    );
+                    model.toast(ToastKind::Err, format!("error scan failed: {msg}"));
                     model.scan = ScanState::Failed(msg);
                 }
             }
@@ -848,10 +937,9 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.refreshing = false;
             model.recompute_derived();
             if was_refreshing {
-                model.toasts.push(
+                model.toast(
                     ToastKind::Ok,
                     "refreshed ledger and usage reloaded".to_string(),
-                    model.animator.now(),
                 );
             }
             Vec::new()
@@ -860,11 +948,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             let state = match result {
                 Ok(report) => AuditState::Done(report),
                 Err(msg) => {
-                    model.toasts.push(
-                        ToastKind::Err,
-                        format!("error audit failed: {msg}"),
-                        model.animator.now(),
-                    );
+                    model.toast(ToastKind::Err, format!("error audit failed: {msg}"));
                     AuditState::Failed(msg)
                 }
             };
@@ -881,16 +965,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         Msg::ReportDone(result) => {
             model.reporting = false;
             match result {
-                Ok(path) => model.toasts.push(
+                Ok(path) => model.toast(
                     ToastKind::Ok,
                     format!("report written to {}", path.display()),
-                    model.animator.now(),
                 ),
-                Err(msg) => model.toasts.push(
-                    ToastKind::Err,
-                    format!("error report failed: {msg}"),
-                    model.animator.now(),
-                ),
+                Err(msg) => model.toast(ToastKind::Err, format!("error report failed: {msg}")),
             }
             Vec::new()
         }
@@ -971,10 +1050,9 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
         Action::Rescan => return model.begin_scan(),
         Action::CycleTheme => {
             model.theme = theme::cycle(model.theme.name, &model.theme_env);
-            model.toasts.push(
+            model.toast(
                 ToastKind::Info,
                 format!("theme {} active", model.theme.name),
-                model.animator.now(),
             );
             // Persist through the existing config save path, but only when
             // a config already exists (consent stays init's job).
@@ -1074,11 +1152,7 @@ fn copy_selection(model: &mut Model) -> Vec<Cmd> {
     let Some((payload, label)) = payload else {
         return Vec::new();
     };
-    model.toasts.push(
-        ToastKind::Ok,
-        format!("copied {label} to clipboard"),
-        model.animator.now(),
-    );
+    model.toast(ToastKind::Ok, format!("copied {label} to clipboard"));
     vec![Cmd::CopyOsc52(payload)]
 }
 
@@ -1425,7 +1499,10 @@ pub fn view(frame: &mut Frame, model: &Model) {
 
     let body = inset(rows[1]);
     if model.derived.setup_needed {
-        empty::render_setup(frame, body, &model.theme);
+        // The brand moment: the breathing phase samples through the
+        // animator's clock; reduced motion pins it at the plain accent.
+        let pulse = model.animator.pulse(empty::SETUP_PULSE_PERIOD_MS);
+        empty::render_setup(frame, body, &model.theme, pulse);
     } else {
         screens::render(frame, body, model);
     }
@@ -1449,7 +1526,7 @@ pub fn view(frame: &mut Frame, model: &Model) {
 
     // Toasts stack above everything, including dialog scrims.
     if !model.toasts.is_empty() {
-        toast::render_toasts(frame, &model.toasts, &model.theme);
+        toast::render_toasts(frame, &model.toasts, &model.animator, &model.theme);
     }
 }
 
@@ -2395,6 +2472,83 @@ mod tests {
             mk("/b", 30, 100, 5),
             mk("/c", 20, 200, 9),
         ]
+    }
+
+    #[test]
+    fn data_arrival_staggers_reveals_and_keys_weights_by_identity() {
+        let (mut model, clock) = test_model();
+        model.derived.machine = machine_fixture();
+        data::sort_machine(&mut model.derived.machine, model.machine_sort);
+        // Weight order: /b (30), /c (20), /a (10).
+        model.fire_data_animations();
+
+        // Reveals birth in row order: 30 ms apart, 120 ms ramp each.
+        let reveal_of = |model: &Model, key: &str| {
+            model.animator.value(
+                AnimKey::Reveal {
+                    panel: reveal::MACHINE,
+                    id: anim::ident(key),
+                },
+                1.0,
+            )
+        };
+        assert_eq!(reveal_of(&model, "/b"), 0.0, "row 0 starts pre-ramp");
+        assert_eq!(reveal_of(&model, "/a"), 0.0, "row 2 not born yet");
+        clock.advance(Duration::from_millis(45));
+        assert!(reveal_of(&model, "/b") > 0.3, "row 0 ramping");
+        assert_eq!(reveal_of(&model, "/a"), 0.0, "row 2 still pre-birth");
+        clock.advance(Duration::from_millis(200));
+        assert_eq!(reveal_of(&model, "/b"), 1.0);
+        assert_eq!(reveal_of(&model, "/a"), 1.0, "all rows settle visible");
+
+        // Weight tweens key on identity: /b grows toward 1.0 (the max)
+        // no matter where sorting or filtering places it.
+        let w = model
+            .animator
+            .value(AnimKey::Weight(anim::ident("/b")), 0.0);
+        assert!((w - 1.0).abs() < 0.01, "max project fills, got {w}");
+        let w = model
+            .animator
+            .value(AnimKey::Weight(anim::ident("/a")), 0.0);
+        assert!(
+            (w - 1.0 / 3.0).abs() < 0.02,
+            "tail project at third, got {w}"
+        );
+        // A re-sort refires without changing the identity mapping.
+        update(&mut model, key(KeyCode::Char(',')));
+        let _ = update(&mut model, key(KeyCode::Char(',')));
+        let w = model
+            .animator
+            .value(AnimKey::Weight(anim::ident("/b")), 0.0);
+        assert!((w - 1.0).abs() < 0.01, "identity key survives sorting");
+    }
+
+    #[test]
+    fn toast_slide_tween_fires_on_push_and_dies_with_the_toast() {
+        let (mut model, clock) = test_model();
+        update(&mut model, key(KeyCode::Char('t')));
+        assert_eq!(model.toasts.iter().count(), 1);
+        let id = model.toasts.iter().next().unwrap().id;
+        // Mid-slide at 75 ms: the OutCubic tween is past half but unfinished.
+        clock.advance(Duration::from_millis(75));
+        let v = model.animator.value(AnimKey::Toast(id), 1.0);
+        assert!(v > 0.5 && v < 1.0, "mid-slide, got {v}");
+        assert!(model.animator.active());
+        // After the ttl the prune path forgets the animator key entirely.
+        clock.advance(Duration::from_millis(5_000));
+        update(
+            &mut model,
+            Msg::Tick {
+                now_epoch: 1_780_000_010,
+                delta_ms: 5_075,
+            },
+        );
+        assert!(model.toasts.is_empty());
+        assert_eq!(
+            model.animator.value(AnimKey::Toast(id), 0.25),
+            0.25,
+            "forgotten key falls back"
+        );
     }
 
     #[test]

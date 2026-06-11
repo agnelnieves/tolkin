@@ -8,7 +8,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::tui::anim::AnimKey;
-use crate::tui::app::{Model, ScanState};
+use crate::tui::app::{reveal, Model, ScanState};
 use crate::tui::components::bars::{self, DayRole};
 use crate::tui::components::card::{render_stat_card, value_line, StatCard};
 use crate::tui::components::gauge;
@@ -252,7 +252,10 @@ fn render_advisories(frame: &mut Frame, area: Rect, model: &Model) {
         .derived
         .advisory_lines
         .iter()
-        .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(theme.text))))
+        .map(|l| {
+            let line = Line::from(Span::styled(l.clone(), Style::default().fg(theme.text)));
+            super::reveal_row(model, reveal::ADVISORIES, l, line, theme)
+        })
         .collect();
     render_select_list(
         frame,

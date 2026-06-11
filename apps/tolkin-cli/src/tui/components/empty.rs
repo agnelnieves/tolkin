@@ -22,15 +22,31 @@ pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
-/// The setup card for a fresh data dir (no config, no ledger). The only
-/// screen that will ever carry an idle animation (the border pulse lands
-/// in a later wave); content is the brand moment already.
-pub fn render_setup(frame: &mut Frame, area: Rect, theme: &Theme) {
+/// Breathing period of the setup-card border (section 5: sine, 4600 ms).
+pub const SETUP_PULSE_PERIOD_MS: u64 = 4_600;
+
+/// Map the 0..=1 breathing phase onto the 3-step accent ramp. The middle
+/// step is the plain accent, which is also the reduced-motion rest state
+/// (a disabled animator pins the phase at 0.5).
+fn pulse_border(pulse: f32, theme: &Theme) -> ratatui::style::Color {
+    if pulse < 1.0 / 3.0 {
+        theme.border_active
+    } else if pulse < 2.0 / 3.0 {
+        theme.accent
+    } else {
+        theme.accent_bright
+    }
+}
+
+/// The setup card for a fresh data dir (no config, no ledger). The ONLY
+/// screen with an idle animation: the accent border breathes on `pulse`
+/// (0..=1 sine phase sampled by the caller through the animator).
+pub fn render_setup(frame: &mut Frame, area: Rect, theme: &Theme, pulse: f32) {
     let card = centered(area, 64.min(area.width), 12);
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.accent))
+        .border_style(Style::default().fg(pulse_border(pulse, theme)))
         .style(Style::default().bg(theme.surface))
         .padding(Padding::new(2, 2, 1, 1))
         .title(Span::styled(" setup ", Style::default().fg(theme.muted)));
@@ -137,13 +153,33 @@ mod tests {
         let t = theme::by_name("tolkin-dark", true).unwrap();
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| render_setup(f, f.area(), &t)).unwrap();
+        terminal
+            .draw(|f| render_setup(f, f.area(), &t, 0.5))
+            .unwrap();
         let text = flatten(&terminal);
         assert!(text.contains("tolkin init"));
         assert!(text.contains("tolkin scan"));
         assert!(text.contains("tolkin project"));
         assert!(text.contains("Nothing leaves"));
         assert!(text.contains("q to quit"));
+    }
+
+    #[test]
+    fn setup_border_breathes_through_the_three_step_ramp() {
+        let t = theme::by_name("tolkin-dark", true).unwrap();
+        let border_at = |pulse: f32| {
+            let backend = TestBackend::new(80, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| render_setup(f, f.area(), &t, pulse))
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            // The card is centered: 64 wide in 80 -> x 8, 12 tall in 24 -> y 6.
+            buf[(8, 6)].fg
+        };
+        assert_eq!(border_at(0.0), t.border_active, "trough dims");
+        assert_eq!(border_at(0.5), t.accent, "mid step is plain accent");
+        assert_eq!(border_at(1.0), t.accent_bright, "peak brightens");
     }
 
     #[test]

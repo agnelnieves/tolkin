@@ -47,6 +47,9 @@ use event::Msg;
 
 /// Frame cadence while a tween or spinner runs (about 30 fps).
 const ANIM_TICK_MS: u64 = 33;
+/// Setup-screen cadence while the border pulse breathes (section 5: the
+/// 4600 ms sine only needs a 100 ms sample rate).
+const PULSE_TICK_MS: u64 = 100;
 /// Idle cadence: one tick per second refreshes relative times.
 const IDLE_TICK_MS: u64 = 1_000;
 
@@ -126,8 +129,13 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     loop {
         terminal.draw(|frame| app::view(frame, &model))?;
 
-        let cadence = if model.is_busy() || model.animator.active() {
+        // Reduced motion idles even while busy: the spinner is a static
+        // glyph there, so 30 fps would only burn battery. Worker completion
+        // messages wake the loop regardless of cadence.
+        let cadence = if (model.is_busy() && model.animator.enabled()) || model.animator.active() {
             ANIM_TICK_MS
+        } else if model.derived.setup_needed && model.animator.enabled() {
+            PULSE_TICK_MS
         } else {
             IDLE_TICK_MS
         };

@@ -83,17 +83,38 @@ impl Ease {
 }
 
 /// Identity of one animated value. Panels and rows are small indices so the
-/// key stays `Copy`.
+/// key stays `Copy`. Rows of reorderable data (machine projects, list
+/// reveals) key by an identity hash instead of a position, so sorting and
+/// filtering never reassign a tween to a different row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AnimKey {
     /// Header tab underline x position (in tab-index units).
     TabUnderline,
     /// Overview hero card count-up, by card index.
     Card(u8),
-    /// Horizontal bar fill, by (panel, row).
+    /// Horizontal bar fill, by (panel, row). Position-keyed panels only
+    /// (load profile buckets, day strips), where the index IS the identity.
     Bar { panel: u8, row: u8 },
     /// Slim percent gauge fill, by gauge index.
     Gauge(u8),
+    /// Machine project weight bar, keyed by `ident` of the project key so
+    /// filtered and re-sorted views sample their own tween.
+    Weight(u64),
+    /// Staggered row reveal, keyed by (list, `ident` of the row subject).
+    Reveal { panel: u8, id: u64 },
+    /// Toast slide-in progress, keyed by the toast's stack id.
+    Toast(u64),
+}
+
+/// FNV-1a hash of a row's identity string for [`AnimKey::Weight`] and
+/// [`AnimKey::Reveal`]. Stable across sorts and filters by construction.
+pub fn ident(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -106,9 +127,11 @@ struct Tween {
 }
 
 impl Tween {
+    /// A delayed tween (its `start` in the future) samples at `from` until
+    /// its birth: `saturating_duration_since` yields zero elapsed there.
     fn sample(&self, now: Instant) -> f32 {
         if self.dur.is_zero() {
-            return self.to;
+            return if now < self.start { self.from } else { self.to };
         }
         let elapsed = now.saturating_duration_since(self.start);
         let t = elapsed.as_secs_f32() / self.dur.as_secs_f32();
@@ -116,7 +139,7 @@ impl Tween {
     }
 
     fn finished(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.start) >= self.dur
+        now >= self.start && now.saturating_duration_since(self.start) >= self.dur
     }
 }
 
@@ -126,15 +149,19 @@ pub struct Animator {
     tweens: HashMap<AnimKey, Tween>,
     settled: HashMap<AnimKey, f32>,
     clock: Box<dyn Clock>,
+    /// Creation instant: the phase reference for [`Animator::pulse`].
+    born: Instant,
     enabled: bool,
 }
 
 impl Animator {
     pub fn new(clock: Box<dyn Clock>, enabled: bool) -> Animator {
+        let born = clock.now();
         Animator {
             tweens: HashMap::new(),
             settled: HashMap::new(),
             clock,
+            born,
             enabled,
         }
     }
@@ -165,6 +192,21 @@ impl Animator {
     /// A key never animated before starts from its settled value, falling
     /// back to 0.0 (bars grow in from empty on first data).
     pub fn go(&mut self, key: AnimKey, to: f32, dur: Duration, ease: Ease) {
+        self.go_delayed(key, to, dur, ease, Duration::ZERO);
+    }
+
+    /// `go` with a birth delay: the tween holds its `from` value until
+    /// `delay` elapses, then runs `dur` to `to`. This is the true row
+    /// stagger from the animation inventory (row i delayed i x 30 ms),
+    /// replacing the wave 1 duration-lengthening approximation.
+    pub fn go_delayed(
+        &mut self,
+        key: AnimKey,
+        to: f32,
+        dur: Duration,
+        ease: Ease,
+        delay: Duration,
+    ) {
         if !self.enabled {
             // Reduced motion: nothing to store. `value` returns the caller's
             // fallback (the model's current target), so disabled rendering
@@ -181,7 +223,7 @@ impl Animator {
             Tween {
                 from,
                 to,
-                start: now,
+                start: now + delay,
                 dur,
                 ease,
             },
@@ -209,6 +251,26 @@ impl Animator {
         }
         let now = self.clock.now();
         self.tweens.values().any(|t| !t.finished(now))
+    }
+
+    /// The setup-card breathing phase: a 0..=1 sine over `period_ms`,
+    /// sampled against the animator's birth instant. Reduced motion pins
+    /// the value at 0.5 (the middle ramp step, a plain accent border).
+    pub fn pulse(&self, period_ms: u64) -> f32 {
+        if !self.enabled || period_ms == 0 {
+            return 0.5;
+        }
+        let elapsed = self.clock.now().duration_since(self.born).as_millis() as u64;
+        let t = (elapsed % period_ms) as f32 / period_ms as f32;
+        0.5 + 0.5 * (t * std::f32::consts::TAU).sin()
+    }
+
+    /// Drop every trace of `key` (active tween and settled value). Used
+    /// when the keyed surface dies for good (an expired toast), so the
+    /// settled table cannot grow without bound over a long session.
+    pub fn forget(&mut self, key: AnimKey) {
+        self.tweens.remove(&key);
+        self.settled.remove(&key);
     }
 
     /// Move finished tweens to the settled table. Called on the tick path,
@@ -351,5 +413,124 @@ mod tests {
         a.go(AnimKey::Card(9), 3.0, Duration::ZERO, Ease::Linear);
         assert_eq!(a.value(AnimKey::Card(9), 0.0), 3.0);
         assert!(!a.active());
+    }
+
+    #[test]
+    fn delayed_tween_holds_from_until_birth_then_runs() {
+        let (mut a, clock) = manual_animator();
+        let key = AnimKey::Reveal { panel: 0, id: 7 };
+        a.go_delayed(
+            key,
+            1.0,
+            Duration::from_millis(100),
+            Ease::Linear,
+            Duration::from_millis(60),
+        );
+        // Pre-birth: holds the from value (0.0 for a fresh key) and keeps
+        // the loop hot so the birth frame renders on time.
+        assert_eq!(a.value(key, 9.0), 0.0);
+        assert!(a.active(), "delayed tween must keep the cadence at 30 fps");
+        clock.advance(Duration::from_millis(59));
+        assert_eq!(a.value(key, 9.0), 0.0, "still pre-birth at 59 ms");
+        a.prune();
+        assert!(
+            a.value(key, 9.0) == 0.0 && a.active(),
+            "prune must not settle a tween that has not been born"
+        );
+        // Birth plus half the duration: halfway through the ramp.
+        clock.advance(Duration::from_millis(51));
+        let v = a.value(key, 9.0);
+        assert!((v - 0.5).abs() < 0.01, "midpoint after birth, got {v}");
+        clock.advance(Duration::from_millis(50));
+        assert_eq!(a.value(key, 9.0), 1.0);
+        assert!(!a.active());
+    }
+
+    #[test]
+    fn staggered_rows_birth_in_index_order() {
+        let (mut a, clock) = manual_animator();
+        for row in 0..3u64 {
+            a.go_delayed(
+                AnimKey::Reveal { panel: 1, id: row },
+                1.0,
+                Duration::from_millis(30),
+                Ease::Linear,
+                Duration::from_millis(30 * row),
+            );
+        }
+        clock.advance(Duration::from_millis(45));
+        let v0 = a.value(AnimKey::Reveal { panel: 1, id: 0 }, 0.0);
+        let v1 = a.value(AnimKey::Reveal { panel: 1, id: 1 }, 0.0);
+        let v2 = a.value(AnimKey::Reveal { panel: 1, id: 2 }, 0.0);
+        assert_eq!(v0, 1.0, "row 0 finished");
+        assert!((v1 - 0.5).abs() < 0.01, "row 1 mid-ramp, got {v1}");
+        assert_eq!(v2, 0.0, "row 2 not yet born");
+    }
+
+    #[test]
+    fn reduced_motion_ignores_delays_too() {
+        let clock = ManualClock::new();
+        let mut a = Animator::new(Box::new(clock.clone()), false);
+        a.go_delayed(
+            AnimKey::Toast(1),
+            1.0,
+            Duration::from_millis(150),
+            Ease::OutCubic,
+            Duration::from_millis(90),
+        );
+        assert_eq!(a.value(AnimKey::Toast(1), 1.0), 1.0, "snap to fallback");
+        assert!(!a.active());
+    }
+
+    #[test]
+    fn pulse_breathes_on_a_sine_and_pins_at_half_when_disabled() {
+        let clock = ManualClock::new();
+        let a = Animator::new(Box::new(clock.clone()), true);
+        assert!(
+            (a.pulse(4_600) - 0.5).abs() < 0.001,
+            "phase 0 sits mid-ramp"
+        );
+        clock.advance(Duration::from_millis(1_150));
+        assert!(a.pulse(4_600) > 0.99, "quarter period peaks");
+        clock.advance(Duration::from_millis(2_300));
+        assert!(a.pulse(4_600) < 0.01, "three quarters bottoms out");
+        clock.advance(Duration::from_millis(1_150));
+        assert!((a.pulse(4_600) - 0.5).abs() < 0.001, "full period wraps");
+        let disabled = Animator::new(Box::new(clock.clone()), false);
+        clock.advance(Duration::from_millis(1_150));
+        assert_eq!(disabled.pulse(4_600), 0.5, "reduced motion pins the ramp");
+        assert_eq!(a.pulse(0), 0.5, "zero period never divides by zero");
+    }
+
+    #[test]
+    fn forget_drops_tween_and_settled_state() {
+        let (mut a, clock) = manual_animator();
+        a.go(
+            AnimKey::Toast(3),
+            1.0,
+            Duration::from_millis(10),
+            Ease::Linear,
+        );
+        clock.advance(Duration::from_millis(20));
+        a.prune();
+        assert_eq!(
+            a.value(AnimKey::Toast(3), 0.25),
+            1.0,
+            "settled before forget"
+        );
+        a.forget(AnimKey::Toast(3));
+        assert_eq!(
+            a.value(AnimKey::Toast(3), 0.25),
+            0.25,
+            "fallback after forget"
+        );
+        assert!(!a.active());
+    }
+
+    #[test]
+    fn ident_is_stable_and_separates_paths() {
+        assert_eq!(ident("src/lib.rs"), ident("src/lib.rs"));
+        assert_ne!(ident("src/lib.rs"), ident("src/main.rs"));
+        assert_ne!(ident(""), ident(" "));
     }
 }

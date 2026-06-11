@@ -9,7 +9,7 @@ use ratatui::widgets::{Paragraph, Sparkline};
 use ratatui::Frame;
 
 use crate::tui::anim::AnimKey;
-use crate::tui::app::{FilterTarget, Model, ScanState};
+use crate::tui::app::{reveal, FilterTarget, Model, ScanState};
 use crate::tui::components::bars;
 use crate::tui::components::list::render_select_list;
 use crate::tui::data::REALIZED_SPARK_POINTS;
@@ -184,12 +184,13 @@ fn render_heavy_files(frame: &mut Frame, area: Rect, model: &Model) {
                 format::commas(h.tokens),
                 h.pct_always.min(999.0)
             );
-            Line::from(vec![
+            let line = Line::from(vec![
                 Span::styled(dir.to_string(), Style::default().fg(theme.faint)),
                 Span::styled(name.to_string(), Style::default().fg(theme.text)),
                 Span::raw(" ".repeat(pad)),
                 Span::styled(value, Style::default().fg(theme.muted)),
-            ])
+            ]);
+            super::reveal_row(model, reveal::HEAVY, &h.path, line, theme)
         })
         .collect();
     render_select_list(frame, inner, &rows, Some(model.sel_heavy.idx), true, theme);
