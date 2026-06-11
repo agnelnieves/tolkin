@@ -24,6 +24,7 @@ WIN32_X64="npm/tolkin-win32-x64/package.json"
 SKILL_AUDIT="../../distribution/skills/tolkin-audit/SKILL.md"
 SKILL_OPTIMIZE="../../distribution/skills/tolkin-optimize/SKILL.md"
 SKILL_SLIM="../../distribution/skills/tolkin-slim/SKILL.md"
+SKILL_CACHE="../../distribution/skills/tolkin-cache/SKILL.md"
 
 current=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$WRAPPER" | head -1)
 if [[ ! "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -53,7 +54,7 @@ for f in "$WRAPPER" "$ARM64" "$X64" "$LINUX_X64" "$LINUX_ARM64" "$WIN32_X64" "pa
   CURRENT="$current" NEXT="$next" perl -pi -e \
     's/^  "version": "\Q$ENV{CURRENT}\E",$/  "version": "$ENV{NEXT}",/' "$f"
 done
-for f in "$SKILL_AUDIT" "$SKILL_OPTIMIZE" "$SKILL_SLIM"; do
+for f in "$SKILL_AUDIT" "$SKILL_OPTIMIZE" "$SKILL_SLIM" "$SKILL_CACHE"; do
   CURRENT="$current" NEXT="$next" perl -pi -e \
     's/^  version: \Q$ENV{CURRENT}\E$/  version: $ENV{NEXT}/' "$f"
 done
@@ -80,6 +81,7 @@ done
 grep -q "^  version: $next$" "$SKILL_AUDIT" || { echo "$SKILL_AUDIT did not update" >&2; fail=1; }
 grep -q "^  version: $next$" "$SKILL_OPTIMIZE" || { echo "$SKILL_OPTIMIZE did not update" >&2; fail=1; }
 grep -q "^  version: $next$" "$SKILL_SLIM" || { echo "$SKILL_SLIM did not update" >&2; fail=1; }
+grep -q "^  version: $next$" "$SKILL_CACHE" || { echo "$SKILL_CACHE did not update" >&2; fail=1; }
 [ "$fail" -eq 0 ] || exit 1
 
 echo "Done. All carriers at $next."

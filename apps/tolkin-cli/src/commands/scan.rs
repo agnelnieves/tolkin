@@ -240,6 +240,94 @@ fn render(r: &ScanReport, home: &Path, provider: TokProvider, deep: bool) -> Str
         let _ = writeln!(out, "Environment: {} detected", r.environment.join(", "));
     }
 
+    // Hooks section
+    if r.hooks.is_empty() {
+        let _ = writeln!(out, "Hooks: none configured");
+        let _ = writeln!(
+            out,
+            "  No hooks key found in .claude/settings.json or .claude/settings.local.json."
+        );
+        let _ = writeln!(
+            out,
+            "  Paste one or both of the following into .claude/settings.json to guard large"
+        );
+        let _ = writeln!(out, "  tool calls and cap oversized outputs (hooks docs: https://code.claude.com/docs/en/hooks):");
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "  PreToolUse guard (block Bash commands whose stdin exceeds 10 KB):"
+        );
+        let _ = writeln!(
+            out,
+            r#"  {{
+    "hooks": {{
+      "PreToolUse": [
+        {{
+          "matcher": "Bash",
+          "hooks": [
+            {{
+              "type": "command",
+              "command": "input=$(cat); size=$(printf '%s' \"$input\" | wc -c); if [ \"$size\" -gt 10240 ]; then echo \"{{\\\"decision\\\": \\\"block\\\", \\\"reason\\\": \\\"stdin exceeds 10 KB (\" + $size + \" bytes); trim the input before running\\\"}}\"; else echo \"$input\"; fi"
+            }}
+          ]
+        }}
+      ]
+    }}
+  }}"#
+        );
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "  PostToolUse truncation hook (cap tool output at 50 KB before it enters context):"
+        );
+        let _ = writeln!(
+            out,
+            r#"  {{
+    "hooks": {{
+      "PostToolUse": [
+        {{
+          "matcher": ".*",
+          "hooks": [
+            {{
+              "type": "command",
+              "command": "input=$(cat); limit=51200; if [ \"$(printf '%s' \"$input\" | wc -c)\" -gt \"$limit\" ]; then printf '%s' \"$input\" | head -c \"$limit\"; echo \"\\n[tolkin: output truncated at 50 KB]\"; else printf '%s' \"$input\"; fi"
+            }}
+          ]
+        }}
+      ]
+    }}
+  }}"#
+        );
+        let _ = writeln!(out);
+    } else {
+        let total_events: usize = r.hooks.iter().map(|h| h.events.len()).sum();
+        let _ = writeln!(
+            out,
+            "Hooks: {} file(s) configured ({} event type(s))",
+            r.hooks.len(),
+            total_events
+        );
+        for h in &r.hooks {
+            if h.events.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "  {} ({}): hooks key present, no event types configured",
+                    scan::display_path(&h.path, home),
+                    h.scope
+                );
+            } else {
+                let _ = writeln!(
+                    out,
+                    "  {} ({}): {}",
+                    scan::display_path(&h.path, home),
+                    h.scope,
+                    h.events.join(", ")
+                );
+            }
+        }
+    }
+    let _ = writeln!(out);
+
     for w in &r.warnings {
         let _ = writeln!(out, "warn: {w}");
     }
@@ -324,11 +412,24 @@ fn to_json(r: &ScanReport, provider: TokProvider) -> Value {
         })
         .collect();
 
+    let hooks: Vec<Value> = r
+        .hooks
+        .iter()
+        .map(|h| {
+            json!({
+                "path": h.path,
+                "scope": h.scope,
+                "events": h.events,
+            })
+        })
+        .collect();
+
     json!({
         "mcp": mcp,
         "instruction_files": instruction_files,
         "shell": shell,
         "workflows_llm": workflows_llm,
+        "hooks": hooks,
         "environment": r.environment,
         "warnings": r.warnings,
         "totals": {
@@ -341,6 +442,7 @@ fn to_json(r: &ScanReport, provider: TokProvider) -> Value {
             "shell_secret_count": r.shell.iter().map(|s| s.secret_count).sum::<usize>(),
             "workflows_llm_files": r.workflows_llm.len(),
             "workflows_llm_prompt_tokens": r.workflows_llm.iter().map(|w| w.prompt_tokens).sum::<u64>(),
+            "hooks_files": r.hooks.len(),
             "provider": provider.slug(),
         },
     })
@@ -375,7 +477,7 @@ fn usd(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scan::{InstructionFile, McpFinding, ShellFinding, SwapInfo};
+    use crate::scan::{HooksFinding, InstructionFile, McpFinding, ShellFinding, SwapInfo};
     use std::path::PathBuf;
     use tolkin_core::mcp;
 
@@ -385,6 +487,7 @@ mod tests {
             instruction_files: vec![],
             shell: vec![],
             workflows_llm: vec![],
+            hooks: vec![],
             environment: vec![],
             warnings: vec![],
         }
@@ -421,9 +524,20 @@ mod tests {
                 kinds: vec!["openai-key".to_string(), "high-entropy".to_string()],
             }],
             workflows_llm: vec![],
+            hooks: vec![],
             environment: vec!["node".to_string(), "gh".to_string()],
             warnings: vec![],
         }
+    }
+
+    fn report_with_hooks() -> ScanReport {
+        let mut r = empty_report();
+        r.hooks = vec![HooksFinding {
+            path: PathBuf::from("/home/u/.claude/settings.json"),
+            scope: "user",
+            events: vec!["PostToolUse".to_string(), "PreToolUse".to_string()],
+        }];
+        r
     }
 
     #[test]
@@ -439,6 +553,33 @@ mod tests {
         assert!(out.contains("Instruction files (0 found"));
         assert!(out.contains("Total reclaimable (MCP swaps): none found"));
         assert!(!out.contains("warn:"));
+    }
+
+    #[test]
+    fn no_hooks_renders_recommendation_with_templates() {
+        let out = render(
+            &empty_report(),
+            Path::new("/home/u"),
+            TokProvider::Anthropic,
+            false,
+        );
+        assert!(out.contains("Hooks: none configured"));
+        assert!(out.contains("PreToolUse"));
+        assert!(out.contains("PostToolUse"));
+        assert!(out.contains("code.claude.com/docs/en/hooks"));
+    }
+
+    #[test]
+    fn hooks_present_renders_neutral_fact() {
+        let out = render(
+            &report_with_hooks(),
+            Path::new("/home/u"),
+            TokProvider::Anthropic,
+            false,
+        );
+        assert!(out.contains("Hooks: 1 file(s) configured (2 event type(s))"));
+        assert!(out.contains("PostToolUse, PreToolUse"));
+        assert!(!out.contains("none configured"));
     }
 
     #[test]
@@ -466,6 +607,7 @@ mod tests {
             "mcp",
             "instruction_files",
             "shell",
+            "hooks",
             "environment",
             "warnings",
             "totals",
@@ -480,8 +622,20 @@ mod tests {
         assert_eq!(v["shell"][0]["secret_count"], 2);
         assert_eq!(v["totals"]["provider"], "anthropic");
         assert_eq!(v["totals"]["reclaimable_tokens"], 40_000);
+        assert!(v["totals"]["hooks_files"].is_u64());
         // round-trips through a serializer
         let s = serde_json::to_string(&v).unwrap();
         let _: Value = serde_json::from_str(&s).unwrap();
+    }
+
+    #[test]
+    fn hooks_json_carries_path_scope_events() {
+        let v = to_json(&report_with_hooks(), TokProvider::Anthropic);
+        let hooks = v["hooks"].as_array().unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0]["scope"], "user");
+        let events = hooks[0]["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(v["totals"]["hooks_files"], 1);
     }
 }

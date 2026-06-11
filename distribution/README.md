@@ -156,6 +156,12 @@ repository.
 | Linux arm64 | Live | Live (tap) |
 | Windows x64 | Live | Not supported (use npx) |
 
+## Privacy
+
+See [PRIVACY.md](PRIVACY.md) for the full privacy posture: zero network
+egress from the analyzer, what the local ledger stores, log ingestion scope,
+and the env variables that disable persistence.
+
 ## License
 
 MIT. See `LICENSE`.

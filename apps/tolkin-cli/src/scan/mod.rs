@@ -352,6 +352,22 @@ pub struct ShellFinding {
     pub kinds: Vec<String>,
 }
 
+/// Hooks configuration detected in a `.claude/settings.json` or
+/// `.claude/settings.local.json` file (project or user level). Detection only:
+/// we check for the presence of the `hooks` key and which event names are
+/// configured. We never parse hook commands, scripts, or matchers beyond the
+/// event-name set; those are runtime details that do not belong in a static scan.
+#[derive(Debug)]
+pub struct HooksFinding {
+    pub path: std::path::PathBuf,
+    /// The scope label: "user" for the user-level settings file, "project" for
+    /// the project-level one.
+    pub scope: &'static str,
+    /// Event names configured under the `hooks` key, sorted. Empty when the
+    /// `hooks` key is present but empty. Absent events are not listed.
+    pub events: Vec<String>,
+}
+
 /// One workflow file containing LLM-invoking steps (uses: anthropics/claude-code-action
 /// variants, or prompt-bearing fields like prompt:, system_prompt:, claude_args:).
 /// Token counts cover ONLY the prompt-bearing string values, never the whole
@@ -383,6 +399,10 @@ pub struct ScanReport {
     /// LLM-invoking workflow steps. Prompt tokens are per-CI-run, not
     /// per-agent-session, and are NEVER included in always-loaded totals.
     pub workflows_llm: Vec<WorkflowLlmFinding>,
+    /// Claude Code hooks configuration detected in settings files. Empty means
+    /// no hooks key was found anywhere; one entry per settings file that carries
+    /// the key (at most two: user-level and project-level).
+    pub hooks: Vec<HooksFinding>,
     pub environment: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -397,12 +417,14 @@ pub fn scan(roots: &ScanRoots, path_var: &str, provider: CoreProvider, deep: boo
     let instruction_files = collect_instructions(roots, deep, &mut warnings);
     let shell = collect_shell(&roots.home, &mut warnings);
     let workflows_llm = collect_workflows_llm(&roots.cwd, &mut warnings);
+    let hooks = collect_hooks(roots, &mut warnings);
     let environment = collect_environment(&roots.cwd, path_var);
     ScanReport {
         mcp,
         instruction_files,
         shell,
         workflows_llm,
+        hooks,
         environment,
         warnings,
     }
@@ -794,6 +816,64 @@ fn collect_shell(home: &Path, warnings: &mut Vec<String>) -> Vec<ShellFinding> {
             secret_count: count,
             kinds,
         });
+    }
+    out
+}
+
+/// Detect Claude Code hooks configuration in settings files.
+///
+/// Checked locations (presence-only; never parsed beyond the `hooks` key):
+/// - Project-level: `<cwd>/.claude/settings.json` and `<cwd>/.claude/settings.local.json`
+/// - User-level: `<home>/.claude/settings.json`
+///
+/// Detection is tolerant of malformed JSON: a file that cannot be parsed
+/// contributes no finding (silently skipped; a warning is added so the caller
+/// can disclose the skip). The `hooks` value is parsed only enough to extract
+/// the set of event-name keys; no deeper structure is read.
+fn collect_hooks(roots: &ScanRoots, warnings: &mut Vec<String>) -> Vec<HooksFinding> {
+    let candidates: &[(&std::path::Path, &'static str)] =
+        &[(&roots.home, "user"), (&roots.cwd, "project")];
+    let rel_paths = [".claude/settings.json", ".claude/settings.local.json"];
+    let mut out: Vec<HooksFinding> = Vec::new();
+
+    for (base, scope) in candidates {
+        for rel in &rel_paths {
+            let path = base.join(rel);
+            if !path.is_file() {
+                continue;
+            }
+            let text = match fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) => {
+                    warnings.push(format!(
+                        "hooks scan: could not read {}: {e}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            // Tolerant parse: malformed JSON means no hooks finding for this file.
+            let value: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let Some(hooks_val) = value.get("hooks") else {
+                continue;
+            };
+            // Extract event names: the hooks value is expected to be an object
+            // whose keys are event names. Anything that is not an object yields
+            // an empty event list (presence still recorded).
+            let mut events: Vec<String> = hooks_val
+                .as_object()
+                .map(|obj| obj.keys().cloned().collect())
+                .unwrap_or_default();
+            events.sort();
+            out.push(HooksFinding {
+                path,
+                scope,
+                events,
+            });
+        }
     }
     out
 }
@@ -1809,5 +1889,170 @@ jobs:
             findings[0].prompt_tokens >= 10,
             "expected at least 10 tokens for the prompt text"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Hooks detector tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn hooks_absent_when_no_settings_files_exist() {
+        let home = tmp("hooks-absent-home");
+        let cwd = tmp("hooks-absent-cwd");
+        let config = tmp("hooks-absent-config");
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let mut warnings = Vec::new();
+        let findings = collect_hooks(&roots, &mut warnings);
+        assert!(findings.is_empty(), "expected no hooks: {findings:?}");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn hooks_absent_when_settings_json_has_no_hooks_key() {
+        let home = tmp("hooks-nokey-home");
+        let cwd = tmp("hooks-nokey-cwd");
+        let config = tmp("hooks-nokey-config");
+        let claude_dir = cwd.join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::write(
+            claude_dir.join("settings.json"),
+            r#"{ "model": "claude-sonnet-4-6" }"#,
+        )
+        .unwrap();
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let mut warnings = Vec::new();
+        let findings = collect_hooks(&roots, &mut warnings);
+        assert!(
+            findings.is_empty(),
+            "expected no hooks when key absent: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn hooks_detected_in_project_settings_json() {
+        let home = tmp("hooks-proj-home");
+        let cwd = tmp("hooks-proj-cwd");
+        let config = tmp("hooks-proj-config");
+        let claude_dir = cwd.join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::write(
+            claude_dir.join("settings.json"),
+            r#"{ "hooks": { "PreToolUse": [], "PostToolUse": [] } }"#,
+        )
+        .unwrap();
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let mut warnings = Vec::new();
+        let findings = collect_hooks(&roots, &mut warnings);
+        assert_eq!(findings.len(), 1, "expected 1 hooks finding");
+        assert_eq!(findings[0].scope, "project");
+        assert_eq!(findings[0].events, vec!["PostToolUse", "PreToolUse"]);
+    }
+
+    #[test]
+    fn hooks_detected_in_user_level_settings() {
+        let home = tmp("hooks-user-home");
+        let cwd = tmp("hooks-user-cwd");
+        let config = tmp("hooks-user-config");
+        let claude_dir = home.join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::write(
+            claude_dir.join("settings.json"),
+            r#"{ "hooks": { "Stop": [] } }"#,
+        )
+        .unwrap();
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let mut warnings = Vec::new();
+        let findings = collect_hooks(&roots, &mut warnings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].scope, "user");
+        assert_eq!(findings[0].events, vec!["Stop"]);
+    }
+
+    #[test]
+    fn hooks_detected_in_settings_local_json() {
+        let home = tmp("hooks-local-home");
+        let cwd = tmp("hooks-local-cwd");
+        let config = tmp("hooks-local-config");
+        let claude_dir = cwd.join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::write(
+            claude_dir.join("settings.local.json"),
+            r#"{ "hooks": { "PreToolUse": [] } }"#,
+        )
+        .unwrap();
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let mut warnings = Vec::new();
+        let findings = collect_hooks(&roots, &mut warnings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].scope, "project");
+        assert_eq!(findings[0].events, vec!["PreToolUse"]);
+    }
+
+    #[test]
+    fn hooks_tolerates_malformed_json_silently() {
+        let home = tmp("hooks-malformed-home");
+        let cwd = tmp("hooks-malformed-cwd");
+        let config = tmp("hooks-malformed-config");
+        let claude_dir = cwd.join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::write(claude_dir.join("settings.json"), "{ not valid json }").unwrap();
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let mut warnings = Vec::new();
+        let findings = collect_hooks(&roots, &mut warnings);
+        // Malformed JSON: no finding, no warning (parse silently skipped).
+        assert!(
+            findings.is_empty(),
+            "expected no finding for malformed JSON"
+        );
+        assert!(
+            warnings.is_empty(),
+            "expected no warning for malformed JSON"
+        );
+    }
+
+    #[test]
+    fn hooks_detected_in_both_user_and_project() {
+        let home = tmp("hooks-both-home");
+        let cwd = tmp("hooks-both-cwd");
+        let config = tmp("hooks-both-config");
+        let home_claude = home.join(".claude");
+        let cwd_claude = cwd.join(".claude");
+        fs::create_dir_all(&home_claude).unwrap();
+        fs::create_dir_all(&cwd_claude).unwrap();
+        fs::write(
+            home_claude.join("settings.json"),
+            r#"{ "hooks": { "Stop": [] } }"#,
+        )
+        .unwrap();
+        fs::write(
+            cwd_claude.join("settings.json"),
+            r#"{ "hooks": { "PreToolUse": [], "PostToolUse": [] } }"#,
+        )
+        .unwrap();
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let mut warnings = Vec::new();
+        let findings = collect_hooks(&roots, &mut warnings);
+        assert_eq!(findings.len(), 2);
+        let scopes: Vec<&str> = findings.iter().map(|f| f.scope).collect();
+        assert!(scopes.contains(&"user"), "user scope missing: {scopes:?}");
+        assert!(
+            scopes.contains(&"project"),
+            "project scope missing: {scopes:?}"
+        );
+    }
+
+    #[test]
+    fn hooks_empty_events_when_hooks_key_is_empty_object() {
+        let home = tmp("hooks-empty-home");
+        let cwd = tmp("hooks-empty-cwd");
+        let config = tmp("hooks-empty-config");
+        let claude_dir = cwd.join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::write(claude_dir.join("settings.json"), r#"{ "hooks": {} }"#).unwrap();
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let mut warnings = Vec::new();
+        let findings = collect_hooks(&roots, &mut warnings);
+        assert_eq!(findings.len(), 1, "hooks key present even when empty");
+        assert!(findings[0].events.is_empty(), "expected empty events list");
     }
 }
