@@ -70,14 +70,16 @@ file is reproduced verbatim at
 `apps/tolkin-cli/benchmarks/external/cavemem-LICENSE`; source repository
 https://github.com/JuliusBrussee/cavemem; npm package fetched 2026-06-10.
 
-The published README claims about 46 percent compression. The
-cross-reference review documented this figure as unverified. The harness
-runs `cavemem compress` on the same three prose fixtures the LLMLingua-2
-cases use, tokenizes the output with o200k_base, and publishes the
-measured saved percent in the lossy comparison row alongside the claimed
-figure with the basis ("undisclosed in the cavemem README; the upstream
-75 percent prose number is the caveman compressor's claim, distinct
-from cavemem's 46 percent memory-store number") spelled out.
+The upstream cavemem README's only compression figure is about 75
+percent fewer prose tokens for the caveman grammar that `cavemem
+compress` runs (basis undisclosed; no methodology published). A
+separate about-46-percent memory-store figure appears in the
+cross-reference research notes (REVIEW-FINDINGS.md) as unverified; it is
+not in the upstream README and is not attributed to the upstream here.
+The harness runs `cavemem compress` on the same three prose fixtures
+the LLMLingua-2 cases use, tokenizes the output with o200k_base, and
+publishes the measured saved percent in the lossy comparison row
+alongside the upstream figure with the basis spelled out.
 
 The `cavemem compress` subcommand is pure-JS and does not touch the
 sqlite store, the embedding worker, or any network. The native

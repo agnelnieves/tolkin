@@ -245,11 +245,15 @@ export async function runLossyComparisons(): Promise<ExternalComparison[]> {
     await rm(pack.scratchDir, { recursive: true, force: true });
   }
 
-  // cavemem compress: published README claims about 46 percent compression
-  // for memory storage. The cross-reference review flagged this figure as
-  // unverified. Pinned via bun (cavemem@0.2.1 in apps/tolkin-cli
-  // devDependencies); the `compress` subcommand is pure-JS and does not
-  // require the sqlite store or the embedding worker, so it runs headlessly.
+  // cavemem compress: the upstream README states the caveman grammar
+  // achieves about 75 percent fewer prose tokens (the only compression
+  // figure the README publishes; the basis is undisclosed). The
+  // cross-reference review (REVIEW-FINDINGS.md) separately cited an
+  // unverified 46 percent third-party figure for memory-store compression;
+  // the 46 percent figure is not in the upstream README. Pinned via bun
+  // (cavemem@0.2.1 in apps/tolkin-cli devDependencies); the `compress`
+  // subcommand is pure-JS and does not require the sqlite store or the
+  // embedding worker, so it runs headlessly.
   let cavememBefore = 0;
   let cavememAfter = 0;
   for (const spec of CASES) {
@@ -267,9 +271,9 @@ export async function runLossyComparisons(): Promise<ExternalComparison[]> {
     after_tokens: cavememAfter,
     savings_pct: round2(cavememSavingsPct),
     reason:
-      "MIT-licensed, runs headlessly via `cavemem compress <file>`; the subcommand is pure-JS and does not touch the sqlite store or the embedding worker. Pinned via bun (apps/tolkin-cli devDependencies); LICENSE vendored at benchmarks/external/cavemem-LICENSE. Run on the same three prose fixtures the LLMLingua-2 cases use, with token counts from the same `tolkin count --model openai` path. Upstream README claims about 46 percent for memory-store compression; basis: undisclosed (the 46 percent figure is distinct from cavemem's caveman-grammar reference of about 75 percent for prose, and from the parent caveman skill's about 65 percent for output).",
+      "MIT-licensed, runs headlessly via `cavemem compress <file>`; the subcommand is pure-JS and does not touch the sqlite store or the embedding worker. Pinned via bun (apps/tolkin-cli devDependencies); LICENSE vendored at benchmarks/external/cavemem-LICENSE. Run on the same three prose fixtures the LLMLingua-2 cases use, with token counts from the same `tolkin count --model openai` path. The upstream cavemem README's only compression figure is about 75 percent fewer prose tokens for the caveman grammar that `cavemem compress` runs; published basis: cavemem README (no methodology disclosed). A separate 46 percent figure for memory-store compression appears in the cross-reference research notes as unverified; it is not in the upstream README, so it is not attributed to the upstream here.",
     notes:
-      "The cross-reference review (REVIEW-FINDINGS.md) flagged this claim as unverified at the gap-1 surface. This row is the measurement: bench fixtures, same tokenizer, same one-command harness as the other comparisons.",
+      "The cross-reference review (REVIEW-FINDINGS.md) flagged the 46 percent memory-store figure as unverified at the gap-1 surface and the upstream README's about-75-percent prose figure has no published methodology. This row is the measurement: bench fixtures, same tokenizer, same one-command harness as the other comparisons.",
   });
 
   return comparisons;
