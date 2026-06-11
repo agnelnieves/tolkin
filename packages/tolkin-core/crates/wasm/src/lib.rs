@@ -89,7 +89,8 @@ fn parse_provider(provider: &str) -> tolkin_core::Provider {
 /// platform-native by design.
 #[wasm_bindgen]
 pub fn parse_tools_list(tools_json: &str) -> Result<String, JsError> {
-    let specs = tolkin_core::mcp_tools::parse_tools_list(tools_json).map_err(|e| JsError::new(&e))?;
+    let specs =
+        tolkin_core::mcp_tools::parse_tools_list(tools_json).map_err(|e| JsError::new(&e))?;
     serde_json::to_string(&specs).map_err(|e| JsError::new(&e.to_string()))
 }
 
