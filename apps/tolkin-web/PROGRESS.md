@@ -902,3 +902,7 @@ A6's double run on its binary, `tolkin cache --global --json` vs an independent 
 | Reconciliation | table above; exact match |
 
 Bumped 0.9.1 -> 0.10.0 (minor: new subcommand, new persistence format v3).
+
+### 2026-06-11: 0.10.0 published; windows CI hotfix (TOLKIN_HOME_DIR seam)
+
+The 0.10.0 publish went green across all six packages (run 27315174901), but tolkin-ci's windows job failed on the two new cache integration tests: they seed a synthetic log tree under a temp HOME, and `dirs::home_dir()` on Windows resolves through the known-folder API (verified in dirs-sys 0.4.1 source), which ignores HOME and USERPROFILE entirely, so the seeded logs were invisible and the hand-computed assertions saw zero sessions. Fix: usage discovery now resolves from `usage::home_root()`, which honors a `TOLKIN_HOME_DIR` override (test and dev plumbing, the TOLKIN_DATA_DIR pattern) before falling back to the real home; the cache tests set it alongside HOME. Production behavior unchanged when the variable is absent. Windows job green on the fix (run 27315415628); registry carries tolkin-cli@0.10.0. Wave 1 fully closed; wave 2 (CI delta gates, tools/list ingestion plus bench upgrade, measured advisories, and the subagent-transcript ingestion fix) dispatched as four parallel worktree agents.
