@@ -20,13 +20,14 @@ This is the canonical work log for Tolkin. Every work unit (session, agent run, 
 | I4. Benchmark harness + results page | completed | three-track harness (structural, configuration, lossy), methodology doc, deterministic results.json + RESULTS.md, /bench page, tolkin-bench.yml. 2026-06-10, 0.7.0 |
 | I5. Distribution layer (skills, plugin, action, report) | completed | tolkin report --html, distribution/ staging (3 skills, plugin manifests, composite action, public README), action dry-run workflow. 2026-06-10, 0.8.0 |
 | I6-1. Review hotfixes (P0s + P1s) | completed | audit workflow un-parse-killed, cache multipliers derived from pricing (Gemini cached rates modeled), skills regenerated from live contracts + schema-drift lint in CI, distribution truth fixes + configuration-track honesty labels, input-first cost default. 2026-06-10, 0.9.1 |
+| I6-2. tolkin cache slice 1 | completed | per-request retention (parse cache v3), cache_analysis module (hit rate + advisory, write churn, TTL counterfactual at marginal rates, cadence), `tolkin cache` + stats/TUI/report surfaces, adversarial review signed off, I2-style double reconciliation exact. 2026-06-10, 0.10.0 |
 
 ## Workspace state
 
 | Workspace | Exists | Builds | Lints | Notes |
 |---|---|---|---|---|
 | packages/tolkin-core | yes | yes (cargo + wasm-pack) | yes (clippy + fmt) | Rust workspace with core (rlib) + wasm (cdylib). Modules: `pricing` (11 models + `PRICES_OBSERVED`; Gemini 2.5 cached rates modeled), `cost` (cache/batch/long-context; input-side default, output estimate opt-in), `redact` (vendor catalog + entropy + ledger), `mcp` (client-agnostic config analyzer + CLI-swap catalog; cache multipliers derived from the pricing table), `audit` (6 production-proven + 6 experimental rules, format previews), `format` (json-minify, json-to-toon, html-to-markdown). 90 unit tests. WASM bindings expose `redact`/`cost`/`models`/`analyze_mcp`/`audit`/`prices_observed`; artifact in pkg/ (gitignored). |
-| apps/tolkin-cli | yes | yes (cargo) | yes (clippy + fmt) | Rust binary. 12 subcommands plus the bare-`tolkin` Ratatui dashboard (Project/Machine/Spend tabs; `stats --tui`/`--compact`): `count` (with `--verify`), `compare`, `viz`, `redact`, `cost`, `mcp`, `audit`, `drift`, `scan` (per-OS catalog), `project`, `init`, `stats` (three-tier savings, `--global`/`--json`/`--reset`). Local savings ledger + opt-in usage-log ingestion (Claude Code, Codex; mtime+size parse cache). Scripts: portable bump (carries the three skill versions), check-skill-schemas.ts (CI drift lint). 136 unit + 10 integration tests. |
+| apps/tolkin-cli | yes | yes (cargo) | yes (clippy + fmt) | Rust binary. 12 subcommands plus the bare-`tolkin` Ratatui dashboard (Project/Machine/Spend tabs; `stats --tui`/`--compact`): `count` (with `--verify`), `compare`, `viz`, `redact`, `cost`, `mcp`, `audit`, `drift`, `scan` (per-OS catalog), `project`, `init`, `stats` (three-tier savings, `--global`/`--json`/`--reset`). Local savings ledger + opt-in usage-log ingestion (Claude Code, Codex; mtime+size parse cache v3 with per-request retention). `cache` command: measured prompt-cache health (hit rate + advisory, write churn, 5m vs 1h TTL counterfactual, cadence), Claude-Code-sourced. Scripts: portable bump (carries the three skill versions), check-skill-schemas.ts (CI drift lint), cache-recompute.ts (reconciliation harness). 161 unit + 16 integration tests. |
 | apps/tolkin-web | yes | yes (Turbopack) | yes (Biome + oxlint) | Next.js 16 + Tailwind v4 + tsgo. Home page: shared-state textarea + file dropzone + redaction ledger + 3-provider count panel (with opt-in Verify with Anthropic on the Claude card) + token-chip visualizer + cost calculator (with prices-observed staleness note) + audit panel (Lighthouse-style ranked findings), plus the standalone MCP analyzer. Tokenization and the tolkin-core WASM each run in a dedicated Web Worker; parsers lazy-load. Redaction runs first and feeds every downstream view. The only sanctioned fetch lives in `src/lib/verify/anthropic.ts`. |
 
 ## Open questions
@@ -851,3 +852,53 @@ Incident recorded in LESSONS.md: the orchestrator's shell cwd drifted into compl
 ### 2026-06-10: 0.9.1 shipped; audit workflow proven live on a real PR
 
 The wave 0 merge published 0.9.1 across all six packages via trusted publishing with every leg strict (run 27311934160), the first release needing zero owner action. tolkin-ci green on main including the skill schema drift lint's first CI execution. The P0-1 proof landed: PR 26 (a real docs change adding the drift lint to CLAUDE.md/AGENTS.md) triggered the repaired tolkin-audit workflow, which ran green and posted the sticky comment with the per-file token table (both changed files at ~1K tokens, zero findings) and the repo load profile (always 7,453 / on-invocation 32,336). Registry verified: tolkin-cli@0.9.1, tolkin-darwin-arm64@0.9.1, tolkin-win32-x64@0.9.1. PR 26 merged; wave 0 closed. Wave 1 (`tolkin cache` slice 1) is in flight.
+
+### 2026-06-10: Wave 1, tolkin cache slice 1; adversarially reviewed; 0.10.0
+
+The owner's stated priority from REVIEW-FINDINGS (the deep-dive spec): measured prompt-cache health from the consented logs, the capability neither research realized was possible locally. One author agent (A6) built it; a separate adversarial agent (A7, orders to break it) reviewed it; the wave carried both their commits.
+
+#### What shipped
+
+- **Per-request retention.** The Claude Code reader retains a compact per-request tuple per session (ts, fresh input, cache read, 5m write, 1h write), populated AFTER the I2 global cross-file dedup so resumed sessions never double count (pinned, including the nastier different-usage-numbers winner case A7 added). Parse cache bumped to v3; v1/v2 self-heal by silent reparse (tested, plus corrupted-cache fallback). Codex rollouts carry no cache-write fields, so cache analysis is Claude-Code-sourced for now and every surface says so.
+- **`src/cache_analysis.rs`** (pure module, 16+ golden and edge tests): hit rate per scope with the under-0.5 active-day broken-cache advisory (ground truth); write churn as tokens written after a session's first write with worst sessions named by id and start ts only (ground truth, with the disclosure below); the 5m vs 1h TTL counterfactual simulated over the real gap timeline (reads refresh the TTL, gap strictly over the TTL forces a re-write, gap equal to the TTL is a hit; all boundary-tested), priced at per-model MARGINAL write rates (write minus the 0.1x read you would have paid anyway: 1.15x and 1.9x input, derived from the pricing table and pinned by test for all four Anthropic models); break-even rendered as: the 1h TTL wins exactly when 1.9 x W1 < 1.15 x W5; cadence facts (intra-session gaps over 5m, per-project inter-session gaps under 1h, zero-cache-read sessions). Sessions priced at their dominant model; unpriced models excluded from dollars and disclosed with the priced share.
+- **Surfaces:** `tolkin cache [--global] [--json]` (consent-gated like stats; stable JSON schema); an ADDITIVE `cache` block in `stats --json` measured output (injected at the serialization layer, no existing key moved; the skills drift lint stayed green, 7/7); one TUI Spend-tab row (broken-cache advisory only); one Prompt cache health section in `report --html` (same shared-snapshot pattern as stats). Labeling everywhere: observed numbers Tier 3 ground truth; every simulated number Tier 1 advisory estimate computed from Tier 3 inputs; the scope line prints always (Claude Code manages its own caching; prefix stability and session shape are the levers there; TTL choice is an API-builder lever); input-token-bounded footer.
+
+#### The adversarial review (A7), in writing
+
+A7 verified the wave's named risk first: cache reads DO refresh both TTLs. Anthropic platform docs ("The cache is refreshed for no additional cost each time the cached content is used", platform.claude.com/docs/en/build-with-claude/prompt-caching) state it generally; the Bedrock docs state it explicitly for the dual-TTL models ("The cache has a Time To Live (TTL), which resets with each successful cache hit", docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html). Both quotes and URLs are pinned in the rustdoc of `simulated_write_events_reads_refresh_ttl`, with the caveat that Anthropic publishes no 1h-specific refresh sentence, so the verdict text and simulation must change together if that ever diverges.
+
+A7's sign-off block, verbatim disposition list:
+
+> SIGN-OFF: yes
+> - BREAK Churn-1: plain CLI headline flattened the metric to "a write after the first means the prefix changed mid-session", a strong claim the CHURN_NOTE then had to walk back. FIXED: the headline now describes what the share counts; the CHURN_NOTE carries the growth-vs-instability framing. Regression pinned by `cache_plain_churn_headline_survives_the_hostile_reader_test`.
+> - PIN TTL-1: refresh-on-read for 1h TTL holds (Anthropic general sentence plus Bedrock explicit statement). Citation updated from placeholder to two quoted statements with URLs. Simulation unchanged.
+> - PIN Dedup-2: same (message_id, requestId) in two files with DIFFERENT cache numbers retains the WINNER's tuple. New test `cross_file_retention_keeps_winners_cache_tuple_not_losers`; no code fix needed.
+
+Attacks survived without change (existing tests named in A7's full report): TTL boundary semantics, equal-ts ordering, out-of-order and future timestamps (saturating arithmetic), one-file-multiple-cwds, overlapping sessions, per-project gap scoping under --global, v2 self-heal, corrupted caches, tier labels and disclosures on every surface, all empty states and division-by-zero edges, HTML escaping, TUI pathological values, the stats additive contract.
+
+#### Reconciliation (the acceptance gate, the I2 ritual)
+
+A6's double run on its binary, `tolkin cache --global --json` vs an independent recompute (`scripts/cache-recompute.ts`, spec implemented from scratch), real logs, read-only: 176 sessions / 8,908 requests, hit rate 0.97522 (cache_read 1,776,801,009 of input-side 1,821,939,650), observed writes 0 at 5m / 44,941,903 at 1h, churn share 0.94268, simulated W5 565 events / 9,074,066 tokens, W1 255 / 3,670,734, dollars $37.48 (5m) vs $29.29 (1h), delta -$8.19, priced share 0.7795 (claude-fable-5 and claude-opus-4-6 unpriced), intra gaps over 5m 389/8,732, inter gaps under 1h 39/106, zero-cache-read sessions 2. Every field matched bit for bit, both runs. Orchestrator re-ran the pair twice on the final merged tree: the second pair matched exactly on all 24 compared fields (178 sessions / 9,012 requests by then); the first pair differed by exactly one request's worth (9,005 vs 9,006) because this very session appends to the logs between the pair's two sequential invocations, the live-log race A6 predicted. The TTL verdict on this machine's real data (advisory estimate computed from ground-truth gaps): the 1h TTL is the cheaper strategy (1.9 x W1 = 6.97M < 1.15 x W5 = 10.44M marginal write tokens), matching the TTL Claude Code actually uses (100 percent of observed writes are 1h).
+
+#### Found along the way (queued, not relitigated)
+
+- **Subagent-transcript ingestion gap (P1-class, pre-existing, affects all measured surfaces):** current Claude Code nests subagent transcripts at `~/.claude/projects/<slug>/<session-id>/subagents/agent-*.jsonl`, one level deeper than the I2 discovery walk reads; their usage records do not appear in the parent session file, so measured totals undercount subagent fan-out spend. Deliberately NOT fixed in this slice (it moves every measured surface and needs its own reconciliation); queued for wave 2.
+- **Per-model 1h-TTL availability footnote:** Bedrock lists some current models as 5m-only while the 4.5 family carries both TTLs; the counterfactual presents the 1h strategy without a per-model availability gate. Queued as polish (wave 3 hygiene).
+- **Churn field rename** (`share` reads like a defect score; a growth-neutral name would be better) is a documented-keys schema change; deferred deliberately.
+- Context for the launch story: a March 2026 incident silently reverted some setups' default TTL from 1h to 5m (anthropics/claude-code#46829), evidence that wild 1h usage may be lower than logs imply. No effect on the refresh semantics this slice depends on.
+
+#### Verification (combined tree, orchestrator-run)
+
+| Check | Result |
+|---|---|
+| cargo test (cli) | 161 unit + 16 integration pass (+2 ignored real-log probes) |
+| cargo test (core) | 90 pass |
+| clippy + fmt + cargo-deny, both workspaces | clean |
+| wasm-pack release build | pass |
+| web gates (lint, lint:fast, typecheck, build) | all pass |
+| skill schema drift lint | 7/7 green (the additive stats cache block broke no documented key) |
+| dash scan / egress scan / bun pm untrusted | 0 / 0 / clean |
+| bench determinism | not required this wave (no benchmarks/ or counting-path change); `count` smoke green |
+| Reconciliation | table above; exact match |
+
+Bumped 0.9.1 -> 0.10.0 (minor: new subcommand, new persistence format v3).
