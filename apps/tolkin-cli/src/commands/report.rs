@@ -293,7 +293,7 @@ fn render_tier_measured(measured: Option<&Measured>) -> String {
             ));
             out.push_str(&kv_row(
                 "Cache hit rate",
-                &format!("{:.1}%", m.cache_hit_rate * 100.0),
+                &format!("{:.1}% of input-side tokens", m.cache_hit_rate * 100.0),
                 None,
             ));
             out.push_str(&kv_row(
@@ -461,7 +461,7 @@ fn render_cache_section(cache: &CacheReport) -> String {
 
     if !churn.worst_sessions.is_empty() {
         out.push_str("<h3 class=\"sub\">Worst churn sessions</h3>");
-        out.push_str("<table class=\"data\"><thead><tr><th>Session</th><th>Started</th><th class=\"num\">After first</th><th class=\"num\">Total writes</th><th class=\"num\">Share</th></tr></thead><tbody>");
+        out.push_str("<table class=\"data\"><thead><tr><th>Session</th><th>Started</th><th class=\"num\">After first</th><th class=\"num\">Total writes</th><th class=\"num\">Share of writes</th></tr></thead><tbody>");
         for w in &churn.worst_sessions {
             out.push_str(&format!(
                 "<tr><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}%</td></tr>",

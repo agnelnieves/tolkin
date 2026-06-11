@@ -267,7 +267,7 @@ function ToolsDetailView({ detail }: { detail: McpToolInventory }) {
             <tr className="border-b border-zinc-800 text-[10px] uppercase tracking-wider text-zinc-500">
               <th className="px-3 py-2 font-medium">Tool</th>
               <th className="px-3 py-2 text-right font-medium">Tokens</th>
-              <th className="px-3 py-2 text-right font-medium">Share</th>
+              <th className="px-3 py-2 text-right font-medium">Share of server</th>
               <th className="px-3 py-2 text-right font-medium">Desc tokens</th>
             </tr>
           </thead>
