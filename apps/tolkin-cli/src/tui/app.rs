@@ -2992,18 +2992,32 @@ mod tests {
     fn extreme_sizes_never_panic_and_tiny_frames_name_the_json_fallback() {
         let (mut model, _clock) = populated_model("tolkin-dark", true);
         // Sub-minimum sizes render the too-small card, never the dashboard.
-        for (w, h) in [(20u16, 5u16), (79, 24), (80, 23), (40, 10)] {
+        // Every frame wide enough for the card's command line must name the
+        // FULL JSON fallback; a bare "stats" substring proves nothing.
+        for (w, h) in [(79u16, 24u16), (80, 23), (40, 10)] {
             model.viewport = (w, h);
             let (text, _) = render_at(&model, w, h);
             assert!(
-                text.contains("tolkin stats --json") || text.contains("stats"),
-                "{w}x{h} must name the JSON fallback:\n{text}"
+                text.contains("tolkin stats --json"),
+                "{w}x{h} must name the full JSON fallback:\n{text}"
             );
             assert!(
                 !text.contains("input savings"),
                 "{w}x{h} too small for the dashboard footer"
             );
         }
+        // 20x5 can only carry a truncated card (18 inner columns); the
+        // command still reads up to the flag.
+        model.viewport = (20, 5);
+        let (text, _) = render_at(&model, 20, 5);
+        assert!(
+            text.contains("tolkin stats"),
+            "20x5 names the JSON fallback command:\n{text}"
+        );
+        assert!(
+            !text.contains("input savings"),
+            "20x5 too small for the dashboard footer"
+        );
         // The 80x24 floor and a huge frame render the full dashboard.
         for (w, h) in [(80u16, 24u16), (200, 60)] {
             model.viewport = (w, h);

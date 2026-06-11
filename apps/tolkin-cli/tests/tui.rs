@@ -117,7 +117,17 @@ fn stats_compact_without_config_shows_setup_card() {
     let out = cmd(&dir).arg("stats").arg("--compact").output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("Setup") || stdout.contains("tolkin init"));
+    // Both strings are unique to the setup card: the onboarding command
+    // and the quit affordance. (A disjunction here once let any frame
+    // mentioning init pass.)
+    assert!(
+        stdout.contains("tolkin init"),
+        "setup card must name the onboarding command: {stdout}"
+    );
+    assert!(
+        stdout.contains("q to quit"),
+        "setup card must carry the quit affordance: {stdout}"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 

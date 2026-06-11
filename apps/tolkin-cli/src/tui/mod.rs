@@ -358,10 +358,13 @@ mod tests {
             .expect("draw");
 
         let buf = buffer_to_string(terminal.backend().buffer());
-        // The output share line must appear in the Spend tab buffer.
+        // The FULL compact output-share line must appear in the Spend tab
+        // buffer: $3.00 of output against the $3.50 priced bill is 85.7%.
+        // (A bare "output" substring would be satisfied by the honesty
+        // footer alone and prove nothing about the advisory list.)
         assert!(
-            buf.contains("output share") || buf.contains("output"),
-            "output share line must appear in Spend tab buffer; buffer:\n{buf}"
+            buf.contains("output share  85.7% of bill (200,000 tokens, $3.0000)"),
+            "compact advisory line must appear in the Spend tab buffer; buffer:\n{buf}"
         );
         let _ = fs::remove_dir_all(&dir);
     }
