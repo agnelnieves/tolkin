@@ -51,6 +51,23 @@ pub fn run(args: StatsArgs) -> Result<()> {
     }
 
     let Some(dir) = ledger::data_dir() else {
+        // No data dir yet: --json must still emit valid JSON.
+        if args.json {
+            let hints = vec!["run `tolkin init` to set up the local savings ledger"];
+            let out = json!({
+                "scope": if args.global { "global" } else { "project" },
+                "project_key": serde_json::Value::Null,
+                "generated_at": serde_json::Value::Null,
+                "prices_observed": pricing::PRICES_OBSERVED,
+                "realized_rate": serde_json::Value::Null,
+                "ledger": { "records": 0, "skipped_lines": 0 },
+                "ingestion": serde_json::Value::Null,
+                "tiers": serde_json::Value::Null,
+                "hints": hints,
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            return Ok(());
+        }
         println!("No ledger yet.");
         println!("Hint: run `tolkin init` to set up the local savings ledger.");
         return Ok(());
@@ -61,6 +78,39 @@ pub fn run(args: StatsArgs) -> Result<()> {
 
     let snapshot = StatsSnapshot::load_in(&dir);
     if snapshot.records.is_empty() {
+        // Empty ledger: --json must still emit valid JSON with zero/null values.
+        if args.json {
+            let mut hints =
+                vec!["run `tolkin scan` or `tolkin project` in a repo to record a snapshot"];
+            if ledger::disabled_by_env() {
+                hints.push("writes are currently disabled (CI or TOLKIN_NO_LEDGER is set)");
+            } else if snapshot.config.is_none() {
+                hints.push("run `tolkin init` first to consent to the local ledger");
+            }
+            let out = json!({
+                "scope": if args.global { "global" } else { "project" },
+                "project_key": serde_json::Value::Null,
+                "generated_at": snapshot.now,
+                "prices_observed": pricing::PRICES_OBSERVED,
+                "realized_rate": {
+                    "usd_per_mtok_input": snapshot.rate_usd_per_mtok_input,
+                    "model": snapshot.rate_model_id,
+                },
+                "ledger": { "records": 0, "skipped_lines": snapshot.skipped },
+                "ingestion": {
+                    "enabled": snapshot.ingestion_on,
+                    "sessions_scanned": serde_json::Value::Null,
+                    "parent_sessions": serde_json::Value::Null,
+                    "subagent_streams": serde_json::Value::Null,
+                    "skipped_lines": serde_json::Value::Null,
+                    "skipped_files": serde_json::Value::Null,
+                },
+                "tiers": serde_json::Value::Null,
+                "hints": hints,
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            return Ok(());
+        }
         println!("No ledger records yet.");
         println!("Hint: run `tolkin scan` or `tolkin project` in a repo to record a snapshot.");
         if ledger::disabled_by_env() {
@@ -270,7 +320,10 @@ fn print_plain(args: &PlainArgs) {
                 commas(m.totals.cache_write_5m_tokens + m.totals.cache_write_1h_tokens),
                 commas(m.totals.output_tokens)
             );
-            println!("  cache hit rate: {:.1}%", m.cache_hit_rate * 100.0);
+            println!(
+                "  cache hit rate: {:.1}% of input-side tokens",
+                m.cache_hit_rate * 100.0
+            );
             println!(
                 "  cost (priced models): {} (prices observed {})",
                 usd(m.cost_usd_total),

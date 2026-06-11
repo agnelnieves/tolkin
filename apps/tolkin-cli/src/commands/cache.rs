@@ -35,7 +35,20 @@ pub struct CacheArgs {
 
 pub fn run(args: CacheArgs) -> Result<()> {
     let Some(dir) = ledger::data_dir() else {
-        // Mirrors stats: a missing data dir is a setup hint, not an error.
+        // No data dir yet: --json must still emit valid JSON.
+        if args.json {
+            let hints = vec!["run `tolkin init` to set up the local savings ledger"];
+            let out = json!({
+                "scope": if args.global { "global" } else { "project" },
+                "project_key": serde_json::Value::Null,
+                "generated_at": serde_json::Value::Null,
+                "prices_observed": pricing::PRICES_OBSERVED,
+                "cache": serde_json::Value::Null,
+                "hints": hints,
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            return Ok(());
+        }
         println!("No ledger yet.");
         println!("Hint: run `tolkin init` to set up the local savings ledger.");
         return Ok(());
@@ -48,7 +61,23 @@ pub fn run(args: CacheArgs) -> Result<()> {
         Some(snapshot.project_key.as_str())
     };
     let Some(report) = snapshot.compute_cache(scope_project) else {
-        // Ingestion off: same consent posture as the stats measured tier.
+        // Ingestion off: --json must still emit valid JSON.
+        if args.json {
+            let mut hints = vec!["Cache analysis needs usage-log ingestion, which is off. re-run `tolkin init` and consent to log ingestion."];
+            if ledger::disabled_by_env() {
+                hints.push("ingestion is currently disabled (CI or TOLKIN_NO_LEDGER is set)");
+            }
+            let out = json!({
+                "scope": if args.global { "global" } else { "project" },
+                "project_key": scope_project,
+                "generated_at": snapshot.now,
+                "prices_observed": pricing::PRICES_OBSERVED,
+                "cache": serde_json::Value::Null,
+                "hints": hints,
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            return Ok(());
+        }
         println!("Cache analysis needs usage-log ingestion, which is off.");
         println!("Hint: re-run `tolkin init` and consent to log ingestion.");
         if ledger::disabled_by_env() {
