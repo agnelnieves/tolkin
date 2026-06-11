@@ -1,27 +1,70 @@
-import { Analyzer } from "./analyzer";
-import { CoreVersion } from "./core-version";
-import { McpAnalyzer } from "./mcp-analyzer";
+import { Distribution } from "@/components/landing/distribution";
+import { Features } from "@/components/landing/features";
+import { Footer } from "@/components/landing/footer";
+import { Hero } from "@/components/landing/hero";
+import { LocalIntelligence } from "@/components/landing/local-intelligence";
+import { McpExactness } from "@/components/landing/mcp-exactness";
+import { Nav } from "@/components/landing/nav";
+import { Privacy } from "@/components/landing/privacy";
+import { SmoothScroll } from "@/components/landing/smooth-scroll";
+import { StatsBand } from "@/components/landing/stats-band";
+import { Tiers } from "@/components/landing/tiers";
+import { Verification } from "@/components/landing/verification";
 
-export default function Home() {
+const JSON_LD = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Tolkin",
+  description:
+    "Privacy-first AI token analyzer. Measures the standing context of AI agent setups: MCP servers, instruction files, skills, cache health. Deterministic numbers, zero network egress.",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "macOS, Linux, Windows",
+  softwareVersion: "0.14.0",
+  url: "https://tolkin.dev",
+  sameAs: ["https://github.com/agnelnieves/tolkin"],
+  author: {
+    "@type": "Person",
+    name: "Agnel Nieves",
+  },
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+  },
+};
+
+export default function LandingPage() {
   return (
-    <main className="min-h-screen bg-black text-white">
-      <div className="mx-auto flex max-w-4xl flex-col gap-10 px-6 py-12 sm:py-16">
-        <header className="space-y-3">
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Tolkin</h1>
-          <p className="text-sm text-zinc-400 sm:text-base">
-            Privacy-first AI token analyzer. Nothing leaves your browser.
-          </p>
-          <p className="text-xs font-mono text-zinc-600">
-            v0.1.0 (scaffolding). <CoreVersion />
-          </p>
-        </header>
+    <div className="dark landing min-h-screen bg-background text-foreground antialiased selection:bg-lime-300 selection:text-black">
+      <script
+        type="application/ld+json"
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: static JSON-LD object defined above, no user input
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
+      />
+      <SmoothScroll />
 
-        <Analyzer />
+      <a
+        href="#main"
+        className="sr-only z-[60] rounded-md bg-lime-300 px-4 py-2 font-mono text-sm text-black focus:not-sr-only focus:fixed focus:top-3 focus:left-3"
+      >
+        Skip to content
+      </a>
 
-        <hr className="border-zinc-900" />
+      <Nav />
 
-        <McpAnalyzer />
-      </div>
-    </main>
+      <main id="main">
+        <Hero />
+        <StatsBand />
+        <Features />
+        <Tiers />
+        <LocalIntelligence />
+        <McpExactness />
+        <Verification />
+        <Privacy />
+        <Distribution />
+      </main>
+
+      <Footer />
+    </div>
   );
 }
