@@ -8,16 +8,77 @@ Every claim is cross-referenced to the source file that implements it.
 The CLI runs entirely on the local machine. No token counts, file contents,
 project paths, or user identifiers are transmitted to any remote server.
 
-The only sanctioned outbound request is the opt-in BYOK token verification:
-`tolkin count --verify <file>` sends the file's text to
-`https://api.anthropic.com/v1/messages/count_tokens` using the API key the
-user supplies on the command line. This request never runs without an explicit
-`--verify` flag and an explicit key argument. The rest of the CLI, including
-all audit, scan, stats, cache, and project commands, makes no network calls.
+Exactly two outbound requests are sanctioned, both user-controlled:
+
+1. The opt-in BYOK token verification: `tolkin count --verify <file>` sends
+   the file's text to `https://api.anthropic.com/v1/messages/count_tokens`
+   using the API key the user supplies on the command line. This request
+   never runs without an explicit `--verify` flag and an explicit key
+   argument.
+2. The version update check described in the next section.
+
+The rest of the CLI, including all audit, scan, stats, cache, and project
+commands, makes no network calls.
 
 Source: `apps/tolkin-cli/src/verify.rs`. The file contains exactly one
 outbound endpoint (`const ENDPOINT`) and is only reachable from
 `apps/tolkin-cli/src/commands/count.rs` behind the `--verify` flag.
+Source: `apps/tolkin-cli/src/update.rs` (`const NPM_ENDPOINT`), the only
+other outbound endpoint in the binary.
+
+## The update check
+
+`tolkin update` issues exactly one HTTPS GET to
+`https://registry.npmjs.org/tolkin-cli/latest` and compares the returned
+version string against the running binary. The request carries no
+authentication, no cookies, and no identifying parameters; running the
+command is the consent (the same doctrine as `--verify`). Setting
+`TOLKIN_NO_UPDATE_CHECK=1` suppresses the request even when the command is
+invoked explicitly.
+
+Separately, `tolkin init` asks whether tolkin may check for new versions
+passively. Only when that consent (`consent_update_check` in `config.toml`)
+is true does the CLI refresh the same single GET at most once per day after
+a normal command, cache the result in `config.toml`, and print a one-line
+notice to stderr when a newer version exists. The passive check never runs
+in CI, never runs when stderr is not a terminal, never blocks JSON output
+(stdout is untouched), and is disabled by `TOLKIN_NO_UPDATE_CHECK=1` or by
+declining consent. Declining at onboarding is the default.
+
+Source: `apps/tolkin-cli/src/update.rs` (`check_now`, `fetch_latest`,
+`passive_notice_line`); `apps/tolkin-cli/src/ledger.rs` (the
+`consent_update_check`, `last_update_check`, and `last_seen_latest` config
+fields).
+
+## The local model sidecar (optimize)
+
+`tolkin optimize` can deepen its analysis with a language model that runs
+entirely on the user's machine. Tolkin never downloads, bundles, or starts a
+model on its own: it only detects an already-running OpenAI-compatible
+server on loopback (mlx-lm, Ollama, LM Studio, or llama-server) and talks to
+it over `127.0.0.1`. The loopback restriction is enforced in code; a
+non-loopback URL is refused unless `TOLKIN_SIDECAR_ALLOW_REMOTE=1` is set
+explicitly, and that override prints a warning on every run.
+
+Sending file content to the local model is a separate consent class. The
+first interactive `tolkin optimize` run with a detected server asks once,
+stores the answer as `consent_local_model` in `config.toml`, and re-running
+`tolkin init` can flip it. The content scope is exactly the instruction,
+skill, and MCP configuration files the scan and project commands already
+discover, after the always-on secret redaction pass. Shell configuration
+files, secret values, and session transcript content are never sent to the
+model. Model traffic never leaves the machine.
+
+Model output is advisory only. It is labeled "model advisory (local)", it is
+never one of the measurement tiers, it is never summed with measured
+numbers, and it never edits files. The model path is disabled entirely when
+`CI=true` or `TOLKIN_NO_SIDECAR=1` is set, and every deterministic command
+produces byte-identical output whether a sidecar is present, absent, or
+mid-crash (enforced by `apps/tolkin-cli/tests/determinism.rs`).
+
+Source: `apps/tolkin-cli/src/sidecar.rs` (`enforce_loopback`, `detect`);
+`apps/tolkin-cli/src/commands/optimize.rs` (the consent gate and advisory
+labeling).
 
 The benchmarks tooling (`benchmarks/`) fetches a model file once as a
 development-time artifact. This fetch is not part of the shipped CLI binary
@@ -114,9 +175,15 @@ Source: `apps/tolkin-cli/src/usage/mod.rs`, function `default_dirs` and
   directory. Used in tests as `TOLKIN_DATA_DIR=$(mktemp -d)`.
 - `TOLKIN_HOME_DIR=<path>`: test seam that overrides the home directory for
   log ingestion path resolution. Not used during normal operation.
+- `TOLKIN_NO_UPDATE_CHECK=1`: disables the update check, both the explicit
+  `tolkin update` request and the consented passive refresh.
+- `TOLKIN_NO_SIDECAR=1`: disables local model detection and traffic entirely;
+  `tolkin optimize` then prints only its deterministic sections.
+- `TOLKIN_SIDECAR_ALLOW_REMOTE=1`: explicit opt-out of the loopback-only
+  rule for the sidecar URL. Off by default; prints a warning when active.
 
 Source: `apps/tolkin-cli/src/ledger.rs`, functions `disabled_by_env` and
-`data_dir`.
+`data_dir`; `apps/tolkin-cli/src/update.rs`; `apps/tolkin-cli/src/sidecar.rs`.
 
 ## What the GitHub Action sends
 
