@@ -55,7 +55,7 @@ Four skills are available:
 ### 2. Claude Code plugin
 
 Installs all four skills namespaced as `/tolkin:tolkin-audit`, `/tolkin:tolkin-slim`,
-and `/tolkin:tolkin-optimize`.
+`/tolkin:tolkin-optimize`, and `/tolkin:tolkin-cache`.
 
 ```sh
 /plugin marketplace add agnelnieves/tolkin
