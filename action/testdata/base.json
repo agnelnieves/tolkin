@@ -1,0 +1,38 @@
+{
+  "root": "/fixture/repo",
+  "profiles": {
+    "always": {
+      "tokens": 6976,
+      "files": [
+        {
+          "path": "CLAUDE.md",
+          "class": "instructions",
+          "profile": "always",
+          "tokens": 6976,
+          "findings": [],
+          "secret_count": 0,
+          "secret_kinds": []
+        }
+      ]
+    },
+    "on_invocation": { "tokens": 1200, "files": [] },
+    "on_demand": { "tokens": 800, "files": [] },
+    "docs": { "tokens": 500, "files": [] }
+  },
+  "totals": {
+    "files_scanned": 120,
+    "context_files": 8,
+    "context_tokens": 9476,
+    "savings_min": 0,
+    "savings_max": 0
+  },
+  "mcp_configs": [
+    { "path": ".mcp.json", "servers": 2, "cold_tokens": 4000 }
+  ],
+  "heaviest": [
+    { "path": "CLAUDE.md", "tokens": 6976, "findings": 0, "savings_min": 0, "savings_max": 0 }
+  ],
+  "findings_by_rule": [],
+  "secret_files": [],
+  "warnings": []
+}

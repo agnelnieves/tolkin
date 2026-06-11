@@ -1,0 +1,50 @@
+{
+  "root": "/fixture/repo",
+  "profiles": {
+    "always": {
+      "tokens": 11676,
+      "files": [
+        {
+          "path": "CLAUDE.md",
+          "class": "instructions",
+          "profile": "always",
+          "tokens": 6976,
+          "findings": [],
+          "secret_count": 0,
+          "secret_kinds": []
+        },
+        {
+          "path": ".claude/skills/heavy-skill/SKILL.md",
+          "class": "skill-frontmatter",
+          "profile": "always",
+          "tokens": 4700,
+          "findings": [],
+          "secret_count": 0,
+          "secret_kinds": []
+        }
+      ]
+    },
+    "on_invocation": { "tokens": 1200, "files": [] },
+    "on_demand": { "tokens": 800, "files": [] },
+    "docs": { "tokens": 500, "files": [] }
+  },
+  "totals": {
+    "files_scanned": 121,
+    "context_files": 9,
+    "context_tokens": 14176,
+    "savings_min": 100,
+    "savings_max": 400
+  },
+  "mcp_configs": [
+    { "path": ".mcp.json", "servers": 3, "cold_tokens": 5200 }
+  ],
+  "heaviest": [
+    { "path": "CLAUDE.md", "tokens": 6976, "findings": 0, "savings_min": 0, "savings_max": 0 },
+    { "path": ".claude/skills/heavy-skill/SKILL.md", "tokens": 4700, "findings": 1, "savings_min": 100, "savings_max": 400 }
+  ],
+  "findings_by_rule": [
+    { "rule": "skill_frontmatter_bloat", "count": 1, "savings_min": 100, "savings_max": 400 }
+  ],
+  "secret_files": [],
+  "warnings": []
+}

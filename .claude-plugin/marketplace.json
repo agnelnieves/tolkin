@@ -1,0 +1,20 @@
+{
+  "name": "tolkin",
+  "owner": {
+    "name": "Agnel Nieves"
+  },
+  "description": "Privacy-first AI token analyzer: audit agent-context files, slim MCP configs, and run the full optimization loop.",
+  "plugins": [
+    {
+      "name": "tolkin",
+      "source": ".",
+      "description": "Privacy-first AI token analyzer. Three skills: tolkin-audit (repo-wide audit), tolkin-slim (MCP slim and swap), tolkin-optimize (full loop). Nothing leaves your machine.",
+      "version": "0.9.0",
+      "author": {
+        "name": "Agnel Nieves"
+      },
+      "license": "MIT",
+      "keywords": ["tokens", "mcp", "agent-context", "optimization", "privacy"]
+    }
+  ]
+}
