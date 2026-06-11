@@ -33,6 +33,16 @@ use crate::project::{self, ProjectOptions, ProjectReport};
 // the calendar logic. The whole module stays pub for that reason; nothing else
 // reaches into it.
 pub mod data;
+// Wave 1 framework modules. The dead_code allows are scaffolding: they come
+// off in the app-loop cluster when the new event loop consumes them.
+#[allow(dead_code)]
+mod anim;
+#[allow(dead_code)]
+mod format;
+#[allow(dead_code)]
+mod keymap;
+#[allow(dead_code)]
+mod theme;
 mod ui;
 
 use ui::{DashboardView, ProjectScanState, Tab};
