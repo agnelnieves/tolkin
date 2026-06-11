@@ -2986,6 +2986,60 @@ mod tests {
     }
 
     #[test]
+    fn machine_as_of_column_renders_long_relative_times_unclipped() {
+        let (mut model, _clock) = populated_model("tolkin-dark", true);
+        model.tab = TabId::Machine;
+        // The widest "as of" values the column can carry: a 4-char "365d"
+        // and the 5-char "999d+" cap. Neither may clip at the right edge
+        // (now_epoch is 1_780_000_000 in populated_model).
+        model.derived.machine = vec![
+            MachineProject {
+                key: "/old".to_string(),
+                always_tokens: 10,
+                last_ts: 1_780_000_000 - 365 * 86_400,
+                sessions: 1,
+            },
+            MachineProject {
+                key: "/ancient".to_string(),
+                always_tokens: 5,
+                last_ts: 0,
+                sessions: 1,
+            },
+        ];
+        let (text, _) = render_at(&model, 110, 30);
+        assert!(text.contains("365d"), "365d clipped off the edge:\n{text}");
+        assert!(text.contains("999d+"), "999d+ cap clipped:\n{text}");
+    }
+
+    #[test]
+    fn project_tab_at_the_80x24_floor_keeps_all_load_bars_and_the_source_line() {
+        let (mut model, _clock) = populated_model("tolkin-dark", true);
+        model.tab = TabId::Project;
+        let (text, _) = render_at(&model, 80, 24);
+        // The load panel keeps all four HBars at the minimum size; "docs"
+        // is the one that fell off the bottom before the rebalance.
+        for label in ["always", "on-invocation", "on-demand", "docs"] {
+            assert!(
+                text.contains(label),
+                "{label} bar missing at 80x24:\n{text}"
+            );
+        }
+        assert!(
+            text.contains("no scan (press s to scan this repo)"),
+            "source line missing at 80x24:\n{text}"
+        );
+        // The panels that shrank to make room still render.
+        assert!(
+            text.contains("savings (this project)"),
+            "savings panel missing at 80x24:\n{text}"
+        );
+        assert!(
+            text.contains("heaviest agent-context files"),
+            "heavy list missing at 80x24:\n{text}"
+        );
+    }
+
+    #[test]
     fn help_overlay_scrolls_to_its_agents_tail_on_a_24_row_terminal() {
         let (mut model, _clock) = test_model();
         model.viewport = (80, 24);

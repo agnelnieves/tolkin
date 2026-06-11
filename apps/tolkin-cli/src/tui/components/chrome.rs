@@ -91,45 +91,58 @@ pub fn render_header(frame: &mut Frame, area: Rect, props: &HeaderProps, theme: 
     frame.render_widget(Paragraph::new(Line::from(spans)), row0);
 
     // Right: busy spinner, ingestion dot, data age, version.
-    let mut right: Vec<Span> = Vec::new();
-    if let Some((glyph, label_spans)) = &props.busy {
-        right.push(Span::styled(
-            format!("{glyph} "),
-            Style::default().fg(theme.accent),
-        ));
-        right.extend(label_spans.iter().cloned());
-        right.push(Span::raw("  "));
-    }
-    if props.ingestion_on {
-        right.push(Span::styled("● ", Style::default().fg(theme.ok)));
-        right.push(Span::styled("ingestion", Style::default().fg(theme.muted)));
-    } else {
-        right.push(Span::styled("○ ", Style::default().fg(theme.faint)));
-        right.push(Span::styled("ingestion", Style::default().fg(theme.faint)));
-    }
-    if let Some(age) = props.data_age {
-        right.push(Span::raw("  "));
-        right.push(Span::styled("data ", Style::default().fg(theme.faint)));
-        right.push(Span::styled(
-            age.to_string(),
-            Style::default().fg(theme.muted),
-        ));
-    }
-    right.push(Span::raw("  "));
-    right.push(Span::styled(
-        format!("v{}", props.version),
-        Style::default().fg(theme.faint),
-    ));
-    if let Some(latest) = props.update {
+    let status_cluster = |with_busy: bool| {
+        let mut right: Vec<Span> = Vec::new();
+        if with_busy {
+            if let Some((glyph, label_spans)) = &props.busy {
+                right.push(Span::styled(
+                    format!("{glyph} "),
+                    Style::default().fg(theme.accent),
+                ));
+                right.extend(label_spans.iter().cloned());
+                right.push(Span::raw("  "));
+            }
+        }
+        if props.ingestion_on {
+            right.push(Span::styled("● ", Style::default().fg(theme.ok)));
+            right.push(Span::styled("ingestion", Style::default().fg(theme.muted)));
+        } else {
+            right.push(Span::styled("○ ", Style::default().fg(theme.faint)));
+            right.push(Span::styled("ingestion", Style::default().fg(theme.faint)));
+        }
+        if let Some(age) = props.data_age {
+            right.push(Span::raw("  "));
+            right.push(Span::styled("data ", Style::default().fg(theme.faint)));
+            right.push(Span::styled(
+                age.to_string(),
+                Style::default().fg(theme.muted),
+            ));
+        }
         right.push(Span::raw("  "));
         right.push(Span::styled(
-            format!("update {latest}"),
-            Style::default().fg(theme.info),
+            format!("v{}", props.version),
+            Style::default().fg(theme.faint),
         ));
+        if let Some(latest) = props.update {
+            right.push(Span::raw("  "));
+            right.push(Span::styled(
+                format!("update {latest}"),
+                Style::default().fg(theme.info),
+            ));
+        }
+        right.push(Span::raw(" "));
+        Line::from(right)
+    };
+    // The tab strip always wins the row: when the cluster would overdraw
+    // the drawn labels (80 cols while scanning), the busy label goes
+    // first, and whatever still overflows clamps at the strip's edge.
+    let left_end = segments.last().map(|(x, w)| x + w + 1).unwrap_or(0);
+    let avail = area.width.saturating_sub(left_end);
+    let mut right_line = status_cluster(true);
+    if right_line.width() as u16 > avail {
+        right_line = status_cluster(false);
     }
-    right.push(Span::raw(" "));
-    let right_line = Line::from(right);
-    let right_width = (right_line.width() as u16).min(area.width);
+    let right_width = (right_line.width() as u16).min(avail);
     let right_area = Rect {
         x: area.x + area.width - right_width,
         width: right_width,
@@ -223,21 +236,27 @@ pub fn render_footer(frame: &mut Frame, area: Rect, props: &FooterProps, theme: 
         frame.render_widget(Paragraph::new(right), right_area);
     }
 
-    // The honesty sentence is sacred and always leads. The legend prefers
-    // today's full text; when the terminal cannot carry it, a compressed
-    // legend keeps the prices date visible instead of clipping it away.
+    // The honesty sentence is sacred and always leads, verbatim at every
+    // rung. The legend prefers today's full text; when the terminal cannot
+    // carry it, a compressed legend keeps the prices date visible; when
+    // even that overflows (the 80-column floor), the tier legend goes and
+    // the date stays.
     let lead = format!(" {HONESTY_LINE}. ");
+    let fits = |legend: &str| lead.chars().count() + legend.chars().count() <= area.width as usize;
     let full = format!(
         "tiers: identified (advisory), realized (measured structure), measured (ground truth). rate: {} prices {}.",
         props.rate_model_display, props.prices_observed
     );
-    let legend = if lead.chars().count() + full.chars().count() <= area.width as usize {
+    let compressed = format!(
+        "tiers: identified / realized / measured. prices {}.",
+        props.prices_observed
+    );
+    let legend = if fits(&full) {
         full
+    } else if fits(&compressed) {
+        compressed
     } else {
-        format!(
-            "tiers: identified / realized / measured. prices {}.",
-            props.prices_observed
-        )
+        format!("prices {}.", props.prices_observed)
     };
     let honesty = Line::from(vec![
         Span::styled(lead, Style::default().fg(theme.warn)),
@@ -298,6 +317,50 @@ mod tests {
     }
 
     #[test]
+    fn busy_label_yields_to_the_tab_strip_at_80_cols() {
+        let t = theme::by_name("tolkin-dark", true).unwrap();
+        let render_at = |width: u16| {
+            let backend = TestBackend::new(width, 2);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    let props = HeaderProps {
+                        active: TabId::Project,
+                        underline_pos: 1.0,
+                        ingestion_on: true,
+                        data_age: Some("2m"),
+                        version: "0.14.0",
+                        update: None,
+                        busy: Some(("⠋", vec![Span::raw("scanning repo")])),
+                    };
+                    render_header(f, f.area(), &props, &t);
+                })
+                .unwrap();
+            flatten(&terminal)
+        };
+
+        // 80 columns while scanning: every tab label renders intact and
+        // the busy label is dropped instead of overdrawing the strip.
+        let text = render_at(80);
+        for label in ["Overview", "Project", "Machine", "Spend"] {
+            assert!(text.contains(label), "{label} overdrawn at 80 cols: {text}");
+        }
+        assert!(
+            !text.contains("scanning"),
+            "busy label must yield to the tabs: {text}"
+        );
+        assert!(text.contains("ingestion"), "status dot survives: {text}");
+        assert!(text.contains("v0.14.0"), "version survives: {text}");
+
+        // A wide frame keeps the busy label.
+        let text = render_at(120);
+        assert!(
+            text.contains("scanning repo"),
+            "wide frames keep the busy label: {text}"
+        );
+    }
+
+    #[test]
     fn footer_renders_hints_and_honesty_line_verbatim() {
         let t = theme::by_name("mono", false).unwrap();
         let backend = TestBackend::new(170, 2);
@@ -323,19 +386,24 @@ mod tests {
     #[test]
     fn footer_compresses_the_legend_on_narrow_frames_keeping_the_prices_date() {
         let t = theme::by_name("mono", false).unwrap();
-        let backend = TestBackend::new(100, 2);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                let props = FooterProps {
-                    context: Context::List,
-                    rate_model_display: "claude-sonnet-4.6",
-                    prices_observed: "2026-06-10",
-                };
-                render_footer(f, f.area(), &props, &t);
-            })
-            .unwrap();
-        let text = flatten(&terminal);
+        let render_at = |width: u16| {
+            let backend = TestBackend::new(width, 2);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    let props = FooterProps {
+                        context: Context::List,
+                        rate_model_display: "claude-sonnet-4.6",
+                        prices_observed: "2026-06-10",
+                    };
+                    render_footer(f, f.area(), &props, &t);
+                })
+                .unwrap();
+            flatten(&terminal)
+        };
+
+        // 100 columns: the compressed legend rung carries the tier names.
+        let text = render_at(100);
         assert!(
             text.contains("input savings, output may vary"),
             "honesty verbatim at every width"
@@ -347,6 +415,23 @@ mod tests {
         assert!(
             text.contains("identified / realized / measured"),
             "compressed legend: {text}"
+        );
+
+        // 80 columns (the minimum frame): even the compressed legend
+        // overflows, so the tier names go and the honesty sentence plus
+        // the prices date stay, uncut.
+        let text = render_at(80);
+        assert!(
+            text.contains("input savings, output may vary"),
+            "honesty verbatim at 80 cols: {text}"
+        );
+        assert!(
+            text.contains("prices 2026-06-10."),
+            "prices date survives the 80-col footer: {text}"
+        );
+        assert!(
+            !text.contains("identified"),
+            "tier legend dropped before the date: {text}"
         );
     }
 

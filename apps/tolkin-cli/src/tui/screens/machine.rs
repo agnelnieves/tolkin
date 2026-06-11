@@ -137,7 +137,11 @@ fn render_cards(frame: &mut Frame, area: Rect, model: &Model) {
 }
 
 const NAME_W: usize = 26;
-const VALUE_W: usize = 30;
+/// Right value cluster, sized from its real maximum format width:
+/// 11 (tokens) + 4 (" tok") + 1 + 10 (sessions) + 1 + 5 (relative time,
+/// "1234d" class) + 1 trailing = 33. Undersizing this clips the "as of"
+/// column's tail off the right edge.
+const VALUE_W: usize = 33;
 
 fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
     let theme = &model.theme;
@@ -214,8 +218,10 @@ fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
             } else {
                 " ".repeat(10)
             };
+            // The relative-time field is fixed-width so the column never
+            // grows past VALUE_W: "now" through "1234d" all fit in 5.
             let value = format!(
-                "{:>11} tok {sessions} {:>3} ",
+                "{:>11} tok {sessions} {:>5} ",
                 format::commas(p.always_tokens),
                 format::relative_time(model.now_epoch, p.last_ts)
             );

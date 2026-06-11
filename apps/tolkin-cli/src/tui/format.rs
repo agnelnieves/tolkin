@@ -52,7 +52,9 @@ pub fn humanize_tokens(n: u64) -> String {
 }
 
 /// Relative age for "data 2m" style chrome labels. `now` and `ts` are epoch
-/// seconds; a `ts` in the future clamps to "now".
+/// seconds; a `ts` in the future clamps to "now". The day bucket caps at
+/// "999d+" so the result never exceeds 5 cells: fixed-width columns (the
+/// machine list's "as of" field) size against that maximum.
 pub fn relative_time(now: u64, ts: u64) -> String {
     let delta = now.saturating_sub(ts);
     if delta < 60 {
@@ -61,8 +63,10 @@ pub fn relative_time(now: u64, ts: u64) -> String {
         format!("{}m", delta / 60)
     } else if delta < 86_400 {
         format!("{}h", delta / 3_600)
-    } else {
+    } else if delta < 1_000 * 86_400 {
         format!("{}d", delta / 86_400)
+    } else {
+        "999d+".to_string()
     }
 }
 
@@ -226,6 +230,15 @@ mod tests {
         assert_eq!(relative_time(10_000, 9_000), "16m");
         assert_eq!(relative_time(50_000, 10_000), "11h");
         assert_eq!(relative_time(1_000_000, 10_000), "11d");
+        // The day bucket caps at 5 cells; columns size against it.
+        assert_eq!(relative_time(86_400_000, 0), "999d+");
+        assert_eq!(relative_time(999 * 86_400, 0), "999d");
+        for (now, ts) in [(1_000u64, 990u64), (10_000, 9_000), (86_400_000, 0)] {
+            assert!(
+                relative_time(now, ts).chars().count() <= 5,
+                "relative time wider than 5 cells"
+            );
+        }
         assert_eq!(relative_time_ago(10_000, 9_000), "16m ago");
         assert_eq!(relative_time_ago(1_000, 990), "now");
     }

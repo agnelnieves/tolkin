@@ -19,15 +19,28 @@ use crate::tui::theme::Theme;
 
 use super::{muted_line, panel};
 
+/// Rows the airy layout needs: 8 (load) + 1 + 5 (heavy min) + 1 + 7
+/// (savings). Below this the fixed panels shed their spare breathing rows.
+const AIRY_MIN_ROWS: u16 = 22;
+
 /// Vertical body split: load profile, gap, heavy files, gap, savings.
-/// Shared by render and the mouse hit-testing helper below.
+/// Shared by render and the mouse hit-testing helper below. The 80x24
+/// floor gives the body 19 rows, three short of the airy layout, so the
+/// load panel sheds its spare row (title and top padding eat 2, leaving
+/// exactly 4 bars plus the source line) and the savings panel shrinks to
+/// its two tier lines plus one spark row. Nothing load-bearing may clip.
 fn rows(area: Rect) -> std::rc::Rc<[Rect]> {
+    let (load_h, savings_h) = if area.height < AIRY_MIN_ROWS {
+        (7, 5)
+    } else {
+        (8, 7)
+    };
     Layout::vertical([
-        Constraint::Length(8),
+        Constraint::Length(load_h),
         Constraint::Length(1),
         Constraint::Min(5),
         Constraint::Length(1),
-        Constraint::Length(7),
+        Constraint::Length(savings_h),
     ])
     .split(area)
 }
