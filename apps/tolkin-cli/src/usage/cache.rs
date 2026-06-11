@@ -22,13 +22,17 @@ use serde::{Deserialize, Serialize};
 
 use super::claude_code::{self, DedupedRecord};
 use super::codex;
-use super::types::{SessionUsage, UsageData, UsageSource, UsageTotals};
+use super::types::{RequestUsage, SessionUsage, UsageData, UsageSource, UsageTotals};
 
 /// Bump on any breaking change to the on-disk schema. Mismatched versions are
-/// treated as a cold cache (no error, just a full reparse). v2 replaces the
+/// treated as a cold cache (no error, just a full reparse). v2 replaced the
 /// Claude side's cached SessionUsage with cached stage-one records so global
-/// dedup runs correctly across files.
-const CACHE_VERSION: u32 = 2;
+/// dedup runs correctly across files. v3 marks the per-request retention
+/// release (SessionUsage grew a `requests` vector, mirrored below for the
+/// Codex payload): any pre-retention cache is discarded wholesale by the
+/// version gate instead of reasoning about partial compatibility, so v2
+/// caches self-heal by silent full reparse exactly like v1 did.
+const CACHE_VERSION: u32 = 3;
 
 const CACHE_FILE: &str = "usage-cache.json";
 
@@ -106,6 +110,41 @@ impl From<UsageTotalsMirror> for UsageTotals {
     }
 }
 
+/// On-disk shape of one retained per-request cache tuple. Mirrors
+/// RequestUsage field for field so types.rs stays Serialize-only.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+struct RequestUsageMirror {
+    ts: u64,
+    input_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_5m_tokens: u64,
+    cache_write_1h_tokens: u64,
+}
+
+impl From<&RequestUsage> for RequestUsageMirror {
+    fn from(r: &RequestUsage) -> Self {
+        RequestUsageMirror {
+            ts: r.ts,
+            input_tokens: r.input_tokens,
+            cache_read_tokens: r.cache_read_tokens,
+            cache_write_5m_tokens: r.cache_write_5m_tokens,
+            cache_write_1h_tokens: r.cache_write_1h_tokens,
+        }
+    }
+}
+
+impl From<RequestUsageMirror> for RequestUsage {
+    fn from(m: RequestUsageMirror) -> Self {
+        RequestUsage {
+            ts: m.ts,
+            input_tokens: m.input_tokens,
+            cache_read_tokens: m.cache_read_tokens,
+            cache_write_5m_tokens: m.cache_write_5m_tokens,
+            cache_write_1h_tokens: m.cache_write_1h_tokens,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct SessionUsageMirror {
     source: String,
@@ -116,6 +155,12 @@ struct SessionUsageMirror {
     totals: UsageTotalsMirror,
     by_model: BTreeMap<String, UsageTotalsMirror>,
     by_day: BTreeMap<String, UsageTotalsMirror>,
+    /// Always empty for Codex today (the only payload kind that caches whole
+    /// sessions), but mirrored fully so a future reader that retains Codex
+    /// requests round-trips instead of silently dropping them. `default` so
+    /// the field is not load-bearing for deserialization.
+    #[serde(default)]
+    requests: Vec<RequestUsageMirror>,
 }
 
 fn source_to_str(s: UsageSource) -> &'static str {
@@ -152,6 +197,7 @@ impl SessionUsageMirror {
                 .into_iter()
                 .map(|(k, v)| (k, v.into()))
                 .collect(),
+            requests: self.requests.into_iter().map(RequestUsage::from).collect(),
         })
     }
 }
@@ -175,6 +221,7 @@ impl From<&SessionUsage> for SessionUsageMirror {
                 .iter()
                 .map(|(k, v)| (k.clone(), (*v).into()))
                 .collect(),
+            requests: s.requests.iter().map(RequestUsageMirror::from).collect(),
         }
     }
 }
@@ -761,7 +808,7 @@ mod tests {
         // must silently treat the run as cold. We write a minimally valid v1
         // file (matching the OLD shape: entries with sessions: [], etc) and
         // confirm the run still produces correct results and replaces the
-        // file with a v2 cache on write-back.
+        // file with a current-version cache on write-back.
         let cache = tmp("v1-ignored");
         // The exact v1 shape is not load-bearing here; the only contract is
         // "version != CACHE_VERSION means cold". We write that minimally.
@@ -769,10 +816,99 @@ mod tests {
         fs::write(cache.join(CACHE_FILE), v1_blob).unwrap();
         let data = read_all_cached(Some(&fixtures_claude()), None, &cache);
         assert!(!data.sessions.is_empty(), "v1 cache must trigger reparse");
-        // After save_cache, the file is now v2.
+        // After save_cache, the file is on the current version.
         let written: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(cache.join(CACHE_FILE)).unwrap()).unwrap();
-        assert_eq!(written.get("v").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(
+            written.get("v").and_then(|v| v.as_u64()),
+            Some(CACHE_VERSION as u64)
+        );
+        let _ = fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn v2_cache_self_heals_by_silent_reparse() {
+        // A v2 cache (the pre-retention shape: Claude stage-one records, no
+        // requests vectors anywhere) must be treated as cold so the run
+        // rebuilds per-request retention from the logs, then write back v3.
+        // We write a structurally valid v2 file whose payload would parse
+        // under today's wire types if the version gate were skipped; the
+        // sentinel inside must NOT surface, proving the gate (not a parse
+        // failure) rejected it.
+        let cache = tmp("v2-self-heal");
+        // Key the stale entry on a REAL fixture file with its REAL stamp, so
+        // that if the version gate were skipped the sentinel would be served
+        // as a cache hit. Only the version gate stands between the sentinel
+        // and the output.
+        let fixture_file = fixtures_claude()
+            .join("proj-a")
+            .join("streaming-and-cwd.jsonl");
+        let (mtime_secs, size_bytes) = file_stamp(&fixture_file).expect("fixture stamp");
+        let v2_blob = format!(
+            concat!(
+                r#"{{"v":2,"entries":{{"{key}":{{"mtime_secs":{mtime},"size_bytes":{size},"#,
+                r#""skipped_lines":0,"source":"claude_code","payload":{{"kind":"claude_records","#,
+                r#""records":[{{"message_id":"V2_SENTINEL","request_id":"V2_SENTINEL","ts":1781108711,"#,
+                r#""day":"2026-06-10","cwd":"/v2-sentinel","model":"claude-sentinel","#,
+                r#""usage":{{"input_tokens":0,"output_tokens":777,"cache_read_tokens":0,"#,
+                r#""cache_write_5m_tokens":0,"cache_write_1h_tokens":0}}}}]}}}}}}}}"#,
+            ),
+            key = fixture_file.to_string_lossy().replace('\\', "\\\\"),
+            mtime = mtime_secs,
+            size = size_bytes,
+        );
+        fs::write(cache.join(CACHE_FILE), v2_blob).unwrap();
+        let data = read_all_cached(Some(&fixtures_claude()), None, &cache);
+        assert!(!data.sessions.is_empty(), "v2 cache must trigger reparse");
+        assert!(
+            !data
+                .sessions
+                .iter()
+                .any(|s| s.project_key == "/v2-sentinel"),
+            "v2 entries must not be served"
+        );
+        // Reparsed sessions carry retention (the fixture has usage records).
+        assert!(
+            data.sessions
+                .iter()
+                .filter(|s| matches!(s.source, UsageSource::ClaudeCode))
+                .all(|s| !s.requests.is_empty()),
+            "reparse must rebuild per-request retention"
+        );
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(cache.join(CACHE_FILE)).unwrap()).unwrap();
+        assert_eq!(written.get("v").and_then(|v| v.as_u64()), Some(3));
+        let _ = fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn warm_cache_preserves_per_request_retention() {
+        // Retention is derived in stage two from cached stage-one records, so
+        // a warm read must produce exactly the same request tuples as a cold
+        // read, in the same order.
+        let cache = tmp("retention-roundtrip");
+        let cold = read_all_cached(Some(&fixtures_claude()), None, &cache);
+        let warm = read_all_cached(Some(&fixtures_claude()), None, &cache);
+        let pick = |data: &UsageData| -> Vec<(String, String, Vec<RequestUsage>)> {
+            let mut rows: Vec<_> = data
+                .sessions
+                .iter()
+                .map(|s| {
+                    (
+                        s.session_id.clone(),
+                        s.project_key.clone(),
+                        s.requests.clone(),
+                    )
+                })
+                .collect();
+            rows.sort();
+            rows
+        };
+        assert_eq!(pick(&cold), pick(&warm));
+        assert!(
+            cold.sessions.iter().any(|s| !s.requests.is_empty()),
+            "fixture sessions should retain requests"
+        );
         let _ = fs::remove_dir_all(&cache);
     }
 }

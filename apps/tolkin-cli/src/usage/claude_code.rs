@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::types::{SessionUsage, UsageData, UsageSource, UsageTotals};
+use super::types::{RequestUsage, SessionUsage, UsageData, UsageSource, UsageTotals};
 
 /// One within-file deduped record. Stage one returns these per file; stage two
 /// merges them globally. Cache stores these (token counts, timestamps, opaque
@@ -241,6 +241,7 @@ pub fn aggregate_records(per_file: Vec<(PathBuf, Vec<DedupedRecord>)>, data: &mu
             totals: UsageTotals::default(),
             by_model: BTreeMap::new(),
             by_day: BTreeMap::new(),
+            requests: Vec::new(),
         });
         entry.totals.add(&totals);
         entry
@@ -253,12 +254,29 @@ pub fn aggregate_records(per_file: Vec<(PathBuf, Vec<DedupedRecord>)>, data: &mu
             .entry(winner.record.day.clone())
             .or_default()
             .add(&totals);
+        // Per-request retention for cache analysis. This happens AFTER the
+        // global cross-file dedup above, so a resumed session's copied
+        // records contribute exactly one tuple each.
+        entry.requests.push(RequestUsage {
+            ts: winner.record.ts,
+            input_tokens: totals.input_tokens,
+            cache_read_tokens: totals.cache_read_tokens,
+            cache_write_5m_tokens: totals.cache_write_5m_tokens,
+            cache_write_1h_tokens: totals.cache_write_1h_tokens,
+        });
         if winner.record.ts < entry.first_ts {
             entry.first_ts = winner.record.ts;
         }
         if winner.record.ts > entry.last_ts {
             entry.last_ts = winner.record.ts;
         }
+    }
+    for session in grouped.values_mut() {
+        // Deterministic within-session request order: ascending by the full
+        // tuple (ts first). Log files can carry out-of-order timestamps and
+        // the winners map iterates by (message_id, request_id), neither of
+        // which is time order.
+        session.requests.sort_unstable();
     }
     data.sessions.extend(grouped.into_values());
 }
@@ -699,6 +717,54 @@ mod tests {
     }
 
     #[test]
+    fn retention_collects_deduped_requests_in_ts_order() {
+        // From the fixture: proj-a's session collapses three streaming
+        // snapshots of msg_S into ONE retained request (the last snapshot's
+        // numbers) plus msg_X, sorted ascending by ts.
+        let data = read(&fixtures_dir());
+        let s = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "streaming-and-cwd" && s.project_key == "/work/proj-a")
+            .expect("proj-a session present");
+        assert_eq!(s.requests.len(), 2, "streaming snapshots collapse to one");
+        let first = &s.requests[0];
+        assert_eq!(first.input_tokens, 10);
+        assert_eq!(first.cache_read_tokens, 100);
+        assert_eq!(first.cache_write_5m_tokens, 40);
+        assert_eq!(first.cache_write_1h_tokens, 60);
+        let second = &s.requests[1];
+        assert_eq!(second.input_tokens, 5);
+        assert_eq!(second.cache_read_tokens, 50);
+        assert_eq!(second.write_tokens(), 0);
+        assert!(first.ts < second.ts, "requests sorted ascending by ts");
+        // Retention sums must agree with the session totals (same winners).
+        let sum_input: u64 = s.requests.iter().map(|r| r.input_tokens).sum();
+        let sum_read: u64 = s.requests.iter().map(|r| r.cache_read_tokens).sum();
+        assert_eq!(sum_input, s.totals.input_tokens);
+        assert_eq!(sum_read, s.totals.cache_read_tokens);
+    }
+
+    #[test]
+    fn retention_sorts_out_of_order_timestamps_within_a_file() {
+        // A file whose records appear in reverse time order must still
+        // retain requests ascending by ts.
+        let root = tmp_tree("ooo-retention");
+        let f = root.join("proj-x").join("out-of-order.jsonl");
+        write_record(&f, "m2", "r2", "2026-06-10T12:10:00Z", 20, "/work/x");
+        write_record(&f, "m1", "r1", "2026-06-10T12:00:00Z", 10, "/work/x");
+        let data = read(&root);
+        let s = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "out-of-order")
+            .expect("session present");
+        assert_eq!(s.requests.len(), 2);
+        assert!(s.requests[0].ts < s.requests[1].ts);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn cross_file_resumed_session_shape() {
         // file A has r1, r2; file B (the resume) has copies of r1, r2 plus
         // new r3. Total tokens must equal r1+r2+r3 each counted once. File A
@@ -732,6 +798,198 @@ mod tests {
             .find(|s| s.session_id == "b-resume")
             .expect("b-resume surviving with r3");
         assert_eq!(b_sess.totals.output_tokens, 30);
+        // Per-request retention happens AFTER global dedup: across all
+        // sessions the resume scenario retains exactly three requests
+        // (r1, r2, r3), never five.
+        let total_requests: usize = data.sessions.iter().map(|s| s.requests.len()).sum();
+        assert_eq!(
+            total_requests, 3,
+            "resume copies must not inflate retention"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The I2 resume-copy scenario with cache traffic on the records: the
+    /// retained tuples that feed `cache_analysis` must carry each cache
+    /// write and read exactly once even though the resume file duplicates
+    /// the originals verbatim.
+    #[test]
+    fn retention_survives_resume_copy_with_cache_writes() {
+        fn write_cache_record(
+            path: &Path,
+            message_id: &str,
+            request_id: &str,
+            ts: &str,
+            read: u64,
+            w5: u64,
+            w1: u64,
+        ) {
+            let line = format!(
+                concat!(
+                    r#"{{"message":{{"model":"claude-sonnet-4-6","id":"{message_id}","usage":"#,
+                    r#"{{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":{read},"#,
+                    r#""cache_creation_input_tokens":{creation},"cache_creation":"#,
+                    r#"{{"ephemeral_5m_input_tokens":{w5},"ephemeral_1h_input_tokens":{w1}}}}}}},"#,
+                    r#""requestId":"{request_id}","cwd":"/work/x","timestamp":"{ts}"}}"#,
+                ),
+                message_id = message_id,
+                request_id = request_id,
+                ts = ts,
+                read = read,
+                creation = w5 + w1,
+                w5 = w5,
+                w1 = w1,
+            );
+            let mut existing = fs::read_to_string(path).unwrap_or_default();
+            if !existing.is_empty() && !existing.ends_with('\n') {
+                existing.push('\n');
+            }
+            existing.push_str(&line);
+            existing.push('\n');
+            fs::write(path, existing).unwrap();
+        }
+
+        let root = tmp_tree("resume-cache");
+        let a = root.join("proj-x").join("a-original.jsonl");
+        let b = root.join("proj-x").join("b-resume.jsonl");
+        // Original: r1 writes the prefix (1h), r2 reads it.
+        write_cache_record(&a, "m1", "r1", "2026-06-10T12:00:00Z", 0, 0, 9000);
+        write_cache_record(&a, "m2", "r2", "2026-06-10T12:01:00Z", 9000, 0, 0);
+        // Resume copies r1 and r2 verbatim, then adds r3 (another read).
+        write_cache_record(&b, "m1", "r1", "2026-06-10T12:00:00Z", 0, 0, 9000);
+        write_cache_record(&b, "m2", "r2", "2026-06-10T12:01:00Z", 9000, 0, 0);
+        write_cache_record(&b, "m3", "r3", "2026-06-10T12:02:00Z", 9000, 0, 0);
+        let data = read(&root);
+        let retained_w1: u64 = data
+            .sessions
+            .iter()
+            .flat_map(|s| s.requests.iter())
+            .map(|r| r.cache_write_1h_tokens)
+            .sum();
+        let retained_reads: u64 = data
+            .sessions
+            .iter()
+            .flat_map(|s| s.requests.iter())
+            .map(|r| r.cache_read_tokens)
+            .sum();
+        let retained_count: usize = data.sessions.iter().map(|s| s.requests.len()).sum();
+        assert_eq!(retained_count, 3, "r1, r2, r3 each retained once");
+        assert_eq!(retained_w1, 9000, "the copied write counts once");
+        assert_eq!(retained_reads, 18_000, "r2 and r3 reads count once each");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Adversarial pin (A7 review): the same (message_id, request_id) appears
+    /// in two files with DIFFERENT cache usage numbers. The winner rule
+    /// (later ts, then larger output, then lex-first file) decides which
+    /// record survives; per-request retention must take the WINNER's cache
+    /// tuple, not the loser's. A naive aggregator that picked the first
+    /// record it saw would carry the wrong tuple downstream into churn,
+    /// gap, and dollar math.
+    #[test]
+    fn cross_file_retention_keeps_winners_cache_tuple_not_losers() {
+        struct CacheFields {
+            output: u64,
+            read: u64,
+            w5: u64,
+            w1: u64,
+        }
+        fn write_cache_record(
+            path: &Path,
+            message_id: &str,
+            request_id: &str,
+            ts: &str,
+            fields: &CacheFields,
+        ) {
+            let line = format!(
+                concat!(
+                    r#"{{"message":{{"model":"claude-sonnet-4-6","id":"{message_id}","usage":"#,
+                    r#"{{"input_tokens":1,"output_tokens":{output},"cache_read_input_tokens":{read},"#,
+                    r#""cache_creation_input_tokens":{creation},"cache_creation":"#,
+                    r#"{{"ephemeral_5m_input_tokens":{w5},"ephemeral_1h_input_tokens":{w1}}}}}}},"#,
+                    r#""requestId":"{request_id}","cwd":"/work/x","timestamp":"{ts}"}}"#,
+                ),
+                message_id = message_id,
+                request_id = request_id,
+                ts = ts,
+                output = fields.output,
+                read = fields.read,
+                creation = fields.w5 + fields.w1,
+                w5 = fields.w5,
+                w1 = fields.w1,
+            );
+            let mut existing = fs::read_to_string(path).unwrap_or_default();
+            if !existing.is_empty() && !existing.ends_with('\n') {
+                existing.push('\n');
+            }
+            existing.push_str(&line);
+            existing.push('\n');
+            fs::write(path, existing).unwrap();
+        }
+
+        let root = tmp_tree("xfile-diff-cache");
+        let a = root.join("proj-x").join("a-loser.jsonl");
+        let b = root.join("proj-x").join("b-winner.jsonl");
+        // Same (m1, r1) appears in both files with the SAME ts; b has more
+        // output, so b wins on the second tier of the winner rule. The
+        // cache numbers also differ: a says read=1000, w1=2000; b says
+        // read=3000, w1=7000. The winner is b, so retention must be 3000
+        // and 7000, not 1000 and 2000.
+        write_cache_record(
+            &a,
+            "m1",
+            "r1",
+            "2026-06-10T12:00:00Z",
+            &CacheFields {
+                output: 50,
+                read: 1000,
+                w5: 0,
+                w1: 2000,
+            },
+        );
+        write_cache_record(
+            &b,
+            "m1",
+            "r1",
+            "2026-06-10T12:00:00Z",
+            &CacheFields {
+                output: 500,
+                read: 3000,
+                w5: 0,
+                w1: 7000,
+            },
+        );
+        let data = read(&root);
+        let retained_w1: u64 = data
+            .sessions
+            .iter()
+            .flat_map(|s| s.requests.iter())
+            .map(|r| r.cache_write_1h_tokens)
+            .sum();
+        let retained_reads: u64 = data
+            .sessions
+            .iter()
+            .flat_map(|s| s.requests.iter())
+            .map(|r| r.cache_read_tokens)
+            .sum();
+        let retained_count: usize = data.sessions.iter().map(|s| s.requests.len()).sum();
+        assert_eq!(retained_count, 1, "one logical record after dedup");
+        assert_eq!(
+            retained_w1, 7000,
+            "winner's cache_write_1h must be retained, not loser's"
+        );
+        assert_eq!(
+            retained_reads, 3000,
+            "winner's cache_read must be retained, not loser's"
+        );
+        // The winning session is b-winner; the totals also match the winner.
+        let winner_session = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "b-winner")
+            .expect("b-winner survives the merge");
+        assert_eq!(winner_session.totals.cache_read_tokens, 3000);
+        assert_eq!(winner_session.totals.cache_write_1h_tokens, 7000);
         let _ = fs::remove_dir_all(&root);
     }
 

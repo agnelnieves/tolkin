@@ -58,6 +58,41 @@ impl UsageTotals {
     }
 }
 
+/// One request's cache-relevant token counts, retained per session for the
+/// prompt-cache analysis (`tolkin cache`): timestamp, fresh input, cache
+/// read, and the 5m/1h cache-write split. Deliberately compact and exactly
+/// this tuple; the privacy class is unchanged (timestamps and token counts
+/// only, never content, never paths).
+///
+/// Field order is load-bearing: the derived `Ord` sorts by `ts` first, then
+/// by the token fields, which is the deterministic within-session request
+/// order the cache analysis depends on (two requests can share a timestamp,
+/// and map-iteration order must never decide which one counts as "first").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct RequestUsage {
+    /// Unix epoch seconds of the request's log record.
+    pub ts: u64,
+    pub input_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_5m_tokens: u64,
+    pub cache_write_1h_tokens: u64,
+}
+
+impl RequestUsage {
+    /// Everything the provider counts on the input side of this request.
+    pub fn input_side(&self) -> u64 {
+        self.input_tokens
+            + self.cache_read_tokens
+            + self.cache_write_5m_tokens
+            + self.cache_write_1h_tokens
+    }
+
+    /// Cache-write tokens (both TTLs) for this request.
+    pub fn write_tokens(&self) -> u64 {
+        self.cache_write_5m_tokens + self.cache_write_1h_tokens
+    }
+}
+
 /// One agent session, aggregated from its log file.
 #[derive(Clone, Debug, Serialize)]
 pub struct SessionUsage {
@@ -77,6 +112,13 @@ pub struct SessionUsage {
     pub by_model: BTreeMap<String, UsageTotals>,
     /// Per-UTC-day ("YYYY-MM-DD") split, for spend trends.
     pub by_day: BTreeMap<String, UsageTotals>,
+    /// Per-request cache tuples, sorted ascending by [`RequestUsage`] order,
+    /// populated AFTER global cross-file dedup so resumed sessions never
+    /// double count. Retained for Claude Code sessions only: Codex rollouts
+    /// carry no cache-write fields (OpenAI exposes neither write events nor
+    /// a TTL choice), so cache analysis is Claude-Code-sourced for now and
+    /// this vector stays empty for Codex.
+    pub requests: Vec<RequestUsage>,
 }
 
 /// Everything ingestion produces for one machine scan.

@@ -22,6 +22,7 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 use tolkin_core::pricing;
 
+use crate::cache_analysis::CacheReport;
 use crate::ledger;
 use crate::tiers::{Identified, Measured, Realized, TierReport};
 use crate::tui::data;
@@ -95,6 +96,11 @@ pub fn render_html(snapshot: &StatsSnapshot, global: bool) -> String {
         snapshot.rate_model_display,
     ));
     body.push_str(&render_tier_measured(report.measured.as_ref()));
+    // The cache health section consumes the same snapshot/analysis the
+    // `tolkin cache` command does, so the two surfaces can never disagree.
+    if let Some(cache) = snapshot.compute_cache(scope_project) {
+        body.push_str(&render_cache_section(&cache));
+    }
     if let Some(measured) = report.measured.as_ref() {
         if measured.sessions > 0 {
             body.push_str(&render_spend_trend(snapshot));
@@ -352,6 +358,141 @@ fn render_model_table(measured: &Measured) -> String {
         ));
     }
     out.push_str("</tbody></table>");
+    out
+}
+
+/// Prompt-cache health, mirroring `tolkin cache` (same analysis, same
+/// labels). Renders only when ingestion is on, like the measured tier.
+fn render_cache_section(cache: &CacheReport) -> String {
+    let mut out = String::new();
+    out.push_str("<section class=\"tier\" id=\"cache\"><div class=\"card\">");
+    out.push_str("<div class=\"label\">Cache</div>");
+    out.push_str("<h2>Prompt cache health</h2>");
+    out.push_str(&format!(
+        "<p class=\"tier-sub\">Claude Code session logs only ({} sessions, {} requests); Codex rollouts carry no cache-write fields.</p>",
+        commas(cache.sessions_analyzed),
+        commas(cache.requests_analyzed),
+    ));
+
+    out.push_str("<table class=\"kv\"><tbody>");
+    let hr = &cache.hit_rate;
+    out.push_str(&kv_row(
+        "Hit rate (ground truth)",
+        &format!(
+            "{:.1}% ({} cache-read of {} input-side tokens)",
+            hr.rate * 100.0,
+            commas(hr.cache_read_tokens),
+            commas(hr.input_side_tokens)
+        ),
+        None,
+    ));
+    if let Some(advisory) = &hr.advisory {
+        out.push_str(&format!(
+            "<tr><td colspan=\"2\" class=\"warn\">{}</td></tr>",
+            html_escape(advisory)
+        ));
+    }
+    let churn = &cache.write_churn;
+    out.push_str(&kv_row(
+        "Write churn (ground truth)",
+        &format!(
+            "{:.1}% of write tokens written after a session's first write ({} of {})",
+            churn.share * 100.0,
+            commas(churn.writes_after_first_tokens),
+            commas(churn.total_write_tokens)
+        ),
+        None,
+    ));
+    let ttl = &cache.ttl_counterfactual;
+    out.push_str(&kv_row(
+        "Observed cache writes (ground truth)",
+        &format!(
+            "{} tokens at the 5m TTL, {} at the 1h TTL",
+            commas(ttl.observed_write_tokens_5m),
+            commas(ttl.observed_write_tokens_1h)
+        ),
+        None,
+    ));
+    out.push_str(&kv_row(
+        "Simulated 5m strategy (advisory estimate)",
+        &format!(
+            "W5 = {} write events, {} write tokens",
+            commas(ttl.simulated_w5_write_events),
+            commas(ttl.simulated_w5_write_tokens)
+        ),
+        None,
+    ));
+    out.push_str(&kv_row(
+        "Simulated 1h strategy (advisory estimate)",
+        &format!(
+            "W1 = {} write events, {} write tokens",
+            commas(ttl.simulated_w1_write_events),
+            commas(ttl.simulated_w1_write_tokens)
+        ),
+        None,
+    ));
+    out.push_str(&kv_row(
+        "Marginal dollars (advisory estimate)",
+        &format!(
+            "5m strategy {}, 1h strategy {} (priced models only)",
+            usd(ttl.usd_5m_strategy),
+            usd(ttl.usd_1h_strategy)
+        ),
+        None,
+    ));
+    let cadence = &cache.cadence;
+    out.push_str(&kv_row(
+        "Cadence (ground truth)",
+        &format!(
+            "{:.1}% of intra-session gaps over 5 minutes; {:.1}% of inter-session gaps (same project) under an hour; {} session(s) with zero cache reads",
+            cadence.share_intra_gaps_over_5m * 100.0,
+            cadence.share_inter_gaps_under_1h * 100.0,
+            commas(cadence.sessions_zero_cache_read)
+        ),
+        None,
+    ));
+    out.push_str("</tbody></table>");
+
+    if !churn.worst_sessions.is_empty() {
+        out.push_str("<h3 class=\"sub\">Worst churn sessions</h3>");
+        out.push_str("<table class=\"data\"><thead><tr><th>Session</th><th>Started</th><th class=\"num\">After first</th><th class=\"num\">Total writes</th><th class=\"num\">Share</th></tr></thead><tbody>");
+        for w in &churn.worst_sessions {
+            out.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}%</td></tr>",
+                html_escape(&w.session_id),
+                html_escape(&format_utc(w.first_ts)),
+                commas(w.writes_after_first_tokens),
+                commas(w.write_tokens),
+                w.share * 100.0,
+            ));
+        }
+        out.push_str("</tbody></table>");
+    }
+
+    out.push_str(&format!(
+        "<p class=\"note\">{}</p>",
+        html_escape(crate::cache_analysis::CHURN_NOTE)
+    ));
+    out.push_str(&format!(
+        "<p class=\"formula\">Break even: {}. {}</p>",
+        html_escape(ttl.break_even),
+        html_escape(&ttl.tier_note)
+    ));
+    out.push_str(&format!(
+        "<p class=\"note\">{}</p>",
+        html_escape(&ttl.verdict)
+    ));
+    if !ttl.unpriced_models.is_empty() {
+        out.push_str(&format!(
+            "<p class=\"note\">Dollar figures cover priced models only; unpriced: {}.</p>",
+            html_escape(&ttl.unpriced_models.join(", "))
+        ));
+    }
+    out.push_str(&format!(
+        "<p class=\"honesty\">{}</p>",
+        html_escape(cache.scope_line)
+    ));
+    out.push_str("</div></section>");
     out
 }
 

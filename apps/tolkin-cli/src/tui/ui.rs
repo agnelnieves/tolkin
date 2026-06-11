@@ -11,6 +11,7 @@ use ratatui::{
     Frame,
 };
 
+use crate::cache_analysis::CacheReport;
 use crate::ledger::LedgerRecord;
 use crate::project::ProjectReport;
 use crate::tiers::TierReport;
@@ -74,6 +75,8 @@ pub struct DashboardView<'a> {
     pub global_projects: &'a [MachineProject],
     pub spend_days: &'a [data::DayBar],
     pub spend_models: &'a [data::ModelRow],
+    /// Global cache health report; `None` exactly when ingestion is off.
+    pub cache: Option<&'a CacheReport>,
     pub ingestion_on: bool,
     /// True when the data dir has neither a config nor any ledger records;
     /// the dashboard renders a friendly setup card across every tab.
@@ -573,13 +576,42 @@ fn render_spend_tab(frame: &mut Frame, view: &DashboardView, area: Rect) {
         .constraints([
             Constraint::Length(7), // daily bars
             Constraint::Length(9), // model table
-            Constraint::Length(4), // cache hit rate + cost
+            Constraint::Length(5), // cache hit rate + health + cost
         ])
         .split(area);
 
     render_daily_bars(frame, view, rows[0]);
     render_model_table(frame, view, rows[1]);
     render_cache_and_cost(frame, view, rows[2]);
+}
+
+/// The one-line cache health row for the Spend tab: the broken-cache
+/// advisory when any active day fell under the threshold, otherwise an ok
+/// line, always closing with the abbreviated lever clause from the scope
+/// line (`tolkin cache` prints the full sentence and every number).
+fn cache_health_line(report: &CacheReport) -> Line<'static> {
+    let (text, color) = if report.hit_rate.advisory.is_some() {
+        (
+            format!(
+                "hit rate under {:.2} on {} active day(s): caching likely broken; levers: prefix stability, session shape",
+                report.hit_rate.threshold,
+                report.hit_rate.days_below_threshold.len()
+            ),
+            Color::Yellow,
+        )
+    } else {
+        (
+            format!(
+                "ok, no active day under the {:.2} threshold; levers: prefix stability, session shape",
+                report.hit_rate.threshold
+            ),
+            Color::White,
+        )
+    };
+    Line::from(vec![
+        Span::styled("cache      ", Style::default().fg(Color::White)),
+        Span::styled(text, Style::default().fg(color)),
+    ])
 }
 
 fn render_daily_bars(frame: &mut Frame, view: &DashboardView, area: Rect) {
@@ -675,6 +707,9 @@ fn render_cache_and_cost(frame: &mut Frame, view: &DashboardView, area: Rect) {
             ),
             Span::styled(format!(" {hit:>5.1}%"), Style::default().fg(Color::White)),
         ]));
+        if let Some(cache_report) = view.cache {
+            lines.push(cache_health_line(cache_report));
+        }
         lines.push(Line::from(vec![
             Span::styled("cost       ", Style::default().fg(Color::White)),
             Span::styled(

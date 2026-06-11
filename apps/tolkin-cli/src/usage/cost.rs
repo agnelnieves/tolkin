@@ -62,6 +62,20 @@ fn cost_of(tokens: u64, rate_usd_per_million: f64) -> f64 {
     (tokens as f64) * rate_usd_per_million / 1_000_000.0
 }
 
+/// Input-side rates for the cache analysis, resolved with exactly the same
+/// normalization and missing-rate fallbacks as [`cost_usd`] so the two
+/// surfaces can never disagree on what a model's cache tokens cost. Returns
+/// None for unknown ids (the analysis then reports the model as unpriced).
+pub fn cache_rates(raw_model: &str) -> Option<crate::cache_analysis::ModelRates> {
+    let id = normalize_model_id(raw_model);
+    let m = pricing::find(&id)?;
+    Some(crate::cache_analysis::ModelRates {
+        cache_read: m.cache_read.unwrap_or(m.input),
+        cache_write_5m: m.cache_write_5m.unwrap_or(m.input),
+        cache_write_1h: m.cache_write_1h.unwrap_or(m.input),
+    })
+}
+
 /// USD spend for a totals block at one model's rates. Returns None for unknown
 /// or unpriced ids. When the catalog has no `cache_read` / `cache_write_*`
 /// rate, we fall back to the base input rate for those tokens (the calculator

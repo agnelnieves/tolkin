@@ -51,6 +51,8 @@ pub enum Commands {
     Init(commands::init::InitArgs),
     /// Show the local savings ledger; full tiered stats arrive with usage ingestion.
     Stats(commands::stats::StatsArgs),
+    /// Measured prompt-cache health from local session logs: hit rate, write churn, TTL economics.
+    Cache(commands::cache::CacheArgs),
     /// Render a self-contained HTML savings report for stakeholder sharing.
     Report(commands::report::ReportArgs),
     /// Print the underlying tolkin-core version.
@@ -71,6 +73,7 @@ pub fn dispatch(cmd: Commands, yes: bool) -> Result<()> {
         Commands::Compare(args) => commands::compare::run(args),
         Commands::Init(args) => commands::init::run(args, yes),
         Commands::Stats(args) => commands::stats::run(args),
+        Commands::Cache(args) => commands::cache::run(args),
         Commands::Report(args) => commands::report::run(args),
         Commands::Version => {
             println!("tolkin-core {}", tolkin_core::version());
