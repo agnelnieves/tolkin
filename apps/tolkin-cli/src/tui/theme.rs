@@ -8,7 +8,7 @@
 //! Detection is parameterized through [`ThemeEnv`] so unit tests inject
 //! values instead of mutating process globals.
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 
 /// One color token: the truecolor value plus a hand-picked 256-color
 /// fallback for terminals without `COLORTERM=truecolor`.
@@ -67,6 +67,20 @@ pub struct Theme {
     pub bar_empty: Color,
     /// Multiplier applied to RGB channels under a modal scrim.
     pub scrim_factor: f32,
+}
+
+impl Theme {
+    /// The selected-row style. Color themes paint selection_fg over
+    /// selection_bg; mono uses REVERSED so the selection stays visible
+    /// without color (the NO_COLOR contract), whatever the terminal's
+    /// palette maps Gray and DarkGray to.
+    pub fn selection_style(&self) -> Style {
+        if self.name == "mono" {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default().fg(self.selection_fg).bg(self.selection_bg)
+        }
+    }
 }
 
 /// Built-in theme names in cycle order.
@@ -342,6 +356,71 @@ mod tests {
                 _ => assert!(d <= 7),
             }
         }
+    }
+
+    #[test]
+    fn scrim_dim_covers_every_named_color_panic_free() {
+        // The full 16-color set: every named color must map to a dimmer
+        // (or equal) neighbor, never to a brighter one, never panic.
+        let named = [
+            Color::Black,
+            Color::Red,
+            Color::Green,
+            Color::Yellow,
+            Color::Blue,
+            Color::Magenta,
+            Color::Cyan,
+            Color::Gray,
+            Color::DarkGray,
+            Color::LightRed,
+            Color::LightGreen,
+            Color::LightYellow,
+            Color::LightBlue,
+            Color::LightMagenta,
+            Color::LightCyan,
+            Color::White,
+        ];
+        for color in named {
+            let dimmed = scrim_dim(color, 0.45);
+            assert!(
+                matches!(
+                    dimmed,
+                    Color::Black
+                        | Color::Red
+                        | Color::Green
+                        | Color::Yellow
+                        | Color::Blue
+                        | Color::Magenta
+                        | Color::Cyan
+                        | Color::DarkGray
+                ),
+                "{color:?} must dim into the dark half, got {dimmed:?}"
+            );
+        }
+        // Bright system indexed colors fall to their dim twins; the dim
+        // ones floor at black.
+        assert_eq!(scrim_dim(Color::Indexed(14), 0.45), Color::Indexed(6));
+        assert_eq!(scrim_dim(Color::Indexed(3), 0.45), Color::Indexed(0));
+        // RGB multiplies and saturates at zero, never wraps.
+        assert_eq!(scrim_dim(Color::Rgb(0, 0, 0), 0.45), Color::Rgb(0, 0, 0));
+        assert_eq!(
+            scrim_dim(Color::Rgb(255, 255, 255), 0.0),
+            Color::Rgb(0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn mono_selection_reads_through_reversed_not_color() {
+        let mono = by_name("mono", false).unwrap();
+        let style = mono.selection_style();
+        assert!(style.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(style.fg, None, "mono selection sets no fg color");
+        assert_eq!(style.bg, None, "mono selection sets no bg color");
+        let dark = by_name("tolkin-dark", true).unwrap();
+        let style = dark.selection_style();
+        assert!(!style.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(style.fg, Some(dark.selection_fg));
+        assert_eq!(style.bg, Some(dark.selection_bg));
     }
 
     #[test]

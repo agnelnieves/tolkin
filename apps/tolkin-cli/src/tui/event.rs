@@ -79,6 +79,9 @@ pub fn spawn_input(tx: Sender<Msg>) {
 /// the Overview "last scan" line stays honest.
 pub fn spawn_scan(tx: Sender<Msg>, root: PathBuf) {
     thread::spawn(move || {
+        // Direct clock read, by ruling: this measures worker wall time for
+        // the "last scan (1.2s)" line, not animation; the Clock seam stays
+        // animation-only.
         let started = Instant::now();
         let opts = ProjectOptions {
             experimental: false,

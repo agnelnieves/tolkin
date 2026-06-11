@@ -113,18 +113,18 @@ pub fn strip_spans(
                 // A non-zero day never renders flat once grown past zero.
                 LEVELS[if scaled > 0.0 { idx.max(1) } else { idx }]
             };
+            // The selected day reuses the theme's selection treatment, so
+            // mono keeps the cursor visible through REVERSED, not color.
             let mut style = match role {
                 DayRole::Plain if *level <= 0.0 => Style::default().fg(theme.bar_empty),
                 DayRole::Plain => Style::default().fg(theme.bar_fill),
                 DayRole::Today => Style::default()
                     .fg(theme.accent_bright)
                     .add_modifier(Modifier::BOLD),
-                DayRole::Selected => Style::default()
-                    .fg(theme.selection_fg)
-                    .bg(theme.selection_bg),
+                DayRole::Selected => theme.selection_style(),
             };
             if *role == DayRole::Selected && *level <= 0.0 {
-                style = Style::default().fg(theme.faint).bg(theme.selection_bg);
+                style = theme.selection_style().fg(theme.faint);
             }
             Span::styled(format!("{glyph}{pad}"), style)
         })

@@ -24,8 +24,9 @@ pub struct HeaderProps<'a> {
     /// A cached known-newer version from the passive update check; renders
     /// as an info-colored chip. Zero network behind this.
     pub update: Option<&'a str>,
-    /// Busy cluster: (spinner glyph, label) while a worker runs.
-    pub busy: Option<(&'a str, &'a str)>,
+    /// Busy cluster: (spinner glyph, styled label spans) while a worker
+    /// runs. The scan state passes the animated scanner sweep here.
+    pub busy: Option<(&'a str, Vec<Span<'static>>)>,
 }
 
 /// The logo block text; tab segments anchor after it.
@@ -91,11 +92,12 @@ pub fn render_header(frame: &mut Frame, area: Rect, props: &HeaderProps, theme: 
 
     // Right: busy spinner, ingestion dot, data age, version.
     let mut right: Vec<Span> = Vec::new();
-    if let Some((glyph, label)) = props.busy {
+    if let Some((glyph, label_spans)) = &props.busy {
         right.push(Span::styled(
-            format!("{glyph} {label}"),
+            format!("{glyph} "),
             Style::default().fg(theme.accent),
         ));
+        right.extend(label_spans.iter().cloned());
         right.push(Span::raw("  "));
     }
     if props.ingestion_on {

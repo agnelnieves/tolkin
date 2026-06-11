@@ -1474,16 +1474,32 @@ pub fn view(frame: &mut Frame, model: &Model) {
         .derived
         .loaded_at
         .map(|t| format::relative_time(model.now_epoch, t));
-    let busy_label = if model.refreshing {
-        Some("reloading")
+    let spinner_frame = spinner::frame(model.busy_ms, model.animator.enabled());
+    // The scan busy state carries the animated scanner sweep; the other
+    // workers get a plain accent label.
+    let plain = |label: &str| {
+        vec![Span::styled(
+            label.to_string(),
+            Style::default().fg(model.theme.accent),
+        )]
+    };
+    let busy = if model.refreshing {
+        Some((spinner_frame, plain("reloading")))
     } else if matches!(model.scan, ScanState::Scanning) {
-        Some("scanning repo")
+        Some((
+            spinner_frame,
+            spinner::scanner_spans(
+                "scanning repo",
+                model.busy_ms,
+                model.animator.enabled(),
+                &model.theme,
+            ),
+        ))
     } else if model.reporting {
-        Some("rendering report")
+        Some((spinner_frame, plain("rendering report")))
     } else {
         None
     };
-    let spinner_frame = spinner::frame(model.busy_ms, model.animator.enabled());
     let header = HeaderProps {
         active: model.tab,
         underline_pos: model
@@ -1493,7 +1509,7 @@ pub fn view(frame: &mut Frame, model: &Model) {
         data_age: data_age.as_deref(),
         version: model.version,
         update: model.derived.update_available.as_deref(),
-        busy: busy_label.map(|l| (spinner_frame, l)),
+        busy,
     };
     chrome::render_header(frame, rows[0], &header, &model.theme);
 
@@ -2642,6 +2658,151 @@ mod tests {
         update(&mut model, key(KeyCode::Enter));
         update(&mut model, key(KeyCode::Tab));
         assert!(model.filter.is_none());
+    }
+
+    /// A model with every list populated, for the audit renders.
+    fn populated_model(theme_name: &str, enabled: bool) -> (Model, ManualClock) {
+        use crate::usage::types::UsageTotals;
+        let clock = ManualClock::new();
+        let animator = Animator::new(Box::new(clock.clone()), enabled);
+        let theme = theme::by_name(theme_name, false).unwrap();
+        let mut model = Model::new(None, theme, ThemeEnv::default(), animator, 1_780_000_000);
+        model.derived.setup_needed = false;
+        model.derived.ingestion_on = true;
+        model.derived.project_key = "/repo".to_string();
+        model.derived.heavy = vec![seeded_heavy_row()];
+        model.derived.machine = machine_fixture();
+        let block = advisory_fixture();
+        model.derived.advisory_lines = advisories::tui_compact_lines(&block);
+        model.derived.advisories = Some(block);
+        model.derived.day_details = (0..5)
+            .map(|i| DayDetail {
+                day: format!("2026-06-0{}", i + 1),
+                input_side: 1_000 * (i as u64 + 1),
+                input_fresh: 400,
+                cache_read: 600,
+                output: 50,
+                cost_usd: 1.25,
+            })
+            .collect();
+        model.derived.spend_models = vec![data::ModelRow {
+            model: "claude-sonnet-4-6".to_string(),
+            totals: UsageTotals {
+                input_tokens: 1_000,
+                output_tokens: 100,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+            },
+            cost_usd: Some(1.5),
+        }];
+        model.derived.models_total = 1;
+        model.day_cursor = model.derived.day_details.len() - 1;
+        (model, clock)
+    }
+
+    fn render_at(model: &Model, w: u16, h: u16) -> (String, ratatui::buffer::Buffer) {
+        let backend = ratatui::backend::TestBackend::new(w, h);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| view(frame, model)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        (text, buf)
+    }
+
+    #[test]
+    fn mono_theme_carries_every_tab_and_overlay_without_color() {
+        use ratatui::style::Color;
+        let mono_ok = |c: Color| {
+            matches!(
+                c,
+                Color::Reset | Color::White | Color::Gray | Color::DarkGray | Color::Black
+            )
+        };
+        let (mut model, _clock) = populated_model("mono", true);
+        let cases: [(TabId, &str); 4] = [
+            (TabId::Overview, "advisories"),
+            (TabId::Project, "rules.md"),
+            (TabId::Machine, "projects"),
+            (TabId::Spend, "models, top 5"),
+        ];
+        for (tab, needle) in cases {
+            model.tab = tab;
+            let (text, buf) = render_at(&model, 110, 30);
+            assert!(text.contains(needle), "{tab:?} missing {needle}:\n{text}");
+            assert!(
+                text.contains("input savings, output may vary"),
+                "honesty line missing on {tab:?}"
+            );
+            let mut reversed_cells = 0usize;
+            for y in 0..30u16 {
+                for x in 0..110u16 {
+                    let cell = &buf[(x, y)];
+                    assert!(
+                        mono_ok(cell.fg) && mono_ok(cell.bg),
+                        "{tab:?} leaked color at ({x},{y}): fg {:?} bg {:?}",
+                        cell.fg,
+                        cell.bg
+                    );
+                    if cell.modifier.contains(Modifier::REVERSED) {
+                        reversed_cells += 1;
+                    }
+                }
+            }
+            // Every tab has a focused list (or day cursor): the selection
+            // must survive without color, via REVERSED.
+            assert!(reversed_cells > 0, "{tab:?} selection invisible in mono");
+        }
+        // Overlays: help over the Overview, scrim skipped, still legible.
+        model.tab = TabId::Overview;
+        update(&mut model, key(KeyCode::Char('?')));
+        let (text, buf) = render_at(&model, 110, 30);
+        assert!(text.contains("agents"), "help overlay in mono:\n{text}");
+        for y in 0..30u16 {
+            for x in 0..110u16 {
+                assert!(mono_ok(buf[(x, y)].fg) && mono_ok(buf[(x, y)].bg));
+            }
+        }
+    }
+
+    #[test]
+    fn reduced_motion_snaps_every_effect_to_its_final_state() {
+        let (mut model, _clock) = populated_model("tolkin-dark", false);
+        model.derived.today_cost = 4.12;
+        model.derived.last30_cost = 61.55;
+        // Re-fire with the new targets: a disabled animator stores nothing
+        // and view must still render final values instantly.
+        model.fire_data_animations();
+        model.scan = ScanState::Scanning;
+        model.toast(ToastKind::Ok, "copied path to clipboard".to_string());
+
+        let (text, _) = render_at(&model, 110, 30);
+        // Spinner: the static fallback, never a braille frame.
+        assert!(text.contains(spinner::STATIC_FALLBACK), "static spinner");
+        for frame in spinner::FRAMES {
+            assert!(!text.contains(frame), "braille frame leaked: {frame}");
+        }
+        // Scanner label: plain text, present without animation.
+        assert!(text.contains("scanning repo"), "scanner label:\n{text}");
+        // Count-up: the hero card shows the final number on frame one.
+        assert!(text.contains("$4.12"), "today card snapped:\n{text}");
+        assert!(text.contains("$61.55"), "30-day card snapped");
+        // Toast: at rest against the right edge on frame one.
+        assert!(text.contains("┃ copied path"), "toast at rest:\n{text}");
+        // Stagger and reveal: every advisory row visible immediately.
+        assert!(text.contains("output share"), "rows not hidden:\n{text}");
+        assert!(!model.animator.active(), "nothing keeps the loop hot");
+
+        model.tab = TabId::Project;
+        let (text, _) = render_at(&model, 110, 30);
+        assert!(text.contains("scanning repo"), "project sweep fallback");
+        assert!(text.contains("rules.md"), "heavy rows visible instantly");
     }
 
     #[test]

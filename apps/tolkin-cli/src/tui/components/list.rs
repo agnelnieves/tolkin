@@ -103,10 +103,9 @@ pub fn render_select_list(
 
         if is_selected {
             // Repaint the row surface first so the selection reads as one
-            // solid bar, then the rail.
-            let row_style = Style::default()
-                .fg(theme.selection_fg)
-                .bg(theme.selection_bg);
+            // solid bar, then the rail. Mono themes select via REVERSED
+            // (visible without color) instead of a painted background.
+            let row_style = theme.selection_style();
             for x in area.x..area.x + area.width.saturating_sub(1) {
                 buf[(x, y)].set_style(row_style);
                 buf[(x, y)].set_symbol(" ");
@@ -118,7 +117,7 @@ pub fn render_select_list(
             };
             buf[(rail_x, y)]
                 .set_symbol("▌")
-                .set_style(Style::default().fg(rail_color).bg(theme.selection_bg));
+                .set_style(row_style.fg(rail_color));
             let line = restyle_line(&rows[row_idx], row_style);
             buf.set_line(text_x, y, &line, text_width);
         } else {

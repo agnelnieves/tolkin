@@ -118,9 +118,13 @@ fn source_line(model: &Model) -> Line<'static> {
                 Style::default().fg(theme.faint),
             ))
         }
-        ScanState::Scanning => Line::from(Span::styled(
-            "scanning repo...".to_string(),
-            Style::default().fg(theme.accent),
+        // The same scanner sweep the header shows; reduced motion renders
+        // the plain muted label.
+        ScanState::Scanning => Line::from(crate::tui::components::spinner::scanner_spans(
+            "scanning repo",
+            model.busy_ms,
+            model.animator.enabled(),
+            theme,
         )),
         ScanState::Failed(msg) => Line::from(Span::styled(
             format!("scan failed: {msg}"),

@@ -125,6 +125,9 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         return Ok(());
     }
 
+    // Direct clock read, by ruling: the loop's tick delta is scheduling
+    // (spinner cadence bookkeeping), not animation; tween time flows
+    // exclusively through the Animator's Clock.
     let mut last_loop = Instant::now();
     loop {
         terminal.draw(|frame| app::view(frame, &model))?;
