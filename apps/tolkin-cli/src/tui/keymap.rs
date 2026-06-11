@@ -530,11 +530,21 @@ pub fn primary_label(action: Action) -> &'static str {
 /// (action, keys_label, hint) rows for one help group: deduped by action,
 /// table order. The help overlay renders the labels; tests use the action
 /// for coverage checks.
+/// Actions documented by a paired row's combined label instead of their own
+/// help line: Up rides Down's "j/k", DayRight rides DayLeft's "h/l". The
+/// palette still lists every action individually; only the help overlay
+/// merges. The coverage test asserts each merged key stays visible in its
+/// partner's label.
+pub const HELP_MERGED: &[(Action, Action)] = &[
+    (Action::Up, Action::Down),
+    (Action::DayRight, Action::DayLeft),
+];
+
 pub fn help_entries(group: Group) -> Vec<(Action, &'static str, &'static str)> {
     let mut seen: Vec<Action> = Vec::new();
     let mut out = Vec::new();
     for b in BINDINGS.iter().filter(|b| b.group == group) {
-        if seen.contains(&b.action) {
+        if seen.contains(&b.action) || HELP_MERGED.iter().any(|(m, _)| *m == b.action) {
             continue;
         }
         seen.push(b.action);
@@ -742,7 +752,33 @@ mod tests {
             }
         }
         for action in palette_actions() {
+            if let Some((_, partner)) = HELP_MERGED.iter().find(|(m, _)| *m == action) {
+                assert!(
+                    covered.contains(partner),
+                    "{action:?} merged into {partner:?}, which help does not cover"
+                );
+                continue;
+            }
             assert!(covered.contains(&action), "{action:?} missing from help");
+        }
+        // Merged keys must stay visible inside the partner's label.
+        for (merged, partner) in HELP_MERGED {
+            let m = BINDINGS
+                .iter()
+                .find(|b| b.action == *merged)
+                .expect("merged action bound");
+            let p = BINDINGS
+                .iter()
+                .find(|b| b.action == *partner)
+                .expect("partner action bound");
+            let KeyCode::Char(c) = m.keys[0].0 else {
+                panic!("{merged:?} primary key is not a char");
+            };
+            assert!(
+                p.keys_label.contains(c),
+                "{merged:?} key {c} invisible in {partner:?} label {}",
+                p.keys_label
+            );
         }
     }
 }

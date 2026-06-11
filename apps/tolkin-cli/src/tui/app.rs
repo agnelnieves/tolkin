@@ -2944,6 +2944,7 @@ mod tests {
         model.derived.project_key = "/repo".to_string();
         model.derived.heavy = vec![seeded_heavy_row()];
         model.derived.machine = machine_fixture();
+        data::sort_machine(&mut model.derived.machine, model.machine_sort);
         let block = advisory_fixture();
         model.derived.advisory_lines = advisories::tui_compact_lines(&block);
         model.derived.advisories = Some(block);
