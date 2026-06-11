@@ -1,12 +1,4 @@
 import type { Metadata } from "next";
-import rawResults from "../../data/bench-results.json";
-import type {
-  BenchResults,
-  ConfigurationCase,
-  ExternalComparison,
-  LossyCase,
-  StructuralCase,
-} from "../../types/bench";
 import { BenchNav } from "../../components/bench/bench-nav";
 import type { ClaimRow } from "../../components/bench/claim-bar";
 import { ClaimBarSection } from "../../components/bench/claim-bar";
@@ -20,6 +12,14 @@ import {
   TrackEyebrow,
   TrackTable,
 } from "../../components/bench/track-section";
+import rawResults from "../../data/bench-results.json";
+import type {
+  BenchResults,
+  ConfigurationCase,
+  ExternalComparison,
+  LossyCase,
+  StructuralCase,
+} from "../../types/bench";
 
 // Static import: the benchmark harness writes this file at build time.
 // No network access, no browser storage. Works with both the placeholder
@@ -153,10 +153,18 @@ function StructuralRows({ cases }: { cases: StructuralCase[] }) {
           <Td mono>{c.fixture.split("/").pop()}</Td>
           <Td dim>{c.technique}</Td>
           <Td dim>{c.tokenizer}</Td>
-          <Td right mono dim>{fmt(c.before_tokens)}</Td>
-          <Td right mono dim>{fmt(c.after_tokens)}</Td>
-          <Td right mono accent>{fmt(c.savings_tokens)}</Td>
-          <Td right mono accent>{pct(c.savings_pct)}</Td>
+          <Td right mono dim>
+            {fmt(c.before_tokens)}
+          </Td>
+          <Td right mono dim>
+            {fmt(c.after_tokens)}
+          </Td>
+          <Td right mono accent>
+            {fmt(c.savings_tokens)}
+          </Td>
+          <Td right mono accent>
+            {pct(c.savings_pct)}
+          </Td>
           <Td dim>
             {c.variance.min === c.variance.max
               ? "stable"
@@ -181,11 +189,21 @@ function ConfigRows({ cases }: { cases: ConfigurationCase[] }) {
           <Td mono>{c.id.split("/").pop()}</Td>
           <Td dim>{c.basis}</Td>
           <Td dim>{c.tokenizer}</Td>
-          <Td right mono dim>{c.tools}</Td>
-          <Td right mono dim>{fmt(c.cold_tokens)}</Td>
-          <Td right mono accent>{fmt(c.swap_savings_tokens)}</Td>
-          <Td right mono accent>{fmt(c.slim_savings_tokens)}</Td>
-          <Td right mono dim>{pct(c.pct_of_200k_window)}</Td>
+          <Td right mono dim>
+            {c.tools}
+          </Td>
+          <Td right mono dim>
+            {fmt(c.cold_tokens)}
+          </Td>
+          <Td right mono accent>
+            {fmt(c.swap_savings_tokens)}
+          </Td>
+          <Td right mono accent>
+            {fmt(c.slim_savings_tokens)}
+          </Td>
+          <Td right mono dim>
+            {pct(c.pct_of_200k_window)}
+          </Td>
         </tr>
       ))}
     </>
@@ -204,11 +222,21 @@ function LossyRows({ cases }: { cases: LossyCase[] }) {
         >
           <Td mono>{c.fixture.split("/").pop()}</Td>
           <Td dim>{c.technique.split(" ")[0]}</Td>
-          <Td right mono dim>{c.target_ratio.toFixed(2)}</Td>
-          <Td right mono dim>{fmt(c.before_tokens)}</Td>
-          <Td right mono dim>{fmt(c.after_tokens)}</Td>
-          <Td right mono dim>{c.achieved_ratio.toFixed(2)}</Td>
-          <Td right mono accent>{pct(c.savings_pct)}</Td>
+          <Td right mono dim>
+            {c.target_ratio.toFixed(2)}
+          </Td>
+          <Td right mono dim>
+            {fmt(c.before_tokens)}
+          </Td>
+          <Td right mono dim>
+            {fmt(c.after_tokens)}
+          </Td>
+          <Td right mono dim>
+            {c.achieved_ratio.toFixed(2)}
+          </Td>
+          <Td right mono accent>
+            {pct(c.savings_pct)}
+          </Td>
         </tr>
       ))}
     </>
@@ -305,10 +333,7 @@ function MethodologySection({ md }: { md: string }) {
       {blocks.map((block, i) => {
         if (block.kind === "h2") {
           return (
-            <h3
-              key={`h-${i}`}
-              className="mt-6 text-sm font-medium text-zinc-300 first:mt-0"
-            >
+            <h3 key={`h-${i}`} className="mt-6 text-sm font-medium text-zinc-300 first:mt-0">
               {block.text}
             </h3>
           );
@@ -427,7 +452,6 @@ export default function BenchPage() {
 
         {/* ---- Track sections ---- */}
         <div className="mx-auto max-w-[1200px] divide-y divide-white/[0.06] px-6">
-
           {/* ---- Structural track ---- */}
           <section className="py-14 sm:py-20" aria-labelledby="structural-heading">
             <TrackEyebrow label="Track 1" />

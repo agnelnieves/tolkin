@@ -283,7 +283,10 @@ export default function FaultyTerminal({
   const timeOffsetRef = useRef<number>(Math.random() * 100);
 
   const tintVec = useMemo(() => hexToRgb(tint), [tint]);
-  const ditherValue = useMemo(() => (typeof dither === "boolean" ? (dither ? 1 : 0) : dither), [dither]);
+  const ditherValue = useMemo(
+    () => (typeof dither === "boolean" ? (dither ? 1 : 0) : dither),
+    [dither],
+  );
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     const ctn = containerRef.current;

@@ -15,8 +15,7 @@ const FIDELITY_LABELS: Record<FidelityKind, string> = {
 };
 
 export function FidelityBadge({ fidelity }: { fidelity: string }) {
-  const style =
-    FIDELITY_STYLES[fidelity as FidelityKind] ?? "border-white/10 text-zinc-400";
+  const style = FIDELITY_STYLES[fidelity as FidelityKind] ?? "border-white/10 text-zinc-400";
   const label = FIDELITY_LABELS[fidelity as FidelityKind] ?? fidelity;
   return (
     <span
@@ -61,13 +60,7 @@ export function PendingNote() {
 }
 
 // Responsive table wrapper: horizontal scroll on desktop, stacked cards on narrow viewports
-export function TrackTable({
-  head,
-  body,
-}: {
-  head: ReactNode;
-  body: ReactNode;
-}) {
+export function TrackTable({ head, body }: { head: ReactNode; body: ReactNode }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-white/10">
       <table className="w-full min-w-[600px] border-collapse text-left text-xs">
@@ -81,9 +74,7 @@ export function TrackTable({
 }
 
 export function Th({ children, right }: { children: ReactNode; right?: boolean }) {
-  return (
-    <th className={`px-3 py-2.5 font-medium${right ? " text-right" : ""}`}>{children}</th>
-  );
+  return <th className={`px-3 py-2.5 font-medium${right ? " text-right" : ""}`}>{children}</th>;
 }
 
 export function Td({
@@ -109,9 +100,7 @@ export function Td({
 }
 
 export function TrackEyebrow({ label }: { label: string }) {
-  return (
-    <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-500">{label}</p>
-  );
+  return <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-500">{label}</p>;
 }
 
 export function SectionDivider() {

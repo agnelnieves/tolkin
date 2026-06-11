@@ -93,8 +93,7 @@ export function ClaimBarRow({ row }: { row: ClaimRow }) {
     return () => observer.disconnect();
   }, []);
 
-  const delta =
-    row.claimed_pct !== null ? (row.claimed_pct - row.measured_pct).toFixed(1) : null;
+  const delta = row.claimed_pct !== null ? (row.claimed_pct - row.measured_pct).toFixed(1) : null;
 
   return (
     <div ref={ref} className="group/row space-y-2 py-4">
