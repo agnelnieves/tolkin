@@ -58,8 +58,7 @@ pub struct Theme {
     pub ok: Color,
     pub warn: Color,
     pub err: Color,
-    /// Toasts and the update chip (next wave) consume this token.
-    #[allow(dead_code)]
+    /// Toast rails and the header update chip.
     pub info: Color,
     // Derived.
     pub selection_bg: Color,

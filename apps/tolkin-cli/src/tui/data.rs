@@ -35,16 +35,84 @@ pub struct MachineProject {
 }
 
 /// Sort orders for the Machine tab's project list. Weight is the default;
-/// the `,` sort cycle (a later wave) walks the variants in this order.
+/// the `,` sort cycle walks the variants in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MachineSort {
     Weight,
-    /// Constructed when the `,` sort cycle ships (next wave).
-    #[allow(dead_code)]
     Sessions,
-    /// Constructed when the `,` sort cycle ships (next wave).
-    #[allow(dead_code)]
     Recency,
+}
+
+impl MachineSort {
+    pub fn next(self) -> MachineSort {
+        match self {
+            MachineSort::Weight => MachineSort::Sessions,
+            MachineSort::Sessions => MachineSort::Recency,
+            MachineSort::Recency => MachineSort::Weight,
+        }
+    }
+
+    /// Sort indicator label for the panel title.
+    pub fn label(self) -> &'static str {
+        match self {
+            MachineSort::Weight => "weight",
+            MachineSort::Sessions => "sessions",
+            MachineSort::Recency => "recency",
+        }
+    }
+}
+
+/// Sort orders for the Spend tab's models table. Input volume is the
+/// default; the `,` sort cycle walks the variants in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelSort {
+    Input,
+    Output,
+    Cost,
+}
+
+impl ModelSort {
+    pub fn next(self) -> ModelSort {
+        match self {
+            ModelSort::Input => ModelSort::Output,
+            ModelSort::Output => ModelSort::Cost,
+            ModelSort::Cost => ModelSort::Input,
+        }
+    }
+
+    /// Sort indicator label for the panel title.
+    pub fn label(self) -> &'static str {
+        match self {
+            ModelSort::Input => "input volume",
+            ModelSort::Output => "output volume",
+            ModelSort::Cost => "cost",
+        }
+    }
+}
+
+/// Re-sort the model rows in place. Every order is descending with the
+/// model id as the deterministic tiebreak; unpriced costs sort last.
+pub fn sort_models(rows: &mut [ModelRow], sort: ModelSort) {
+    match sort {
+        ModelSort::Input => rows.sort_by(|a, b| {
+            b.totals
+                .input_side()
+                .cmp(&a.totals.input_side())
+                .then_with(|| a.model.cmp(&b.model))
+        }),
+        ModelSort::Output => rows.sort_by(|a, b| {
+            b.totals
+                .output_tokens
+                .cmp(&a.totals.output_tokens)
+                .then_with(|| a.model.cmp(&b.model))
+        }),
+        ModelSort::Cost => rows.sort_by(|a, b| {
+            b.cost_usd
+                .unwrap_or(-1.0)
+                .total_cmp(&a.cost_usd.unwrap_or(-1.0))
+                .then_with(|| a.model.cmp(&b.model))
+        }),
+    }
 }
 
 /// Re-sort a machine project list in place. Every order is descending
@@ -262,12 +330,13 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-/// Top 5 model rows by input-side volume, used by the Spend tab.
-pub fn top_model_rows(report: &TierReport) -> Vec<ModelRow> {
+/// Every model row from the measured tier, unsorted. The Spend tab caches
+/// these sorted by the active [`ModelSort`] and renders the top 5.
+pub fn model_rows(report: &TierReport) -> Vec<ModelRow> {
     let Some(measured) = report.measured.as_ref() else {
         return Vec::new();
     };
-    let mut rows: Vec<ModelRow> = measured
+    measured
         .by_model
         .iter()
         .map(|(model, mu)| ModelRow {
@@ -275,10 +344,7 @@ pub fn top_model_rows(report: &TierReport) -> Vec<ModelRow> {
             totals: mu.totals,
             cost_usd: mu.cost_usd,
         })
-        .collect();
-    rows.sort_by_key(|r| std::cmp::Reverse(r.totals.input_side()));
-    rows.truncate(5);
-    rows
+        .collect()
 }
 
 /// Top heavy files from a live project scan, capped per the constant.
@@ -596,6 +662,52 @@ mod tests {
         assert_eq!(
             v.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(),
             ["/a", "/c", "/b"]
+        );
+    }
+
+    #[test]
+    fn sort_models_orders_each_key_and_parks_unpriced_last() {
+        use crate::usage::types::UsageTotals;
+        let mk = |model: &str, input: u64, output: u64, cost: Option<f64>| ModelRow {
+            model: model.to_string(),
+            totals: UsageTotals {
+                input_tokens: input,
+                output_tokens: output,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+            },
+            cost_usd: cost,
+        };
+        let base = vec![
+            mk("a", 10, 300, Some(1.0)),
+            mk("b", 30, 100, None),
+            mk("c", 20, 200, Some(9.0)),
+        ];
+        let mut v = base.clone();
+        sort_models(&mut v, ModelSort::Input);
+        assert_eq!(
+            v.iter().map(|r| r.model.as_str()).collect::<Vec<_>>(),
+            ["b", "c", "a"]
+        );
+        let mut v = base.clone();
+        sort_models(&mut v, ModelSort::Output);
+        assert_eq!(
+            v.iter().map(|r| r.model.as_str()).collect::<Vec<_>>(),
+            ["a", "c", "b"]
+        );
+        let mut v = base;
+        sort_models(&mut v, ModelSort::Cost);
+        assert_eq!(
+            v.iter().map(|r| r.model.as_str()).collect::<Vec<_>>(),
+            ["c", "a", "b"],
+            "unpriced models sort last"
+        );
+        // The cycles cover every variant and wrap.
+        assert_eq!(ModelSort::Input.next().next().next(), ModelSort::Input);
+        assert_eq!(
+            MachineSort::Weight.next().next().next(),
+            MachineSort::Weight
         );
     }
 

@@ -143,10 +143,19 @@ const COL_IN: usize = 16;
 const COL_OUT: usize = 13;
 const COL_COST: usize = 11;
 
+/// Model rows the table shows before the "+N more" footer.
+const MODELS_SHOWN: usize = 5;
+
 fn render_models(frame: &mut Frame, area: Rect, model: &Model) {
     let theme = &model.theme;
     let derived = &model.derived;
-    let block = panel("models, top 5 by input volume".to_string(), false, theme);
+    // The sort indicator lives in the title; `,` cycles it.
+    let block = panel_with_accessory(
+        format!("models, top {MODELS_SHOWN} by {}", model.model_sort.label()),
+        "sort (,)".to_string(),
+        false,
+        theme,
+    );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -177,7 +186,7 @@ fn render_models(frame: &mut Frame, area: Rect, model: &Model) {
             Style::default().fg(theme.faint),
         ),
     ]));
-    for row in &derived.spend_models {
+    for row in derived.spend_models.iter().take(MODELS_SHOWN) {
         let name = format::truncate_left(&row.model, name_w.saturating_sub(1));
         let cost_span = match row.cost_usd {
             Some(c) => Span::styled(
@@ -202,12 +211,10 @@ fn render_models(frame: &mut Frame, area: Rect, model: &Model) {
             cost_span,
         ]));
     }
-    if derived.models_total > derived.spend_models.len() {
+    let shown = derived.spend_models.len().min(MODELS_SHOWN);
+    if derived.models_total > shown {
         lines.push(muted_line(
-            &format!(
-                "+{} more",
-                derived.models_total - derived.spend_models.len()
-            ),
+            &format!("+{} more", derived.models_total - shown),
             theme,
         ));
     }

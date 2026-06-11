@@ -79,3 +79,33 @@ pub fn muted_line(text: &str, theme: &Theme) -> Line<'static> {
         Style::default().fg(theme.faint),
     ))
 }
+
+/// The list area under an active filter line (the line takes the first
+/// inner row). Shared by render and mouse hit-testing.
+pub fn below_filter_line(inner: Rect) -> Rect {
+    Rect {
+        x: inner.x,
+        y: inner.y + 1,
+        width: inner.width,
+        height: inner.height.saturating_sub(1),
+    }
+}
+
+/// The inline `/` filter line rendered above a filtered list: accent while
+/// typing, muted once confirmed.
+pub fn filter_line(query: &str, typing: bool, theme: &Theme) -> Line<'static> {
+    let color = if typing { theme.accent } else { theme.muted };
+    let cursor = if typing { "▌" } else { "" };
+    Line::from(vec![
+        Span::styled("/ ".to_string(), Style::default().fg(theme.accent)),
+        Span::styled(format!("{query}{cursor}"), Style::default().fg(color)),
+        Span::styled(
+            if typing {
+                "  (enter keep, esc clear)"
+            } else {
+                "  (esc clear)"
+            },
+            Style::default().fg(theme.faint),
+        ),
+    ])
+}

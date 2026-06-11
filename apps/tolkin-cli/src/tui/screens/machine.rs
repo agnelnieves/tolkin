@@ -8,14 +8,14 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::tui::anim::AnimKey;
-use crate::tui::app::Model;
+use crate::tui::app::{FilterTarget, Model};
 use crate::tui::components::card::{render_stat_card, value_line, StatCard};
 use crate::tui::components::list::render_select_list;
 use crate::tui::format;
 
 use crate::tui::theme::Theme;
 
-use super::{muted_line, panel};
+use super::{muted_line, panel, panel_with_accessory};
 
 /// Vertical body split: totals cards, gap, project list. Shared by render
 /// and the mouse hit-testing helper below.
@@ -29,14 +29,14 @@ fn rows(area: Rect) -> std::rc::Rc<[Rect]> {
 }
 
 /// Inner rect of the projects select-list for mouse hit-testing; mirrors
-/// render()'s layout exactly.
-pub fn projects_list_inner(body: Rect, theme: &Theme) -> Rect {
-    panel(
-        "projects by always-loaded weight (j/k)".to_string(),
-        true,
-        theme,
-    )
-    .inner(rows(body)[2])
+/// render()'s layout exactly, including the filter line row.
+pub fn projects_list_inner(body: Rect, filter_active: bool, theme: &Theme) -> Rect {
+    let inner = panel("projects (j/k)".to_string(), true, theme).inner(rows(body)[2]);
+    if filter_active {
+        super::below_filter_line(inner)
+    } else {
+        inner
+    }
 }
 
 pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
@@ -135,13 +135,23 @@ const VALUE_W: usize = 30;
 
 fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
     let theme = &model.theme;
-    let block = panel(
-        "projects by always-loaded weight (j/k)".to_string(),
+    // The sort indicator lives in the title accessory; `,` cycles it.
+    let block = panel_with_accessory(
+        "projects (j/k)".to_string(),
+        format!("sort: {} (,)", model.machine_sort.label()),
         true,
         theme,
     );
-    let inner = block.inner(area);
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
+
+    if let Some((query, typing)) = model.filter_line(FilterTarget::Machine) {
+        frame.render_widget(
+            Paragraph::new(super::filter_line(query, typing, theme)),
+            Rect { height: 1, ..inner },
+        );
+        inner = super::below_filter_line(inner);
+    }
 
     if model.derived.machine.is_empty() {
         let lines = vec![
@@ -151,20 +161,20 @@ fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
         frame.render_widget(Paragraph::new(lines), inner);
         return;
     }
+    let visible = model.visible_machine();
+    if visible.is_empty() {
+        frame.render_widget(
+            Paragraph::new(muted_line("no projects match the filter", theme)),
+            inner,
+        );
+        return;
+    }
 
-    let max = model
-        .derived
-        .machine
-        .iter()
-        .map(|p| p.always_tokens)
-        .max()
-        .unwrap_or(0);
+    let max = visible.iter().map(|p| p.always_tokens).max().unwrap_or(0);
     let bar_width = inner
         .width
         .saturating_sub((3 + NAME_W + 1 + VALUE_W) as u16);
-    let rows: Vec<Line> = model
-        .derived
-        .machine
+    let rows: Vec<Line> = visible
         .iter()
         .enumerate()
         .map(|(i, p)| {

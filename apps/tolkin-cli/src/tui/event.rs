@@ -129,3 +129,17 @@ pub fn spawn_report(tx: Sender<Msg>) {
         let _ = tx.send(Msg::ReportDone(result));
     });
 }
+
+/// Persist the cycled theme through the existing config save path. Only
+/// when a config already exists: the TUI never creates one (consent stays
+/// init's job). The env kills (`CI`, `TOLKIN_NO_LEDGER`) leave no state.
+pub fn persist_theme(name: &str) {
+    if crate::ledger::disabled_by_env() {
+        return;
+    }
+    let Some(mut cfg) = crate::ledger::load_config() else {
+        return;
+    };
+    cfg.ui_theme = Some(name.to_string());
+    let _ = crate::ledger::save_config(&cfg);
+}

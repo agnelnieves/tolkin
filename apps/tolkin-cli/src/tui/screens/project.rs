@@ -9,7 +9,7 @@ use ratatui::widgets::{Paragraph, Sparkline};
 use ratatui::Frame;
 
 use crate::tui::anim::AnimKey;
-use crate::tui::app::{Model, ScanState};
+use crate::tui::app::{FilterTarget, Model, ScanState};
 use crate::tui::components::bars;
 use crate::tui::components::list::render_select_list;
 use crate::tui::data::REALIZED_SPARK_POINTS;
@@ -33,14 +33,19 @@ fn rows(area: Rect) -> std::rc::Rc<[Rect]> {
 }
 
 /// Inner rect of the heavy-files select-list for mouse hit-testing;
-/// mirrors render()'s layout exactly.
-pub fn heavy_list_inner(body: Rect, theme: &Theme) -> Rect {
-    panel(
+/// mirrors render()'s layout exactly, including the filter line row.
+pub fn heavy_list_inner(body: Rect, filter_active: bool, theme: &Theme) -> Rect {
+    let inner = panel(
         "heaviest agent-context files (j/k)".to_string(),
         true,
         theme,
     )
-    .inner(rows(body)[2])
+    .inner(rows(body)[2]);
+    if filter_active {
+        super::below_filter_line(inner)
+    } else {
+        inner
+    }
 }
 
 pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
@@ -135,8 +140,16 @@ fn render_heavy_files(frame: &mut Frame, area: Rect, model: &Model) {
         true,
         theme,
     );
-    let inner = block.inner(area);
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
+
+    if let Some((query, typing)) = model.filter_line(FilterTarget::Heavy) {
+        frame.render_widget(
+            Paragraph::new(super::filter_line(query, typing, theme)),
+            Rect { height: 1, ..inner },
+        );
+        inner = super::below_filter_line(inner);
+    }
 
     if model.derived.heavy.is_empty() {
         let text = match &model.scan {
@@ -148,13 +161,19 @@ fn render_heavy_files(frame: &mut Frame, area: Rect, model: &Model) {
         frame.render_widget(Paragraph::new(muted_line(text, theme)), inner);
         return;
     }
+    let visible = model.visible_heavy();
+    if visible.is_empty() {
+        frame.render_widget(
+            Paragraph::new(muted_line("no files match the filter", theme)),
+            inner,
+        );
+        return;
+    }
 
     // Right-aligned numerics: tokens column then percent-of-always.
     let value_w: usize = 21;
     let path_w = (inner.width as usize).saturating_sub(3 + value_w);
-    let rows: Vec<Line> = model
-        .derived
-        .heavy
+    let rows: Vec<Line> = visible
         .iter()
         .map(|h| {
             let shown = format::truncate_left(&h.path, path_w);

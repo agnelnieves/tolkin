@@ -24,6 +24,7 @@ use crate::cache_analysis::CacheReport;
 use crate::commands::stats_data::StatsSnapshot;
 use crate::project::ProjectReport;
 use crate::tiers::TierReport;
+use crate::update;
 use crate::usage::cost;
 
 use super::anim::{AnimKey, Animator, Ease};
@@ -56,7 +57,27 @@ pub enum Cmd {
     /// Emit the OSC52 clipboard escape for this payload through the
     /// terminal handle.
     CopyOsc52(String),
+    /// Write the cycled theme into the existing config (never creates one).
+    PersistTheme(String),
     Quit,
+}
+
+/// Which select-list a `/` filter narrows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilterTarget {
+    Heavy,
+    Machine,
+}
+
+/// Inline list filter state: a plain case-insensitive substring over the
+/// row's path. `matches` indexes into the underlying derived vector and is
+/// recomputed on every edit and data refresh, never in view.
+pub struct FilterState {
+    pub target: FilterTarget,
+    pub query: String,
+    /// True while the filter line owns printable keys.
+    pub typing: bool,
+    pub matches: Vec<usize>,
 }
 
 /// Status of the cwd project scan.
@@ -157,6 +178,9 @@ pub struct Derived {
     pub today_cost: f64,
     pub last30_cost: f64,
     pub sessions_total: usize,
+    /// A cached known-newer version from the passive update check, read
+    /// straight off the config. Zero network from the TUI.
+    pub update_available: Option<String>,
 }
 
 fn empty_report() -> TierReport {
@@ -199,10 +223,16 @@ impl Derived {
             today_cost: 0.0,
             last30_cost: 0.0,
             sessions_total: 0,
+            update_available: None,
         }
     }
 
-    pub fn compute(snapshot: Option<&StatsSnapshot>, scan: &ScanState) -> Derived {
+    pub fn compute(
+        snapshot: Option<&StatsSnapshot>,
+        scan: &ScanState,
+        machine_sort: data::MachineSort,
+        model_sort: data::ModelSort,
+    ) -> Derived {
         let Some(s) = snapshot else {
             return Derived::empty();
         };
@@ -210,12 +240,11 @@ impl Derived {
         let global_report = s.compute_global();
         let sessions = data::sessions_by_project(s);
         let mut machine = data::machine_projects(&s.records, &sessions);
-        // Default order with the deterministic tiebreak; the `,` sort
-        // cycle (a later wave) swaps the variant.
-        data::sort_machine(&mut machine, data::MachineSort::Weight);
+        data::sort_machine(&mut machine, machine_sort);
         let today = data::day_string(s.now);
         let day_details = data::spend_day_details(s, &today, &cost::cost_usd);
-        let spend_models = data::top_model_rows(&global_report);
+        let mut spend_models = data::model_rows(&global_report);
+        data::sort_models(&mut spend_models, model_sort);
         let models_total = global_report
             .measured
             .as_ref()
@@ -265,6 +294,16 @@ impl Derived {
             today_cost,
             last30_cost,
             sessions_total: s.usage_data.as_ref().map(|d| d.sessions.len()).unwrap_or(0),
+            update_available: s
+                .config
+                .as_ref()
+                .and_then(|c| {
+                    update::known_newer_version(
+                        env!("CARGO_PKG_VERSION"),
+                        c.last_seen_latest.as_deref(),
+                    )
+                })
+                .map(str::to_string),
         }
     }
 
@@ -305,6 +344,10 @@ pub struct Model {
     pub sel_spend: Selection,
     pub spend_focus: SpendFocus,
     pub day_cursor: usize,
+    pub machine_sort: data::MachineSort,
+    pub model_sort: data::ModelSort,
+    /// Active `/` filter, at most one list at a time.
+    pub filter: Option<FilterState>,
     pub refreshing: bool,
     /// True while the report worker runs (one artifact at a time).
     pub reporting: bool,
@@ -327,7 +370,12 @@ impl Model {
         animator: Animator,
         now_epoch: u64,
     ) -> Model {
-        let derived = Derived::compute(snapshot.as_deref(), &ScanState::Idle);
+        let derived = Derived::compute(
+            snapshot.as_deref(),
+            &ScanState::Idle,
+            data::MachineSort::Weight,
+            data::ModelSort::Input,
+        );
         let day_cursor = derived.day_details.len().saturating_sub(1);
         let mut model = Model {
             snapshot,
@@ -344,6 +392,9 @@ impl Model {
             sel_spend: Selection::default(),
             spend_focus: SpendFocus::Days,
             day_cursor,
+            machine_sort: data::MachineSort::Weight,
+            model_sort: data::ModelSort::Input,
+            filter: None,
             refreshing: false,
             reporting: false,
             busy_ms: 0,
@@ -407,6 +458,9 @@ impl Model {
             Some(_) => return Context::Modal,
             None => {}
         }
+        if self.filter.as_ref().is_some_and(|f| f.typing) {
+            return Context::FilterInput;
+        }
         match self.tab {
             TabId::Spend if self.spend_focus == SpendFocus::Days => Context::DayStrip,
             _ => Context::List,
@@ -414,6 +468,10 @@ impl Model {
     }
 
     fn set_tab(&mut self, tab: TabId) {
+        if tab != self.tab {
+            // Filters are list-local; leaving the tab drops them.
+            self.clear_filter();
+        }
         self.tab = tab;
         self.animator.go(
             AnimKey::TabUnderline,
@@ -423,12 +481,19 @@ impl Model {
         );
     }
 
-    /// The selection and row count for the focused list on the active tab.
+    /// The selection and row count for the focused list on the active tab,
+    /// honoring an active filter.
     fn active_list(&mut self) -> Option<(&mut Selection, usize)> {
         match self.tab {
             TabId::Overview => Some((&mut self.sel_overview, self.derived.advisory_lines.len())),
-            TabId::Project => Some((&mut self.sel_heavy, self.derived.heavy.len())),
-            TabId::Machine => Some((&mut self.sel_machine, self.derived.machine.len())),
+            TabId::Project => {
+                let len = self.visible_len(FilterTarget::Heavy, self.derived.heavy.len());
+                Some((&mut self.sel_heavy, len))
+            }
+            TabId::Machine => {
+                let len = self.visible_len(FilterTarget::Machine, self.derived.machine.len());
+                Some((&mut self.sel_machine, len))
+            }
             TabId::Spend if self.spend_focus == SpendFocus::Advisories => {
                 Some((&mut self.sel_spend, self.derived.advisory_lines.len()))
             }
@@ -436,8 +501,114 @@ impl Model {
         }
     }
 
+    /// Visible row count for a filterable list.
+    fn visible_len(&self, target: FilterTarget, raw: usize) -> usize {
+        match &self.filter {
+            Some(f) if f.target == target => f.matches.len(),
+            _ => raw,
+        }
+    }
+
+    /// Map a visible (possibly filtered) row index to the derived index.
+    fn filtered_index(&self, target: FilterTarget, visible: usize) -> Option<usize> {
+        match &self.filter {
+            Some(f) if f.target == target => f.matches.get(visible).copied(),
+            _ => Some(visible),
+        }
+    }
+
+    /// The heavy-files selection resolved through the active filter.
+    fn selected_heavy(&self) -> Option<&HeavyRow> {
+        let idx = self.filtered_index(FilterTarget::Heavy, self.sel_heavy.idx)?;
+        self.derived.heavy.get(idx)
+    }
+
+    /// The machine-projects selection resolved through the active filter.
+    fn selected_machine(&self) -> Option<&MachineProject> {
+        let idx = self.filtered_index(FilterTarget::Machine, self.sel_machine.idx)?;
+        self.derived.machine.get(idx)
+    }
+
+    /// Visible heavy-file rows in render order (filtered when active).
+    pub fn visible_heavy(&self) -> Vec<&HeavyRow> {
+        match &self.filter {
+            Some(f) if f.target == FilterTarget::Heavy => f
+                .matches
+                .iter()
+                .filter_map(|&i| self.derived.heavy.get(i))
+                .collect(),
+            _ => self.derived.heavy.iter().collect(),
+        }
+    }
+
+    /// Visible machine projects in render order (filtered when active).
+    pub fn visible_machine(&self) -> Vec<&MachineProject> {
+        match &self.filter {
+            Some(f) if f.target == FilterTarget::Machine => f
+                .matches
+                .iter()
+                .filter_map(|&i| self.derived.machine.get(i))
+                .collect(),
+            _ => self.derived.machine.iter().collect(),
+        }
+    }
+
+    /// The filter line for a list panel: (query, typing) when one targets
+    /// it. Screens render it above the rows.
+    pub fn filter_line(&self, target: FilterTarget) -> Option<(&str, bool)> {
+        match &self.filter {
+            Some(f) if f.target == target => Some((f.query.as_str(), f.typing)),
+            _ => None,
+        }
+    }
+
+    /// Recompute the active filter's matches against the current derived
+    /// rows and re-clamp the affected selection.
+    fn apply_filter(&mut self) {
+        let Some(filter) = self.filter.as_mut() else {
+            return;
+        };
+        let q = filter.query.to_lowercase();
+        filter.matches = match filter.target {
+            FilterTarget::Heavy => self
+                .derived
+                .heavy
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| q.is_empty() || r.path.to_lowercase().contains(&q))
+                .map(|(i, _)| i)
+                .collect(),
+            FilterTarget::Machine => self
+                .derived
+                .machine
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| q.is_empty() || p.key.to_lowercase().contains(&q))
+                .map(|(i, _)| i)
+                .collect(),
+        };
+        let len = filter.matches.len();
+        match filter.target {
+            FilterTarget::Heavy => self.sel_heavy.clamp(len),
+            FilterTarget::Machine => self.sel_machine.clamp(len),
+        }
+    }
+
+    /// Drop the filter and restore the unfiltered selection bounds.
+    fn clear_filter(&mut self) {
+        if self.filter.take().is_some() {
+            self.sel_heavy.clamp(self.derived.heavy.len());
+            self.sel_machine.clamp(self.derived.machine.len());
+        }
+    }
+
     fn recompute_derived(&mut self) {
-        self.derived = Derived::compute(self.snapshot.as_deref(), &self.scan);
+        self.derived = Derived::compute(
+            self.snapshot.as_deref(),
+            &self.scan,
+            self.machine_sort,
+            self.model_sort,
+        );
         let lens = [
             self.derived.advisory_lines.len(),
             self.derived.heavy.len(),
@@ -451,6 +622,8 @@ impl Model {
         if self.day_cursor >= days {
             self.day_cursor = days.saturating_sub(1);
         }
+        // The filter's indices point into the rebuilt vectors now.
+        self.apply_filter();
         self.fire_data_animations();
     }
 
@@ -596,6 +769,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             if let Some(cmds) = handle_palette_key(model, &key) {
                 return cmds;
             }
+            // Same deal for an actively-typing list filter.
+            if let Some(cmds) = handle_filter_key(model, &key) {
+                return cmds;
+            }
             let Some(action) = keymap::resolve(&key, model.context()) else {
                 return Vec::new();
             };
@@ -724,9 +901,11 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
     match action {
         Action::Quit => return vec![Cmd::Quit],
         Action::Back => {
-            // Pop the overlay stack; with nothing stacked, esc is a no-op
-            // (it never quits).
-            model.overlays.pop();
+            // Pop the overlay stack, then clear an active filter; with
+            // neither, esc is a no-op (it never quits).
+            if model.overlays.pop().is_none() {
+                model.clear_filter();
+            }
         }
         Action::GoTab(tab) => model.set_tab(tab),
         Action::NextTab => model.set_tab(model.tab.next()),
@@ -797,6 +976,16 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
                 format!("theme {} active", model.theme.name),
                 model.animator.now(),
             );
+            // Persist through the existing config save path, but only when
+            // a config already exists (consent stays init's job).
+            if model
+                .snapshot
+                .as_deref()
+                .and_then(|s| s.config.as_ref())
+                .is_some()
+            {
+                return vec![Cmd::PersistTheme(model.theme.name.to_string())];
+            }
         }
         Action::OpenDetail => return open_detail(model),
         Action::AuditSelected => return audit_selected(model),
@@ -821,10 +1010,35 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
             }
         }
         Action::CopySelection => return copy_selection(model),
-        // Wired later in this wave: filter and sort. The bindings exist so
-        // help and the palette stay complete; pressing them is a
-        // deliberate no-op until then.
-        Action::FilterList | Action::CycleSort => {}
+        Action::FilterList => {
+            let target = match model.tab {
+                TabId::Project => Some(FilterTarget::Heavy),
+                TabId::Machine => Some(FilterTarget::Machine),
+                _ => None,
+            };
+            if let Some(target) = target {
+                model.filter = Some(FilterState {
+                    target,
+                    query: String::new(),
+                    typing: true,
+                    matches: Vec::new(),
+                });
+                model.apply_filter();
+            }
+        }
+        Action::CycleSort => match model.tab {
+            TabId::Machine => {
+                model.machine_sort = model.machine_sort.next();
+                data::sort_machine(&mut model.derived.machine, model.machine_sort);
+                model.apply_filter();
+                model.fire_data_animations();
+            }
+            TabId::Spend => {
+                model.model_sort = model.model_sort.next();
+                data::sort_models(&mut model.derived.spend_models, model.model_sort);
+            }
+            _ => {}
+        },
     }
     Vec::new()
 }
@@ -841,15 +1055,9 @@ fn copy_selection(model: &mut Model) -> Vec<Cmd> {
         Some(_) => None,
         None => match model.tab {
             TabId::Project => model
-                .derived
-                .heavy
-                .get(model.sel_heavy.idx)
+                .selected_heavy()
                 .map(|r| (absolute_path(&model.derived.project_key, &r.path), "path")),
-            TabId::Machine => model
-                .derived
-                .machine
-                .get(model.sel_machine.idx)
-                .map(|p| (p.key.clone(), "path")),
+            TabId::Machine => model.selected_machine().map(|p| (p.key.clone(), "path")),
             TabId::Overview => model
                 .derived
                 .advisory_lines
@@ -923,6 +1131,38 @@ fn handle_palette_key(model: &mut Model, key: &KeyEvent) -> Option<Vec<Cmd>> {
     }
 }
 
+/// Filter typing rules, applied before keymap resolution while a filter
+/// line owns input. Returns `None` for keys it does not consume (esc and
+/// ctrl+c resolve through the FilterInput context).
+fn handle_filter_key(model: &mut Model, key: &KeyEvent) -> Option<Vec<Cmd>> {
+    if !model.overlays.is_empty() {
+        return None;
+    }
+    {
+        let filter = model.filter.as_mut()?;
+        if !filter.typing {
+            return None;
+        }
+        match key.code {
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                filter.query.push(c);
+            }
+            KeyCode::Backspace => {
+                filter.query.pop();
+            }
+            KeyCode::Enter => {
+                // Confirm: keep the filter applied, hand keys back to the
+                // list (esc clears it from there).
+                filter.typing = false;
+                return Some(Vec::new());
+            }
+            _ => return None,
+        }
+    }
+    model.apply_filter();
+    Some(Vec::new())
+}
+
 /// Wheel lines per scroll notch.
 const WHEEL_LINES: usize = 3;
 
@@ -994,17 +1234,16 @@ fn handle_click(model: &mut Model, x: u16, y: u16) -> Vec<Cmd> {
             );
         }
         TabId::Project => {
-            let inner = screens::project::heavy_list_inner(body, &model.theme);
-            click_list(pos, inner, &mut model.sel_heavy, model.derived.heavy.len());
+            let len = model.visible_len(FilterTarget::Heavy, model.derived.heavy.len());
+            let filtered = model.filter_line(FilterTarget::Heavy).is_some();
+            let inner = screens::project::heavy_list_inner(body, filtered, &model.theme);
+            click_list(pos, inner, &mut model.sel_heavy, len);
         }
         TabId::Machine => {
-            let inner = screens::machine::projects_list_inner(body, &model.theme);
-            click_list(
-                pos,
-                inner,
-                &mut model.sel_machine,
-                model.derived.machine.len(),
-            );
+            let len = model.visible_len(FilterTarget::Machine, model.derived.machine.len());
+            let filtered = model.filter_line(FilterTarget::Machine).is_some();
+            let inner = screens::machine::projects_list_inner(body, filtered, &model.theme);
+            click_list(pos, inner, &mut model.sel_machine, len);
         }
         TabId::Spend if model.derived.ingestion_on => {
             let inner = screens::spend::advisory_list_inner(body, &model.theme);
@@ -1056,9 +1295,9 @@ fn open_detail(model: &mut Model) -> Vec<Cmd> {
     }
     match model.tab {
         TabId::Project => {
-            if let Some(row) = model.derived.heavy.get(model.sel_heavy.idx) {
+            if let Some(row) = model.selected_heavy().cloned() {
                 model.overlays.push(Overlay::File(FileDetailState {
-                    path: row.path.clone(),
+                    path: row.path,
                     tokens: row.tokens,
                     pct_always: row.pct_always,
                     scan_findings: row.findings,
@@ -1068,7 +1307,7 @@ fn open_detail(model: &mut Model) -> Vec<Cmd> {
             }
         }
         TabId::Machine => {
-            if let Some(p) = model.derived.machine.get(model.sel_machine.idx) {
+            if let Some(p) = model.selected_machine().cloned() {
                 let records = model
                     .snapshot
                     .as_deref()
@@ -1076,7 +1315,7 @@ fn open_detail(model: &mut Model) -> Vec<Cmd> {
                     .unwrap_or(&[]);
                 if let Some(h) = data::project_history(records, &p.key) {
                     model.overlays.push(Overlay::Project(ProjectDetailState {
-                        key: p.key.clone(),
+                        key: p.key,
                         series: h.series,
                         first_ts: h.first_ts,
                         last_ts: h.last_ts,
@@ -1129,7 +1368,7 @@ fn audit_selected(model: &mut Model) -> Vec<Cmd> {
     if model.tab != TabId::Project {
         return Vec::new();
     }
-    let Some(row) = model.derived.heavy.get(model.sel_heavy.idx) else {
+    let Some(row) = model.selected_heavy().cloned() else {
         return Vec::new();
     };
     let path = row.path.clone();
@@ -1179,6 +1418,7 @@ pub fn view(frame: &mut Frame, model: &Model) {
         ingestion_on: model.derived.ingestion_on,
         data_age: data_age.as_deref(),
         version: model.version,
+        update: model.derived.update_available.as_deref(),
         busy: busy_label.map(|l| (spinner_frame, l)),
     };
     chrome::render_header(frame, rows[0], &header, &model.theme);
@@ -2117,7 +2357,7 @@ mod tests {
             .collect();
         let area = Rect::new(0, 0, 110, 30);
         let body = inset(chrome_rows(area)[1]);
-        let inner = screens::project::heavy_list_inner(body, &model.theme);
+        let inner = screens::project::heavy_list_inner(body, false, &model.theme);
         update(&mut model, click(inner.x + 3, inner.y + 2));
         assert_eq!(model.sel_heavy.idx, 2, "row under the cursor selected");
         // A click outside any list leaves the selection alone.
@@ -2141,6 +2381,187 @@ mod tests {
         // Click outside: closes.
         update(&mut model, click(0, area.height - 1));
         assert!(model.overlays.is_empty());
+    }
+
+    fn machine_fixture() -> Vec<MachineProject> {
+        let mk = |key: &str, always: u64, ts: u64, sessions: u64| MachineProject {
+            key: key.to_string(),
+            always_tokens: always,
+            last_ts: ts,
+            sessions,
+        };
+        vec![
+            mk("/a", 10, 300, 2),
+            mk("/b", 30, 100, 5),
+            mk("/c", 20, 200, 9),
+        ]
+    }
+
+    #[test]
+    fn comma_cycles_machine_and_model_sorts_with_cached_order() {
+        let (mut model, _clock) = test_model();
+        model.tab = TabId::Machine;
+        model.derived.machine = machine_fixture();
+        data::sort_machine(&mut model.derived.machine, model.machine_sort);
+        let keys = |m: &Model| {
+            m.derived
+                .machine
+                .iter()
+                .map(|p| p.key.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(keys(&model), ["/b", "/c", "/a"], "weight default");
+        update(&mut model, key(KeyCode::Char(',')));
+        assert_eq!(model.machine_sort, data::MachineSort::Sessions);
+        assert_eq!(keys(&model), ["/c", "/b", "/a"], "sessions order");
+        update(&mut model, key(KeyCode::Char(',')));
+        assert_eq!(model.machine_sort, data::MachineSort::Recency);
+        assert_eq!(keys(&model), ["/a", "/c", "/b"], "recency order");
+
+        // Spend models cycle independently.
+        model.tab = TabId::Spend;
+        assert_eq!(model.model_sort, data::ModelSort::Input);
+        update(&mut model, key(KeyCode::Char(',')));
+        assert_eq!(model.model_sort, data::ModelSort::Output);
+        // Machine sort untouched by the spend cycle.
+        assert_eq!(model.machine_sort, data::MachineSort::Recency);
+    }
+
+    #[test]
+    fn slash_filters_the_heavy_list_and_esc_clears_it() {
+        let (mut model, _clock) = test_model();
+        model.tab = TabId::Project;
+        model.derived.project_key = "/repo".to_string();
+        model.derived.heavy = vec![
+            HeavyRow {
+                path: "CLAUDE.md".to_string(),
+                tokens: 900,
+                pct_always: 9.0,
+                findings: 0,
+                savings_min: 0,
+                savings_max: 0,
+            },
+            HeavyRow {
+                path: "docs/guide.md".to_string(),
+                tokens: 500,
+                pct_always: 5.0,
+                findings: 0,
+                savings_min: 0,
+                savings_max: 0,
+            },
+            HeavyRow {
+                path: ".claude/rules.md".to_string(),
+                tokens: 100,
+                pct_always: 1.0,
+                findings: 0,
+                savings_min: 0,
+                savings_max: 0,
+            },
+        ];
+        update(&mut model, key(KeyCode::Char('/')));
+        assert_eq!(model.context(), Context::FilterInput);
+        // Typing q filters instead of quitting.
+        for c in "claude".chars() {
+            assert!(update(&mut model, key(KeyCode::Char(c))).is_empty());
+        }
+        assert_eq!(model.visible_heavy().len(), 2, "case-insensitive substring");
+        // Navigation while typing is parked; enter confirms and hands the
+        // keys back to the list.
+        update(&mut model, key(KeyCode::Enter));
+        assert_eq!(model.context(), Context::List);
+        update(&mut model, key(KeyCode::Char('j')));
+        assert_eq!(model.sel_heavy.idx, 1);
+        // Enter opens the detail for the FILTERED selection.
+        update(&mut model, key(KeyCode::Enter));
+        let Some(Overlay::File(f)) = model.overlays.last() else {
+            panic!("detail must open");
+        };
+        assert_eq!(f.path, ".claude/rules.md", "filter-mapped row");
+        update(&mut model, key(KeyCode::Esc));
+        // Esc clears the filter; the full list returns.
+        update(&mut model, key(KeyCode::Esc));
+        assert!(model.filter.is_none());
+        assert_eq!(model.visible_heavy().len(), 3);
+        // Switching tabs drops a confirmed filter (typing parks tab).
+        update(&mut model, key(KeyCode::Char('/')));
+        update(&mut model, key(KeyCode::Char('c')));
+        update(&mut model, key(KeyCode::Enter));
+        update(&mut model, key(KeyCode::Tab));
+        assert!(model.filter.is_none());
+    }
+
+    #[test]
+    fn theme_cycle_persists_only_when_a_config_exists() {
+        // No snapshot, no config: cycle without persistence.
+        let (mut model, _clock) = test_model();
+        assert!(update(&mut model, key(KeyCode::Char('t'))).is_empty());
+
+        // Seeded config: cycle returns the persist command.
+        use crate::ledger::{self, Config};
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!(
+            "tolkin-theme-persist-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        ledger::save_config_to(&dir, &Config::new(true, false)).unwrap();
+        let snapshot = StatsSnapshot::load_in(&dir);
+        let clock = ManualClock::new();
+        let animator = Animator::new(Box::new(clock.clone()), true);
+        let theme = theme::by_name("tolkin-dark", true).unwrap();
+        let mut model = Model::new(
+            Some(Box::new(snapshot)),
+            theme,
+            ThemeEnv::default(),
+            animator,
+            1_780_000_000,
+        );
+        let cmds = update(&mut model, key(KeyCode::Char('t')));
+        assert_eq!(
+            cmds,
+            vec![Cmd::PersistTheme("tolkin-light".to_string())],
+            "persist through the existing save path"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_chip_reads_the_cached_newer_version_without_network() {
+        use crate::ledger::{self, Config};
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!(
+            "tolkin-update-chip-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let mut cfg = Config::new(true, false);
+        cfg.last_seen_latest = Some("99.0.0".to_string());
+        ledger::save_config_to(&dir, &cfg).unwrap();
+        let snapshot = StatsSnapshot::load_in(&dir);
+        let theme = theme::by_name("tolkin-dark", true).unwrap();
+        let model = Model::compact(Some(Box::new(snapshot)), theme);
+        assert_eq!(model.derived.update_available.as_deref(), Some("99.0.0"));
+
+        let backend = ratatui::backend::TestBackend::new(110, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| view(frame, &model)).unwrap();
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..2 {
+            for x in 0..110 {
+                text.push_str(buf[(x, y)].symbol());
+            }
+        }
+        assert!(text.contains("update 99.0.0"), "chip missing: {text}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

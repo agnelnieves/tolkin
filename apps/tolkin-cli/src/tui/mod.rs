@@ -71,7 +71,7 @@ pub fn render_compact_frame() -> Result<String> {
 /// dashboard uses. `None` renders the setup card.
 fn render_static_frame(snapshot: Option<StatsSnapshot>, w: u16, h: u16) -> Result<String> {
     let theme_env = theme::ThemeEnv::from_env();
-    let selected = theme::select(&theme_env, None);
+    let selected = theme::select(&theme_env, config_theme(snapshot.as_ref()).as_deref());
     let model = Model::compact(snapshot.map(Box::new), selected);
     let backend = TestBackend::new(w, h);
     let mut terminal: Terminal<TestBackend> = Terminal::new(backend)?;
@@ -91,11 +91,19 @@ fn buffer_to_string(buf: &Buffer) -> String {
     out
 }
 
+/// The persisted dashboard theme from the snapshot's config, if any. Feeds
+/// `theme::select`'s middle precedence rung (env, config, default).
+fn config_theme(snapshot: Option<&StatsSnapshot>) -> Option<String> {
+    snapshot
+        .and_then(|s| s.config.as_ref())
+        .and_then(|c| c.ui_theme.clone())
+}
+
 fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let theme_env = theme::ThemeEnv::from_env();
-    let selected = theme::select(&theme_env, None);
     let reduced_motion = env::var("TOLKIN_REDUCED_MOTION").is_ok_and(|v| v == "1");
     let snapshot = StatsSnapshot::load();
+    let selected = theme::select(&theme_env, config_theme(snapshot.as_ref()).as_deref());
 
     let (tx, rx) = mpsc::channel::<Msg>();
     event::spawn_input(tx.clone());
@@ -164,6 +172,8 @@ fn dispatch(
                 let _ = write!(backend, "{}", format::osc52(&payload));
                 let _ = backend.flush();
             }
+            // A tiny TOML write; inline rather than a worker.
+            Cmd::PersistTheme(name) => event::persist_theme(&name),
         }
     }
     false

@@ -21,6 +21,9 @@ pub struct HeaderProps<'a> {
     /// "2m" style snapshot age; None before any data loads.
     pub data_age: Option<&'a str>,
     pub version: &'a str,
+    /// A cached known-newer version from the passive update check; renders
+    /// as an info-colored chip. Zero network behind this.
+    pub update: Option<&'a str>,
     /// Busy cluster: (spinner glyph, label) while a worker runs.
     pub busy: Option<(&'a str, &'a str)>,
 }
@@ -115,6 +118,13 @@ pub fn render_header(frame: &mut Frame, area: Rect, props: &HeaderProps, theme: 
         format!("v{}", props.version),
         Style::default().fg(theme.faint),
     ));
+    if let Some(latest) = props.update {
+        right.push(Span::raw("  "));
+        right.push(Span::styled(
+            format!("update {latest}"),
+            Style::default().fg(theme.info),
+        ));
+    }
     right.push(Span::raw(" "));
     let right_line = Line::from(right);
     let right_width = (right_line.width() as u16).min(area.width);
@@ -259,6 +269,7 @@ mod tests {
                     ingestion_on: true,
                     data_age: Some("2m"),
                     version: "0.14.0",
+                    update: Some("0.15.0"),
                     busy: None,
                 };
                 render_header(f, f.area(), &props, &t);
@@ -273,6 +284,7 @@ mod tests {
         assert!(text.contains("ingestion"));
         assert!(text.contains("data 2m"));
         assert!(text.contains("v0.14.0"));
+        assert!(text.contains("update 0.15.0"), "update chip missing");
         assert!(text.contains("━"), "underline accent segment missing");
     }
 

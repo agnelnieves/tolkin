@@ -29,11 +29,13 @@ impl ModalWidth {
 }
 
 /// The dialog rectangle for a body of `lines` rows: width clamped to the
-/// frame minus 2, top at height/4. Mouse hit-testing shares this with the
-/// render path so a click can never disagree with what was drawn.
+/// frame minus 2, top at height/4, height tight around the body (the two
+/// border rows carry the title and the esc hint). Mouse hit-testing shares
+/// this with the render path so a click can never disagree with the drawn
+/// dialog.
 pub fn dialog_rect(area: Rect, width: ModalWidth, lines: u16) -> Rect {
     let w = width.cols().min(area.width.saturating_sub(2));
-    let h = (lines + 4).min(area.height.saturating_sub(2));
+    let h = (lines + 2).min(area.height.saturating_sub(2));
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = (area.height / 4).min(area.height.saturating_sub(h));
     Rect {

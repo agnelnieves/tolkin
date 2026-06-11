@@ -152,6 +152,11 @@ pub struct Config {
     /// Latest version string seen during the last update check.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_seen_latest: Option<String>,
+    /// Dashboard theme name persisted when the user cycles themes with `t`
+    /// in the TUI. Absent by default; `TOLKIN_THEME` overrides it. Written
+    /// only when a config already exists (the TUI never creates one).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ui_theme: Option<String>,
 }
 
 impl Config {
@@ -169,6 +174,7 @@ impl Config {
             sidecar_model: None,
             last_update_check: None,
             last_seen_latest: None,
+            ui_theme: None,
         }
     }
 }
@@ -413,6 +419,7 @@ mod tests {
             cfg.last_seen_latest.is_none(),
             "last_seen_latest must be None"
         );
+        assert!(cfg.ui_theme.is_none(), "ui_theme must be None");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -423,6 +430,7 @@ mod tests {
         let cfg = Config::new(true, false);
         save_config_to(&dir, &cfg).unwrap();
         let text = fs::read_to_string(dir.join(CONFIG_FILE)).unwrap();
+        assert!(!text.contains("ui_theme"), "should be absent: {text}");
         assert!(
             !text.contains("consent_local_model"),
             "should be absent: {text}"
@@ -458,6 +466,7 @@ mod tests {
         cfg.sidecar_model = Some("llama3".to_string());
         cfg.last_update_check = Some(1_700_000_042);
         cfg.last_seen_latest = Some("1.2.3".to_string());
+        cfg.ui_theme = Some("tolkin-light".to_string());
         save_config_to(&dir, &cfg).unwrap();
         let loaded = load_config_from(&dir).expect("must load");
         assert_eq!(loaded.consent_local_model, Some(false));
@@ -469,6 +478,7 @@ mod tests {
         assert_eq!(loaded.sidecar_model.as_deref(), Some("llama3"));
         assert_eq!(loaded.last_update_check, Some(1_700_000_042));
         assert_eq!(loaded.last_seen_latest.as_deref(), Some("1.2.3"));
+        assert_eq!(loaded.ui_theme.as_deref(), Some("tolkin-light"));
         let _ = fs::remove_dir_all(&dir);
     }
 }

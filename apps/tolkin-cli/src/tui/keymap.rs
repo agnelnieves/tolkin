@@ -366,6 +366,16 @@ pub static BINDINGS: &[Binding] = &[
         hint: "day right",
         group: Group::Navigate,
     },
+    // The Spend models table is not focusable; `,` cycles its sort from
+    // the day strip too.
+    Binding {
+        keys: &[(KeyCode::Char(','), NONE)],
+        action: Action::CycleSort,
+        context: Context::DayStrip,
+        keys_label: ",",
+        hint: "sort",
+        group: Group::View,
+    },
     Binding {
         keys: &[(KeyCode::Enter, NONE)],
         action: Action::OpenDetail,
@@ -534,7 +544,10 @@ pub fn footer_actions(context: Context) -> Vec<Action> {
             Action::Help,
         ],
         Context::Modal => vec![Action::Back],
-        _ => vec![
+        // Input contexts: printable keys type, so the only honest hint is
+        // the way out.
+        Context::PaletteInput | Context::FilterInput => vec![Action::Back],
+        Context::Global => vec![
             Action::NextTab,
             Action::Refresh,
             Action::Rescan,

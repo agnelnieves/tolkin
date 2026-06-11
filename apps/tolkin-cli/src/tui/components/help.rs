@@ -87,11 +87,11 @@ pub fn lines(theme: &Theme) -> Vec<Line<'static>> {
     out.push(Line::from(vec![
         Span::styled("env: ", Style::default().fg(theme.muted)),
         Span::styled("NO_COLOR", Style::default().fg(theme.accent)),
-        Span::styled(" forces mono, ", Style::default().fg(theme.muted)),
+        Span::styled(" (mono), ", Style::default().fg(theme.muted)),
         Span::styled("TOLKIN_REDUCED_MOTION", Style::default().fg(theme.accent)),
-        Span::styled("=1 stills motion, ", Style::default().fg(theme.muted)),
+        Span::styled("=1 (no motion), ", Style::default().fg(theme.muted)),
         Span::styled("TOLKIN_THEME", Style::default().fg(theme.accent)),
-        Span::styled(" picks the theme", Style::default().fg(theme.muted)),
+        Span::styled(" (theme)", Style::default().fg(theme.muted)),
     ]));
     out
 }
