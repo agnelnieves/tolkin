@@ -152,7 +152,9 @@ fn no_data_card(title: &str) -> StatCard<'_> {
         title,
         value: Line::default(),
         tier: "",
-        hint: Some(CONSENT_HINT),
+        // Short enough for a narrow card; the spark panel spells out the
+        // full consent sentence.
+        hint: Some("off (tolkin init)"),
     }
 }
 
