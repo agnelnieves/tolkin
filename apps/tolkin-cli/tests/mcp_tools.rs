@@ -310,6 +310,37 @@ fn unknown_server_note_points_at_the_flag() {
     assert!(note.contains("--tools-list"), "{note}");
 }
 
+/// Wave 2 regression: the unknown-server pointer at `--tools-list` lived in
+/// the JSON note but the plain text report dropped it, leaving the user a
+/// blank row with no actionable next step. The plain output now surfaces the
+/// note inline under the row so an `mcp` plain run answers "what do I do
+/// next" without forcing a re-run with --json.
+#[test]
+fn plain_report_surfaces_unknown_server_note_with_flag() {
+    let dir = tmp("unknown-plain-note");
+    let config = dir.join("config.json");
+    fs::write(
+        &config,
+        r#"{ "mcpServers": { "homegrown": { "command": "node", "args": ["./srv.js"] } } }"#,
+    )
+    .unwrap();
+    let out = cmd(&dir)
+        .args(["mcp", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("--tools-list"),
+        "plain text drops the actionable flag pointer:\n{text}"
+    );
+    assert!(text.contains("homegrown"), "{text}");
+}
+
 #[test]
 fn anthropic_provider_labels_manifest_counts_an_estimate() {
     let dir = tmp("anthropic-label");

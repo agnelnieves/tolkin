@@ -230,6 +230,13 @@ fn print_report(a: &McpAnalysis) {
                 s.basis
             );
         }
+        // Unknown servers carry an actionable note pointing at --tools-list;
+        // the json output already surfaces it, the plain-text report kept
+        // the row blank and dropped the guidance. Print it so the user can
+        // act on the unknown row without re-running with --json.
+        if s.recommendation == Recommendation::Unknown {
+            println!("  {}", s.note);
+        }
         if let Some(slim) = &s.slim {
             if slim.already_slimmed {
                 println!(
