@@ -1,3 +1,4 @@
+import { Hairline } from "./hairline";
 import { RevealText } from "./reveal-text";
 import { SectionHeading } from "./section-heading";
 
@@ -21,7 +22,7 @@ const TIERS = [
 
 export function Tiers() {
   return (
-    <section className="border-b border-white/10">
+    <section className="relative">
       <div className="mx-auto max-w-[1200px] px-6 py-20 sm:py-28">
         <SectionHeading
           eyebrow="Honesty tiers"
@@ -54,6 +55,7 @@ export function Tiers() {
           , and it never joins the tiers.
         </p>
       </div>
+      <Hairline />
     </section>
   );
 }

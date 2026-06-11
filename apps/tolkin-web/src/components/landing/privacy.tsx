@@ -1,3 +1,4 @@
+import { Hairline } from "./hairline";
 import { SectionHeading } from "./section-heading";
 
 const EGRESS_CLASSES = [
@@ -24,7 +25,7 @@ const KILL_SWITCHES = [
 
 export function Privacy() {
   return (
-    <section id="privacy" className="scroll-mt-20 border-b border-white/10">
+    <section id="privacy" className="relative scroll-mt-20">
       <div className="mx-auto max-w-[1200px] px-6 py-20 sm:py-28">
         <SectionHeading
           eyebrow="Privacy"
@@ -69,6 +70,7 @@ export function Privacy() {
           </p>
         </div>
       </div>
+      <Hairline />
     </section>
   );
 }

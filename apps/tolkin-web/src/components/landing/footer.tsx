@@ -72,9 +72,8 @@ export function Footer() {
         </div>
       </div>
 
-      <p className="mt-14 border-t border-white/10 pt-6 font-mono text-xs text-muted-foreground">
-        © 2026 Agnel Nieves
-      </p>
+      <div aria-hidden="true" data-hairline className="mt-14 h-px w-full bg-white/10" />
+      <p className="pt-6 font-mono text-xs text-muted-foreground">© 2026 Agnel Nieves</p>
     </footer>
   );
 }

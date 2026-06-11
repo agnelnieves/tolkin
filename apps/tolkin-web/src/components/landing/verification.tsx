@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { Hairline } from "./hairline";
 import { SectionHeading } from "./section-heading";
 
 const ROWS = [
@@ -18,7 +19,7 @@ const ROWS = [
 
 export function Verification() {
   return (
-    <section className="border-b border-white/10">
+    <section className="relative">
       <div className="mx-auto max-w-[1200px] px-6 py-20 sm:py-28">
         <SectionHeading
           eyebrow="Claimed vs measured"
@@ -71,6 +72,7 @@ export function Verification() {
           </p>
         </div>
       </div>
+      <Hairline />
     </section>
   );
 }

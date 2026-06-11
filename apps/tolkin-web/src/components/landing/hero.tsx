@@ -7,6 +7,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { CopyButton } from "./copy-button";
+import { Hairline } from "./hairline";
 import { RevealText } from "./reveal-text";
 import { Terminal } from "./terminal";
 
@@ -43,7 +44,7 @@ export function Hero() {
   }, []);
 
   return (
-    <section ref={scope} className="landing-grid border-b border-white/10">
+    <section ref={scope} className="landing-grid relative">
       <div className="mx-auto max-w-[1200px] px-6 pt-20 pb-16 sm:pt-28 sm:pb-24">
         <p
           data-hero-stagger
@@ -121,6 +122,7 @@ export function Hero() {
           </div>
         </div>
       </div>
+      <Hairline />
     </section>
   );
 }

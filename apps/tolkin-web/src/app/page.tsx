@@ -2,6 +2,7 @@ import { Distribution } from "@/components/landing/distribution";
 import { Features } from "@/components/landing/features";
 import { Footer } from "@/components/landing/footer";
 import { Hero } from "@/components/landing/hero";
+import { LandingMotion } from "@/components/landing/landing-motion";
 import { LocalIntelligence } from "@/components/landing/local-intelligence";
 import { McpExactness } from "@/components/landing/mcp-exactness";
 import { Nav } from "@/components/landing/nav";
@@ -42,6 +43,7 @@ export default function LandingPage() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
       />
       <SmoothScroll />
+      <LandingMotion />
 
       <a
         href="#main"

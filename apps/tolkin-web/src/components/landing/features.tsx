@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Hairline } from "./hairline";
 import { SectionHeading } from "./section-heading";
 
 const FEATURES = [
@@ -38,7 +39,7 @@ const FEATURES = [
 
 export function Features() {
   return (
-    <section id="features" className="scroll-mt-20 border-b border-white/10">
+    <section id="features" className="relative scroll-mt-20">
       <div className="mx-auto max-w-[1200px] px-6 py-20 sm:py-28">
         <SectionHeading
           eyebrow="Features"
@@ -59,6 +60,7 @@ export function Features() {
           ))}
         </div>
       </div>
+      <Hairline />
     </section>
   );
 }

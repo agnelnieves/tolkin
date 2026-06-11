@@ -16,6 +16,23 @@ const LINKS = [
   { href: "https://github.com/agnelnieves/tolkin", label: "GitHub", external: true },
 ];
 
+// Duplicated-text hover slide: two stacked copies of the label inside an
+// overflow-hidden span. On hover (hover-capable pointers only, motion
+// allowed) the visible copy slides up and out while the duplicate slides in
+// from below. Both layers render the same text at the same size, so the
+// swap is layout-shift free; the duplicate is aria-hidden. CSS lives in
+// globals.css under .nav-flip.
+function NavFlipLabel({ label }: { label: string }) {
+  return (
+    <span className="nav-flip">
+      <span className="nav-flip-top">{label}</span>
+      <span aria-hidden="true" className="nav-flip-dup">
+        {label}
+      </span>
+    </span>
+  );
+}
+
 // Sticky top nav. Desktop: inline links plus a compact brew-install copy
 // chip. Mobile: a simple disclosure list, 44px tap targets, no drawer.
 export function Nav() {
@@ -41,17 +58,17 @@ export function Nav() {
                 key={link.label}
                 href={link.href}
                 rel="noopener"
-                className="rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
+                className="nav-flip-trigger rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
               >
-                {link.label}
+                <NavFlipLabel label={link.label} />
               </a>
             ) : (
               <Link
                 key={link.label}
                 href={link.href}
-                className="rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
+                className="nav-flip-trigger rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
               >
-                {link.label}
+                <NavFlipLabel label={link.label} />
               </Link>
             ),
           )}

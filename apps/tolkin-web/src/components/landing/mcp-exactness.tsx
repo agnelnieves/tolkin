@@ -1,4 +1,5 @@
 import { CodeBlock } from "./code-block";
+import { Hairline } from "./hairline";
 import { SectionHeading } from "./section-heading";
 
 const PROBE_OUTPUT = `$ tolkin mcp mcp.json --probe internal-docs --yes
@@ -10,7 +11,7 @@ basis: measured (probed manifest, captured 2026-06-11) (exact; supersedes the ca
 
 export function McpExactness() {
   return (
-    <section className="border-b border-white/10">
+    <section className="relative">
       <div className="mx-auto max-w-[1200px] px-6 py-20 sm:py-28">
         <div className="grid grid-cols-1 items-start gap-10 lg:grid-cols-2 lg:gap-14">
           <div>
@@ -30,6 +31,7 @@ export function McpExactness() {
           <CodeBlock code={PROBE_OUTPUT} lang="bash" label="tolkin mcp --probe" />
         </div>
       </div>
+      <Hairline />
     </section>
   );
 }

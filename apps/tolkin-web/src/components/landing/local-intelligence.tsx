@@ -1,4 +1,5 @@
 import { CodeBlock } from "./code-block";
+import { Hairline } from "./hairline";
 import { SectionHeading } from "./section-heading";
 
 const OPTIMIZE_OUTPUT = `$ tolkin optimize
@@ -35,7 +36,7 @@ const HARDWARE = [
 
 export function LocalIntelligence() {
   return (
-    <section id="local" className="scroll-mt-20 border-b border-white/10">
+    <section id="local" className="relative scroll-mt-20">
       <div className="mx-auto max-w-[1200px] px-6 py-20 sm:py-28">
         <SectionHeading
           eyebrow="Local intelligence"
@@ -96,6 +97,7 @@ export function LocalIntelligence() {
           </div>
         </div>
       </div>
+      <Hairline />
     </section>
   );
 }

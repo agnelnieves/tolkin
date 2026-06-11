@@ -1,4 +1,5 @@
 import { CopyButton } from "./copy-button";
+import { Hairline } from "./hairline";
 import { SectionHeading } from "./section-heading";
 
 const COMMANDS = [
@@ -28,7 +29,7 @@ const CHANNELS = [
 
 export function Distribution() {
   return (
-    <section className="border-b border-white/10">
+    <section className="relative">
       <div className="mx-auto max-w-[1200px] px-6 py-20 sm:py-28">
         <SectionHeading eyebrow="Distribution" title="Wherever your agents live." />
 
@@ -66,6 +67,7 @@ export function Distribution() {
           ))}
         </dl>
       </div>
+      <Hairline />
     </section>
   );
 }

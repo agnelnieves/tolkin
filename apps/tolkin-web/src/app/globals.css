@@ -203,6 +203,46 @@ body {
   background-size: 88px 100%;
 }
 
+/* Duplicated-text hover slide for landing nav links. Two stacked copies of
+   the same label inside an overflow-hidden span; hover swaps them with a
+   vertical slide. Transform only, both layers identical, zero layout shift.
+   The slide exists solely for hover-capable pointers with motion allowed;
+   everywhere else the markup behaves as plain static text. */
+.nav-flip {
+  position: relative;
+  display: block;
+  overflow: hidden;
+}
+
+.nav-flip-top {
+  display: block;
+}
+
+.nav-flip-dup {
+  position: absolute;
+  inset: 0;
+  display: block;
+  transform: translateY(100%);
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .nav-flip-top,
+  .nav-flip-dup {
+    /* 250ms power2.out */
+    transition: transform 250ms cubic-bezier(0.33, 1, 0.68, 1);
+  }
+
+  .nav-flip-trigger:hover .nav-flip-top,
+  .nav-flip-trigger:focus-visible .nav-flip-top {
+    transform: translateY(-100%);
+  }
+
+  .nav-flip-trigger:hover .nav-flip-dup,
+  .nav-flip-trigger:focus-visible .nav-flip-dup {
+    transform: translateY(0);
+  }
+}
+
 /* Blinking terminal caret. Squared off, mono-sized, lime. Disabled along
    with everything else under reduced motion. */
 .terminal-caret {
