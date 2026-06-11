@@ -109,6 +109,70 @@ pub fn skill_user(redacted: &str) -> (String, bool) {
     }
 }
 
+/// MCP manifest lint generation budget.
+pub const MCP_MAX_TOKENS: u32 = 800;
+/// Per-tool description is capped at this many words before truncation.
+pub const MCP_TOOL_WORD_CAP: usize = 25;
+/// Total index token cap; whole servers past this are omitted with a count.
+pub const MCP_INDEX_TOKEN_CAP: usize = 5000;
+
+/// Static system prompt for the MCP manifest lint task. The rubric prefix is
+/// byte-identical so the server's prompt cache absorbs it once.
+pub const MCP_SYSTEM: &str = "You are a local lint advisor for MCP (Model Context Protocol) tool manifests. You review a compact index of tools across servers.\n\
+\n\
+SCOPE: cover ONLY what deterministic heuristics cannot:\n\
+(a) cross-server semantic overlap: two tools on DIFFERENT servers (or non-near-duplicate phrasings on the same server) that do the same job,\n\
+(b) redundancy: whole servers whose tool sets substantially duplicate another server's,\n\
+(c) vague tool names relative to their described behavior.\n\
+\n\
+Do NOT report single-description smells, missing verb prefixes, absent output shapes, or near-duplicate descriptions on the same server. Those are handled by deterministic analysis.\n\
+\n\
+Index format: one line per tool as  server :: tool_name :: first ~25 words of description.\n\
+\n\
+Respond with ONLY a JSON object, no prose, matching exactly:\n\
+{\"findings\":[{\"server\":\"str\",\"tool\":\"str\",\"aspect\":\"overlap|redundancy|vagueness\",\"severity\":\"high|medium|low\",\"evidence_quote\":\"verbatim short quote from the index\",\"related_server\":\"str or null\",\"related_tool\":\"str or null\",\"suggestion\":\"concrete fix\"}],\"summary\":\"under 200 chars\"}\n\
+Every evidence_quote must be copied verbatim from the index. For overlap findings, related_tool must be non-null.";
+
+/// Retry system prompt after a truncated response: same static rubric plus a
+/// tighter ask.
+pub fn mcp_retry_system() -> String {
+    format!("{MCP_SYSTEM}\nReturn at most 3 findings.")
+}
+
+/// JSON schema for the MCP lint payload.
+pub fn mcp_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "server": { "type": "string" },
+                        "tool": { "type": "string" },
+                        "aspect": { "type": "string", "enum": ["overlap", "redundancy", "vagueness"] },
+                        "severity": { "type": "string", "enum": ["high", "medium", "low"] },
+                        "evidence_quote": { "type": "string" },
+                        "related_server": { "type": ["string", "null"] },
+                        "related_tool": { "type": ["string", "null"] },
+                        "suggestion": { "type": "string" }
+                    },
+                    "required": ["server", "tool", "aspect", "severity", "evidence_quote",
+                                 "related_server", "related_tool", "suggestion"]
+                }
+            },
+            "summary": { "type": "string" }
+        },
+        "required": ["findings", "summary"]
+    })
+}
+
+/// Build the user prompt for the MCP lint task from the pre-built index.
+pub fn mcp_user(index: &str) -> String {
+    format!("MCP tool index:\n{index}\n\nLint this index now.")
+}
+
 /// Count tokens for an estimate. Tokenizer failures fall back to a
 /// bytes/4 heuristic so the estimate degrades instead of erroring.
 pub fn estimate_tokens(text: &str) -> usize {
@@ -264,5 +328,33 @@ mod tests {
         assert!(text.contains("trigger"));
         assert!(text.contains("high"));
         assert!(text.contains("evidence_quote"));
+    }
+
+    #[test]
+    fn mcp_retry_keeps_system_prefix() {
+        let retry = mcp_retry_system();
+        assert!(retry.starts_with(MCP_SYSTEM));
+        assert!(retry.contains("3 findings"));
+    }
+
+    #[test]
+    fn mcp_schema_lists_aspect_and_severity_enums() {
+        let schema = mcp_schema();
+        let text = schema.to_string();
+        assert!(text.contains("overlap"));
+        assert!(text.contains("redundancy"));
+        assert!(text.contains("vagueness"));
+        assert!(text.contains("high"));
+        assert!(text.contains("evidence_quote"));
+        assert!(text.contains("related_tool"));
+    }
+
+    #[test]
+    fn mcp_user_wraps_index() {
+        let index = "alpha :: search :: searches things\n";
+        let prompt = mcp_user(index);
+        assert!(prompt.contains("MCP tool index:"));
+        assert!(prompt.contains("alpha :: search :: searches things"));
+        assert!(prompt.ends_with("Lint this index now."));
     }
 }

@@ -26,13 +26,14 @@ use serde_json::json;
 use tolkin_core::redact::RedactOptions;
 
 use crate::ledger::{self, Config};
+use crate::mcp_manifests;
 use crate::project::{self, ProjectOptions, ProjectReport};
 use crate::sidecar::{self, ChatRequest, ProbeReport, Sidecar};
 
 #[derive(Args, Debug)]
 pub struct OptimizeArgs {
     /// Which advisory tasks to plan or run.
-    #[arg(long, default_value = "all", value_parser = ["narrate", "skills", "all"])]
+    #[arg(long, default_value = "all", value_parser = ["narrate", "skills", "mcp", "all"])]
     pub task: String,
 
     /// Plan only: skeleton, probes, consent state, files, time estimate. Zero model calls.
@@ -84,6 +85,7 @@ impl Consent {
 struct Tasks {
     narrate: bool,
     skills: bool,
+    mcp: bool,
 }
 
 fn tasks_from(arg: &str) -> Tasks {
@@ -91,14 +93,22 @@ fn tasks_from(arg: &str) -> Tasks {
         "narrate" => Tasks {
             narrate: true,
             skills: false,
+            mcp: false,
         },
         "skills" => Tasks {
             narrate: false,
             skills: true,
+            mcp: false,
+        },
+        "mcp" => Tasks {
+            narrate: false,
+            skills: false,
+            mcp: true,
         },
         _ => Tasks {
             narrate: true,
             skills: true,
+            mcp: true,
         },
     }
 }
@@ -142,6 +152,22 @@ struct SkillsPlan {
     capped: usize,
 }
 
+/// The built index text, index names for referential checks, token count per
+/// manifest file, and how many servers were omitted past the token cap.
+struct McpPlan {
+    index: String,
+    index_names: gates::McpIndexNames,
+    prompt_tokens: usize,
+    /// Per-manifest file path and its token contribution.
+    manifest_entries: Vec<McpManifestEntry>,
+    omitted_servers: usize,
+}
+
+struct McpManifestEntry {
+    path: String,
+    token_count: usize,
+}
+
 struct Estimate {
     per_task: BTreeMap<&'static str, u64>,
     total_seconds: u64,
@@ -158,6 +184,7 @@ struct Advisory {
     /// Human-facing note when narration is absent (discarded or unavailable).
     narration_note: Option<String>,
     skill_lint: Vec<SkillLintEntry>,
+    mcp_lint: Option<McpLintResult>,
 }
 
 struct SkillLintEntry {
@@ -165,6 +192,13 @@ struct SkillLintEntry {
     summary: String,
     findings: Vec<gates::SkillFinding>,
     dropped_findings: usize,
+}
+
+struct McpLintResult {
+    findings: Vec<gates::McpFinding>,
+    dropped_findings: usize,
+    summary: String,
+    note: Option<String>,
 }
 
 pub fn run(args: OptimizeArgs, yes: bool) -> Result<()> {
@@ -214,7 +248,8 @@ pub fn run(args: OptimizeArgs, yes: bool) -> Result<()> {
     let skills_plan = tasks
         .skills
         .then(|| build_skills_plan(&root, &report, args.max_files, &mut warnings));
-    let estimate = build_estimate(narrate_plan.as_ref(), skills_plan.as_ref());
+    let mcp_plan = tasks.mcp.then(|| build_mcp_plan(&root, &mut warnings));
+    let estimate = build_estimate(narrate_plan.as_ref(), skills_plan.as_ref(), mcp_plan.as_ref());
 
     let ctx = RenderCtx {
         args: &args,
@@ -225,6 +260,7 @@ pub fn run(args: OptimizeArgs, yes: bool) -> Result<()> {
         estimate: &estimate,
         narrate_plan: narrate_plan.as_ref(),
         skills_plan: skills_plan.as_ref(),
+        mcp_plan: mcp_plan.as_ref(),
         warnings: &warnings,
         disabled,
     };
@@ -253,6 +289,7 @@ fn maybe_run_live(ctx: &RenderCtx, skeleton_json: &str) -> Option<Advisory> {
         skeleton_json,
         ctx.narrate_plan,
         ctx.skills_plan,
+        ctx.mcp_plan,
     ))
 }
 
@@ -368,7 +405,11 @@ fn build_skills_plan(
     SkillsPlan { files, capped }
 }
 
-fn build_estimate(narrate: Option<&NarratePlan>, skills: Option<&SkillsPlan>) -> Estimate {
+fn build_estimate(
+    narrate: Option<&NarratePlan>,
+    skills: Option<&SkillsPlan>,
+    mcp: Option<&McpPlan>,
+) -> Estimate {
     let rates = prompts::chip_rates(prompts::detect_chip().as_deref());
     let mut per_task: BTreeMap<&'static str, u64> = BTreeMap::new();
     if let Some(n) = narrate {
@@ -384,6 +425,14 @@ fn build_estimate(narrate: Option<&NarratePlan>, skills: Option<&SkillsPlan>) ->
             .map(|f| prompts::eta_seconds(f.prompt_tokens, prompts::SKILL_MAX_TOKENS, &rates))
             .sum();
         per_task.insert("skills", secs);
+    }
+    if let Some(m) = mcp {
+        if !m.manifest_entries.is_empty() {
+            per_task.insert(
+                "mcp",
+                prompts::eta_seconds(m.prompt_tokens, prompts::MCP_MAX_TOKENS, &rates),
+            );
+        }
     }
     let total_seconds = per_task.values().sum();
     let kind = if rates.measured {
@@ -402,6 +451,121 @@ fn build_estimate(narrate: Option<&NarratePlan>, skills: Option<&SkillsPlan>) ->
     }
 }
 
+/// Build the compact index of all cached MCP manifests for the mcp lint task.
+///
+/// Each tool becomes one line: "server :: tool_name :: first ~25 words of description".
+/// The index is capped at MCP_INDEX_TOKEN_CAP tokens; whole servers that would
+/// push it past the cap are omitted and counted. The index is sorted by server
+/// then tool name for stable output.
+fn build_mcp_plan(root: &Path, warnings: &mut Vec<String>) -> McpPlan {
+    let manifests = mcp_manifests::load_all(root);
+    let cache_dir = mcp_manifests::cache_dir(root);
+
+    if manifests.is_empty() {
+        return McpPlan {
+            index: String::new(),
+            index_names: gates::McpIndexNames::default(),
+            prompt_tokens: 0,
+            manifest_entries: Vec::new(),
+            omitted_servers: 0,
+        };
+    }
+
+    let system_tokens = prompts::estimate_tokens(prompts::MCP_SYSTEM);
+    // Reserve tokens for the user prompt wrapper and some headroom.
+    let user_prefix_tokens = prompts::estimate_tokens("MCP tool index:\n\nLint this index now.");
+    let available = prompts::MCP_INDEX_TOKEN_CAP
+        .saturating_sub(system_tokens)
+        .saturating_sub(user_prefix_tokens);
+
+    let mut index_lines: Vec<String> = Vec::new();
+    let mut index_names = gates::McpIndexNames::default();
+    let mut manifest_entries: Vec<McpManifestEntry> = Vec::new();
+    let mut running_tokens: usize = 0;
+    let mut omitted_servers: usize = 0;
+
+    for manifest in &manifests {
+        // Determine path for reporting.
+        let slug = mcp_manifests::slugify(&manifest.server);
+        let rel_path = format!("{}/{}.json", mcp_manifests::CACHE_DIR_REL, slug);
+        let abs_path = cache_dir.join(format!("{slug}.json"));
+        let file_size_tokens = std::fs::read_to_string(&abs_path)
+            .map(|t| prompts::estimate_tokens(&t))
+            .unwrap_or(0);
+
+        // Build the lines for this server.
+        let mut server_lines: Vec<String> = Vec::new();
+        let mut sorted_tools: Vec<&serde_json::Value> = manifest.tools.iter().collect();
+        sorted_tools.sort_by_key(|t| {
+            t.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        });
+
+        for tool in &sorted_tools {
+            let name = tool
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let description = tool
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let short_desc: String = description
+                .split_whitespace()
+                .take(prompts::MCP_TOOL_WORD_CAP)
+                .collect::<Vec<_>>()
+                .join(" ");
+            server_lines.push(format!("{} :: {} :: {}", manifest.server, name, short_desc));
+        }
+
+        let server_block = server_lines.join("\n");
+        let server_tokens = prompts::estimate_tokens(&server_block);
+
+        if running_tokens + server_tokens > available && !index_lines.is_empty() {
+            omitted_servers += 1;
+            warnings.push(format!(
+                "mcp index: server '{}' omitted (token cap); {} tools not shown",
+                manifest.server,
+                sorted_tools.len()
+            ));
+            continue;
+        }
+
+        for line in &server_lines {
+            // Collect names.
+            index_names.servers.insert(manifest.server.clone());
+            if let Some(tool_name) = line.splitn(3, " :: ").nth(1) {
+                index_names.tools.insert(tool_name.to_string());
+            }
+        }
+        index_lines.extend(server_lines);
+        running_tokens += server_tokens;
+        manifest_entries.push(McpManifestEntry {
+            path: rel_path,
+            token_count: file_size_tokens,
+        });
+    }
+
+    let index = index_lines.join("\n");
+    let prompt_tokens = system_tokens
+        + user_prefix_tokens
+        + prompts::estimate_tokens(&index);
+
+    McpPlan {
+        index,
+        index_names,
+        prompt_tokens,
+        manifest_entries,
+        omitted_servers,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Live execution. Reached only with consent granted and a resolved sidecar.
 // ---------------------------------------------------------------------------
@@ -411,6 +575,7 @@ fn run_advisory(
     skeleton_json: &str,
     narrate: Option<&NarratePlan>,
     skills: Option<&SkillsPlan>,
+    mcp: Option<&McpPlan>,
 ) -> Advisory {
     let mut adv = Advisory {
         model: sc.model.clone(),
@@ -419,6 +584,7 @@ fn run_advisory(
         narration_verified: false,
         narration_note: None,
         skill_lint: Vec::new(),
+        mcp_lint: None,
     };
     if let Some(plan) = narrate {
         match run_narrate(sc, skeleton_json, plan) {
@@ -438,6 +604,9 @@ fn run_advisory(
     }
     if let Some(plan) = skills {
         adv.skill_lint = run_skills(sc, plan);
+    }
+    if let Some(plan) = mcp {
+        adv.mcp_lint = Some(run_mcp(sc, plan));
     }
     adv
 }
@@ -563,6 +732,89 @@ fn gate_skill_response(path: &str, text: &str, redacted: &str) -> SkillLintEntry
     }
 }
 
+/// MCP lint with a one-retry-on-truncation policy. Zero manifests yields an
+/// advisory-only note, not an error exit. A dead server is a note.
+fn run_mcp(sc: &Sidecar, plan: &McpPlan) -> McpLintResult {
+    if plan.manifest_entries.is_empty() {
+        return McpLintResult {
+            findings: Vec::new(),
+            dropped_findings: 0,
+            summary: String::new(),
+            note: Some(
+                "no cached manifests; run tolkin mcp --probe first".to_string(),
+            ),
+        };
+    }
+
+    let schema = prompts::mcp_schema();
+    let user_msg = prompts::mcp_user(&plan.index);
+    let req = ChatRequest {
+        system: prompts::MCP_SYSTEM,
+        user: &user_msg,
+        max_tokens: prompts::MCP_MAX_TOKENS,
+        temperature: prompts::TEMPERATURE,
+        json_schema: Some(schema.clone()),
+    };
+    let mut resp = match sc.chat(&req) {
+        Ok(r) => r,
+        Err(e) => {
+            return McpLintResult {
+                findings: Vec::new(),
+                dropped_findings: 0,
+                summary: String::new(),
+                note: Some(format!("local model unavailable: {e}")),
+            };
+        }
+    };
+    if sidecar::truncated(&resp, prompts::MCP_MAX_TOKENS) {
+        let retry_system = prompts::mcp_retry_system();
+        let retry = ChatRequest {
+            system: &retry_system,
+            user: &user_msg,
+            max_tokens: prompts::MCP_MAX_TOKENS,
+            temperature: prompts::TEMPERATURE,
+            json_schema: Some(schema),
+        };
+        match sc.chat(&retry) {
+            Ok(r2) => resp = r2,
+            Err(e) => {
+                return McpLintResult {
+                    findings: Vec::new(),
+                    dropped_findings: 0,
+                    summary: String::new(),
+                    note: Some(format!("local model unavailable: {e}")),
+                };
+            }
+        }
+    }
+    gate_mcp_response(&resp.text, &plan.index, &plan.index_names)
+}
+
+fn gate_mcp_response(text: &str, index: &str, names: &gates::McpIndexNames) -> McpLintResult {
+    let Some(obj) = sidecar::extract_json_object(text) else {
+        return McpLintResult {
+            findings: Vec::new(),
+            dropped_findings: 0,
+            summary: "model output had no JSON object and was discarded".to_string(),
+            note: None,
+        };
+    };
+    match gates::validate_mcp_payload(&obj, index, names) {
+        Ok(v) => McpLintResult {
+            findings: v.findings,
+            dropped_findings: v.dropped_findings,
+            summary: v.summary,
+            note: None,
+        },
+        Err(e) => McpLintResult {
+            findings: Vec::new(),
+            dropped_findings: 0,
+            summary: format!("model output was discarded: {e}"),
+            note: None,
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Rendering.
 // ---------------------------------------------------------------------------
@@ -576,6 +828,7 @@ struct RenderCtx<'a> {
     estimate: &'a Estimate,
     narrate_plan: Option<&'a NarratePlan>,
     skills_plan: Option<&'a SkillsPlan>,
+    mcp_plan: Option<&'a McpPlan>,
     warnings: &'a [String],
     disabled: bool,
 }
@@ -597,6 +850,14 @@ fn print_json(ctx: &RenderCtx, advisory: Option<&Advisory>) -> Result<()> {
         })
         .collect();
     let advisory_json = advisory.map(|a| {
+        let mcp_lint_json = a.mcp_lint.as_ref().map(|m| {
+            json!({
+                "findings": m.findings,
+                "dropped_findings": m.dropped_findings,
+                "summary": m.summary,
+                "note": m.note,
+            })
+        });
         json!({
             "class": "model_advisory",
             "model": a.model,
@@ -611,8 +872,10 @@ fn print_json(ctx: &RenderCtx, advisory: Option<&Advisory>) -> Result<()> {
                     "dropped_findings": e.dropped_findings,
                 })
             }).collect::<Vec<_>>(),
+            "mcp_lint": mcp_lint_json,
         })
     });
+    let manifest_count = ctx.mcp_plan.map_or(0, |p| p.manifest_entries.len());
     let doc = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "dry_run": ctx.args.dry_run,
@@ -623,6 +886,7 @@ fn print_json(ctx: &RenderCtx, advisory: Option<&Advisory>) -> Result<()> {
             "per_task": ctx.estimate.per_task,
             "total_seconds": ctx.estimate.total_seconds,
             "basis": ctx.estimate.basis,
+            "manifest_count": manifest_count,
         },
         "model_advisory": advisory_json,
     });
@@ -669,7 +933,13 @@ fn human_flow(ctx: &RenderCtx, skeleton_json: &str) {
             print_eta_line(ctx);
             // Sidecar presence is implied by Granted; guard anyway.
             if let Some(sc) = ctx.probe.sidecar.as_ref() {
-                let adv = run_advisory(sc, skeleton_json, ctx.narrate_plan, ctx.skills_plan);
+                let adv = run_advisory(
+                    sc,
+                    skeleton_json,
+                    ctx.narrate_plan,
+                    ctx.skills_plan,
+                    ctx.mcp_plan,
+                );
                 print_advisory(&adv);
             }
         }
@@ -685,6 +955,11 @@ fn print_eta_line(ctx: &RenderCtx) {
         let n = ctx.skills_plan.map_or(0, |p| p.files.len());
         let noun = if n == 1 { "file" } else { "files" };
         parts.push(format!("skills ~{secs}s ({n} {noun})"));
+    }
+    if let Some(secs) = ctx.estimate.per_task.get("mcp") {
+        let n = ctx.mcp_plan.map_or(0, |p| p.manifest_entries.len());
+        let noun = if n == 1 { "manifest" } else { "manifests" };
+        parts.push(format!("mcp ~{secs}s ({n} {noun})"));
     }
     println!(
         "Local model time estimate ({}): {}, total ~{}s",
@@ -731,6 +1006,37 @@ fn print_advisory(adv: &Advisory) {
         }
         println!();
     }
+    if let Some(mcp) = &adv.mcp_lint {
+        println!(
+            "model advisory (local), model {}: mcp manifest lint",
+            adv.model
+        );
+        if let Some(note) = &mcp.note {
+            println!("  {note}");
+        } else {
+            if !mcp.summary.is_empty() {
+                println!("  summary: {}", mcp.summary);
+            }
+            for f in &mcp.findings {
+                let aspect = mcp_aspect_str(f.aspect);
+                let sev = severity_str(f.severity);
+                print!("  [{sev}] {aspect}: {}::{}", f.server, f.tool);
+                if let (Some(rs), Some(rt)) = (&f.related_server, &f.related_tool) {
+                    print!(" (related: {rs}::{rt})");
+                }
+                println!();
+                println!("    evidence: \"{}\"", f.evidence_quote);
+                println!("    fix: {}", f.suggestion);
+            }
+            if mcp.dropped_findings > 0 {
+                println!(
+                    "  dropped findings: {} (referential or grounding check failed)",
+                    mcp.dropped_findings
+                );
+            }
+        }
+        println!();
+    }
     println!("advisory only, never a measurement; verify before applying");
 }
 
@@ -748,6 +1054,14 @@ fn aspect_str(a: gates::Aspect) -> &'static str {
         gates::Aspect::Verbosity => "verbosity",
         gates::Aspect::Examples => "examples",
         gates::Aspect::Structure => "structure",
+    }
+}
+
+fn mcp_aspect_str(a: gates::McpAspect) -> &'static str {
+    match a {
+        gates::McpAspect::Overlap => "overlap",
+        gates::McpAspect::Redundancy => "redundancy",
+        gates::McpAspect::Vagueness => "vagueness",
     }
 }
 
@@ -790,6 +1104,25 @@ fn print_dry_run(ctx: &RenderCtx) {
             println!("    ({} more beyond the --max-files cap)", plan.capped);
         }
     }
+    if let Some(plan) = ctx.mcp_plan {
+        if plan.manifest_entries.is_empty() {
+            println!("  task mcp: no cached manifests; run tolkin mcp --probe first");
+        } else {
+            let n = plan.manifest_entries.len();
+            let noun = if n == 1 { "manifest" } else { "manifests" };
+            println!("  task mcp: {n} {noun}  (~{} tokens total prompt)", plan.prompt_tokens);
+            for entry in &plan.manifest_entries {
+                println!("    {}  ~{} tokens", entry.path, entry.token_count);
+            }
+            if plan.omitted_servers > 0 {
+                println!(
+                    "    ({} server{} omitted past token cap)",
+                    plan.omitted_servers,
+                    if plan.omitted_servers == 1 { "" } else { "s" }
+                );
+            }
+        }
+    }
     print!("  ");
     print_eta_line(ctx);
     if ctx.args.show_prompts {
@@ -815,6 +1148,14 @@ fn print_prompts(ctx: &RenderCtx) {
                 println!("--- skills user: {} ---", f.path);
                 println!("{}", f.user);
             }
+        }
+    }
+    if let Some(plan) = ctx.mcp_plan {
+        if !plan.manifest_entries.is_empty() {
+            println!("--- mcp system ---");
+            println!("{}", prompts::MCP_SYSTEM);
+            println!("--- mcp user ---");
+            println!("{}", prompts::mcp_user(&plan.index));
         }
     }
 }
