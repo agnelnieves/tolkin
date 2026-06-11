@@ -109,7 +109,6 @@ jobs:
         with:
           comment-mode: "off"
           fail-on: none
-          version: "0.7.0"
         env:
           TOLKIN_BIN: ${{ github.workspace }}/apps/tolkin-cli/target/release/tolkin
 
@@ -140,7 +139,6 @@ jobs:
         with:
           comment-mode: "off"
           fail-on: none
-          version: "0.7.0"
           max-always-delta-tokens: "1"
           max-context-delta-pct: "1"
         env:
