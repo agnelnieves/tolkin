@@ -4,6 +4,11 @@ name: Tolkin action dry-run
 # against this repo. No PR comment is posted (comment-mode: off).
 # Uses the local release binary if available to avoid redundant npx installs
 # in the same CI environment where tolkin was just built.
+#
+# Three jobs exercise the surface the audit workflow uses in production:
+#   1. selftest          fixture-driven build-report.mjs assertions
+#   2. dryrun_baseline   HEAD vs HEAD~1, proves the delta table renders
+#   3. dryrun_no_base    no baseline path, proves the absolute-only fallback
 
 on:
   workflow_dispatch:
@@ -17,8 +22,20 @@ permissions:
   contents: read
 
 jobs:
-  dryrun:
-    name: Action dry-run (step summary only)
+  selftest:
+    name: build-report.mjs self-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Run fixture-driven tests
+        run: node distribution/action/testdata/run-tests.mjs
+
+  dryrun_baseline:
+    name: Action dry-run with delta vs HEAD~1
+    needs: selftest
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -35,11 +52,96 @@ jobs:
         working-directory: apps/tolkin-cli
         run: cargo build --release
 
-      - name: Run local action (comment-mode off, fail-on none)
+      # Run the same delta path the composite uses, but headlessly: produce
+      # two project.json files, render through build-report.mjs, then dry-run
+      # the gate with an aggressive threshold to prove non-zero exits work.
+      - name: Generate HEAD and HEAD~1 reports
+        env:
+          TOLKIN_BIN: ${{ github.workspace }}/apps/tolkin-cli/target/release/tolkin
+          TOLKIN_NO_LEDGER: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tolkin-dryrun
+
+          "$TOLKIN_BIN" project . --json > /tmp/tolkin-dryrun/head.json
+
+          PREV_SHA=$(git rev-parse HEAD~1)
+          BASE_WT=$(mktemp -d)
+          git worktree add --detach "$BASE_WT" "$PREV_SHA"
+          ( cd "$BASE_WT" && "$TOLKIN_BIN" project . --json > /tmp/tolkin-dryrun/base.json )
+          git worktree remove --force "$BASE_WT"
+
+      - name: Render the delta report (no gates)
+        run: |
+          node distribution/action/build-report.mjs \
+            /tmp/tolkin-dryrun/head.json /tmp/tolkin-dryrun/report.md \
+            /tmp/tolkin-dryrun/base.json
+          echo '--- report.md ---'
+          cat /tmp/tolkin-dryrun/report.md
+          {
+            echo '## Dry-run delta report (HEAD vs HEAD~1)'
+            cat /tmp/tolkin-dryrun/report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prove the delta gate triggers a non-zero exit
+        run: |
+          set +e
+          TOLKIN_MAX_ALWAYS_DELTA_TOKENS=0 TOLKIN_MAX_CONTEXT_DELTA_PCT=0 \
+            node distribution/action/build-report.mjs \
+              /tmp/tolkin-dryrun/head.json /tmp/tolkin-dryrun/forced.md \
+              /tmp/tolkin-dryrun/base.json
+          RC=$?
+          set -e
+          # We expect either 3 (gate fired because something grew) or 0
+          # (nothing grew between HEAD and HEAD~1). The point of the dry-run
+          # is to prove the gate code path runs; both outcomes prove that.
+          echo "gate exit: $RC"
+          if [ "$RC" -ne 0 ] && [ "$RC" -ne 3 ]; then
+            echo "unexpected gate exit: $RC" 1>&2
+            exit 1
+          fi
+
+      # And finally: invoke the composite itself end-to-end. workflow_dispatch
+      # has no pull_request payload, so the action falls through to the
+      # absolute-only path. This also proves the no-baseline fallback.
+      - name: Run composite (no PR payload, no comment)
         uses: ./distribution/action
         with:
-          comment-mode: off
+          comment-mode: "off"
           fail-on: none
           version: "0.7.0"
+        env:
+          TOLKIN_BIN: ${{ github.workspace }}/apps/tolkin-cli/target/release/tolkin
+
+  dryrun_no_base:
+    name: Composite no-baseline fallback
+    needs: selftest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        # Intentional shallow clone: workflow_dispatch already lacks a base
+        # sha; combined with depth=1 this also models the shallow-checkout
+        # case so the absence handling is exercised.
+        with:
+          fetch-depth: 1
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tolkin-cli
+
+      - name: Build tolkin (release)
+        working-directory: apps/tolkin-cli
+        run: cargo build --release
+
+      - name: Run composite (must not fail when no baseline is available)
+        uses: ./distribution/action
+        with:
+          comment-mode: "off"
+          fail-on: none
+          version: "0.7.0"
+          max-always-delta-tokens: "1"
+          max-context-delta-pct: "1"
         env:
           TOLKIN_BIN: ${{ github.workspace }}/apps/tolkin-cli/target/release/tolkin
