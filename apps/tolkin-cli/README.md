@@ -19,6 +19,7 @@ Every TUI surface keeps a non-TTY equivalent. Scripts and agents should use thes
 | `tolkin stats --compact` | one static dashboard frame on stdout (no raw mode, pipe-safe) |
 | `tolkin project --json` | the project scan report as JSON |
 | `tolkin mcp --json` | the MCP probe report as JSON |
+| `tolkin update` | checks the registry once and prints the exact upgrade command for the detected install channel |
 
 Exit codes and stdio behavior:
 
@@ -35,3 +36,16 @@ Environment switches:
 - `CI=true` or `TOLKIN_NO_LEDGER=1`: disables all state writes.
 
 The interactive dashboard's help overlay (`?`) lists the same contracts.
+
+## Upgrading
+
+Always pair the two brew commands; third-party taps only refresh on `brew update`,
+so `brew upgrade` alone can report "already installed" minutes after a release:
+
+```sh
+brew update && brew upgrade tolkin   # Homebrew installs
+npm update -g tolkin-cli             # npm installs
+```
+
+Not sure which channel installed tolkin? `tolkin update` detects it and prints
+the exact command.

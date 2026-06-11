@@ -10,11 +10,12 @@ use crate::tui::theme::Theme;
 
 /// CLI equivalents listed verbatim for agents; the help overlay is the
 /// discoverability surface for the non-TTY contracts.
-pub const AGENT_COMMANDS: [(&str, &str); 4] = [
+pub const AGENT_COMMANDS: [(&str, &str); 5] = [
     ("tolkin stats --json --global", "machine-wide stats as JSON"),
     ("tolkin stats --compact", "one static dashboard frame"),
     ("tolkin project --json", "project scan as JSON"),
     ("tolkin mcp --json", "MCP probe as JSON"),
+    ("tolkin update", "prints the exact upgrade command"),
 ];
 
 /// Column geometry: two keymap columns inside the large (88) dialog.
@@ -127,6 +128,7 @@ mod tests {
             "tolkin stats --compact",
             "tolkin project --json",
             "tolkin mcp --json",
+            "tolkin update",
             "exits 2",
             "NO_COLOR",
             "TOLKIN_REDUCED_MOTION",
