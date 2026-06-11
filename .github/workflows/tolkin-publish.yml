@@ -405,9 +405,11 @@ jobs:
           # Copy the staged template from this repo
           cp "$GITHUB_WORKSPACE/distribution/homebrew/Formula/tolkin.rb" Formula/tolkin.rb
 
-          # Substitute the version string (four occurrences: the class-level
-          # version field and the four download URL paths)
-          perl -i -pe "s/0\\.11\\.0/${V}/g" Formula/tolkin.rb
+          # Substitute the version string (the class-level version field and
+          # the four download URL paths). Generic semver match, not a literal:
+          # the staged template's version is whatever it was last committed
+          # at, and nothing keeps a hardcoded literal here in lockstep with it.
+          V="$V" perl -i -pe 's/\d+\.\d+\.\d+/$ENV{V}/g' Formula/tolkin.rb
 
           # Substitute the placeholder sha256 values in order of appearance.
           # The template has four identical zero-filled placeholders; each
