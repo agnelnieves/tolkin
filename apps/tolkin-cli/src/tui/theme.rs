@@ -257,6 +257,58 @@ pub fn cycle(current: &str, env: &ThemeEnv) -> Theme {
     by_name(next, env.truecolor).expect("cycle names are built-ins")
 }
 
+/// Dim one color toward the modal scrim. RGB multiplies channels by the
+/// theme's scrim factor; indexed and named colors step to a darker ramp
+/// neighbor; Reset stays Reset. Lives here so the no-Color-literals rule
+/// holds everywhere else.
+pub fn scrim_dim(color: Color, factor: f32) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => Color::Rgb(
+            (r as f32 * factor) as u8,
+            (g as f32 * factor) as u8,
+            (b as f32 * factor) as u8,
+        ),
+        Color::Indexed(n) => Color::Indexed(scrim_dim_indexed(n)),
+        Color::Reset => Color::Reset,
+        named => scrim_dim_named(named),
+    }
+}
+
+/// 256-color dim: grayscale ramp entries step down; cube entries halve
+/// each channel; bright system colors fall to their dim twins.
+fn scrim_dim_indexed(n: u8) -> u8 {
+    match n {
+        232..=255 => n.saturating_sub(8).max(232),
+        16..=231 => {
+            let off = n - 16;
+            let r = off / 36;
+            let g = (off % 36) / 6;
+            let b = off % 6;
+            16 + (r / 2) * 36 + (g / 2) * 6 + (b / 2)
+        }
+        8..=15 => n - 8,
+        _ => 0,
+    }
+}
+
+/// Named (16-color) dim neighbors: a small const mapping, no arithmetic.
+fn scrim_dim_named(color: Color) -> Color {
+    match color {
+        Color::White | Color::Gray => Color::DarkGray,
+        Color::DarkGray | Color::Black => Color::Black,
+        Color::LightRed => Color::Red,
+        Color::LightGreen => Color::Green,
+        Color::LightYellow => Color::Yellow,
+        Color::LightBlue => Color::Blue,
+        Color::LightMagenta => Color::Magenta,
+        Color::LightCyan => Color::Cyan,
+        Color::Red | Color::Green | Color::Yellow | Color::Blue | Color::Magenta | Color::Cyan => {
+            Color::DarkGray
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +319,27 @@ mod tests {
             no_color,
             truecolor,
             dumb_terminal: dumb,
+        }
+    }
+
+    #[test]
+    fn scrim_dim_multiplies_rgb_and_stays_in_palette_ranges() {
+        assert_eq!(
+            scrim_dim(Color::Rgb(200, 100, 50), 0.5),
+            Color::Rgb(100, 50, 25)
+        );
+        assert_eq!(scrim_dim(Color::Reset, 0.5), Color::Reset);
+        assert_eq!(scrim_dim(Color::White, 0.5), Color::DarkGray);
+        assert_eq!(scrim_dim(Color::LightCyan, 0.5), Color::Cyan);
+        for n in 0..=255u8 {
+            let Color::Indexed(d) = scrim_dim(Color::Indexed(n), 0.5) else {
+                panic!("indexed must stay indexed");
+            };
+            match n {
+                232..=255 => assert!((232..=255).contains(&d)),
+                16..=231 => assert!((16..=231).contains(&d)),
+                _ => assert!(d <= 7),
+            }
         }
     }
 

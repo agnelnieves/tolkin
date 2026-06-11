@@ -38,6 +38,8 @@ pub mod data;
 #[allow(dead_code)]
 mod anim;
 #[allow(dead_code)]
+mod components;
+#[allow(dead_code)]
 mod format;
 #[allow(dead_code)]
 mod keymap;
