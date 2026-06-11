@@ -7,7 +7,7 @@ description: |
   cache writes expensive", "5m vs 1h TTL", "prompt cache health", "broken cache
   advisory", "tolkin cache", "session shape and caching".
 metadata:
-  version: 0.14.0
+  version: 0.15.0
 ---
 
 # tolkin-cache
