@@ -1,6 +1,6 @@
 {
   "name": "tolkin-cli",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Privacy-first AI token analyzer CLI. Count, audit, and optimize prompt and MCP token costs across OpenAI, Anthropic, and Gemini. Runs fully local.",
   "license": "MIT",
   "bin": {
@@ -15,11 +15,11 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "tolkin-darwin-arm64": "0.11.0",
-    "tolkin-darwin-x64": "0.11.0",
-    "tolkin-linux-arm64": "0.11.0",
-    "tolkin-linux-x64": "0.11.0",
-    "tolkin-win32-x64": "0.11.0"
+    "tolkin-darwin-arm64": "0.12.0",
+    "tolkin-darwin-x64": "0.12.0",
+    "tolkin-linux-arm64": "0.12.0",
+    "tolkin-linux-x64": "0.12.0",
+    "tolkin-win32-x64": "0.12.0"
   },
   "keywords": [
     "llm",
