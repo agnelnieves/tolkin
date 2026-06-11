@@ -249,7 +249,11 @@ pub fn run(args: OptimizeArgs, yes: bool) -> Result<()> {
         .skills
         .then(|| build_skills_plan(&root, &report, args.max_files, &mut warnings));
     let mcp_plan = tasks.mcp.then(|| build_mcp_plan(&root, &mut warnings));
-    let estimate = build_estimate(narrate_plan.as_ref(), skills_plan.as_ref(), mcp_plan.as_ref());
+    let estimate = build_estimate(
+        narrate_plan.as_ref(),
+        skills_plan.as_ref(),
+        mcp_plan.as_ref(),
+    );
 
     let ctx = RenderCtx {
         args: &args,
@@ -540,7 +544,7 @@ fn build_mcp_plan(root: &Path, warnings: &mut Vec<String>) -> McpPlan {
         for line in &server_lines {
             // Collect names.
             index_names.servers.insert(manifest.server.clone());
-            if let Some(tool_name) = line.splitn(3, " :: ").nth(1) {
+            if let Some(tool_name) = line.split(" :: ").nth(1) {
                 index_names.tools.insert(tool_name.to_string());
             }
         }
@@ -553,9 +557,7 @@ fn build_mcp_plan(root: &Path, warnings: &mut Vec<String>) -> McpPlan {
     }
 
     let index = index_lines.join("\n");
-    let prompt_tokens = system_tokens
-        + user_prefix_tokens
-        + prompts::estimate_tokens(&index);
+    let prompt_tokens = system_tokens + user_prefix_tokens + prompts::estimate_tokens(&index);
 
     McpPlan {
         index,
@@ -740,9 +742,7 @@ fn run_mcp(sc: &Sidecar, plan: &McpPlan) -> McpLintResult {
             findings: Vec::new(),
             dropped_findings: 0,
             summary: String::new(),
-            note: Some(
-                "no cached manifests; run tolkin mcp --probe first".to_string(),
-            ),
+            note: Some("no cached manifests; run tolkin mcp --probe first".to_string()),
         };
     }
 
@@ -1110,7 +1110,10 @@ fn print_dry_run(ctx: &RenderCtx) {
         } else {
             let n = plan.manifest_entries.len();
             let noun = if n == 1 { "manifest" } else { "manifests" };
-            println!("  task mcp: {n} {noun}  (~{} tokens total prompt)", plan.prompt_tokens);
+            println!(
+                "  task mcp: {n} {noun}  (~{} tokens total prompt)",
+                plan.prompt_tokens
+            );
             for entry in &plan.manifest_entries {
                 println!("    {}  ~{} tokens", entry.path, entry.token_count);
             }

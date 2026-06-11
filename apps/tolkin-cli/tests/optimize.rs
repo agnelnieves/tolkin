@@ -197,3 +197,198 @@ fn dry_run_show_prompts_prints_redacted_exact_prompts() {
     let _ = fs::remove_dir_all(&home_dir);
     let _ = fs::remove_dir_all(&fixture);
 }
+
+/// Write two cached manifest JSON files in the pinned cache shape.
+/// The two tools across servers intentionally echo each other (paraphrases)
+/// so the mcp task prompt would contain both for the model to compare.
+fn create_mcp_manifest_fixtures(dir: &Path) {
+    let cache_dir = dir.join(".tolkin").join("mcp-manifests");
+    fs::create_dir_all(&cache_dir).unwrap();
+
+    let alpha = serde_json::json!({
+        "v": 1,
+        "server": "alpha",
+        "captured_at": "2026-06-01",
+        "transport": "stdio",
+        "source": "probe",
+        "protocol_version": null,
+        "tools": [
+            {
+                "name": "search_files",
+                "description": "Searches files in the workspace by query string and returns matching paths",
+                "inputSchema": { "type": "object" }
+            }
+        ]
+    });
+    let beta = serde_json::json!({
+        "v": 1,
+        "server": "beta",
+        "captured_at": "2026-06-01",
+        "transport": "http",
+        "source": "probe",
+        "protocol_version": null,
+        "tools": [
+            {
+                "name": "find_files",
+                "description": "Locates files in the workspace matching a query and returns their paths",
+                "inputSchema": { "type": "object" }
+            }
+        ]
+    });
+
+    let mut alpha_text = serde_json::to_string_pretty(&alpha).unwrap();
+    alpha_text.push('\n');
+    let mut beta_text = serde_json::to_string_pretty(&beta).unwrap();
+    beta_text.push('\n');
+
+    fs::write(cache_dir.join("alpha.json"), alpha_text).unwrap();
+    fs::write(cache_dir.join("beta.json"), beta_text).unwrap();
+}
+
+#[test]
+fn mcp_dry_run_lists_both_manifests_with_token_counts_and_no_network_calls() {
+    let data_dir = tmp("mcp-dry-data");
+    let home_dir = tmp("mcp-dry-home");
+    let fixture = tmp("mcp-dry-fixture");
+    create_fixture_dir(&fixture);
+    create_mcp_manifest_fixtures(&fixture);
+
+    let (stdout, success) = run_optimize(
+        &data_dir,
+        &home_dir,
+        &fixture,
+        &["--task", "mcp", "--dry-run"],
+    );
+    assert!(
+        success,
+        "optimize --task mcp --dry-run should exit 0; got:\n{stdout}"
+    );
+    // Both manifests appear in the dry run listing.
+    assert!(
+        stdout.contains("alpha.json"),
+        "dry run should list alpha.json; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("beta.json"),
+        "dry run should list beta.json; got:\n{stdout}"
+    );
+    // Token counts appear (the numbers will vary but the labels must be present).
+    assert!(
+        stdout.contains("tokens"),
+        "dry run should show token counts; got:\n{stdout}"
+    );
+    // Confirm no model calls.
+    assert!(
+        stdout.contains("dry run: no model calls were made"),
+        "dry run must declare no model calls; got:\n{stdout}"
+    );
+    // The narrate and skills tasks must not appear.
+    assert!(
+        !stdout.contains("task narrate"),
+        "--task mcp must not plan narrate; got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("task skills"),
+        "--task mcp must not plan skills; got:\n{stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&data_dir);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+#[test]
+fn mcp_no_sidecar_reports_model_path_unavailable_and_exits_zero() {
+    let data_dir = tmp("mcp-nosidecar-data");
+    let home_dir = tmp("mcp-nosidecar-home");
+    let fixture = tmp("mcp-nosidecar-fixture");
+    create_fixture_dir(&fixture);
+    create_mcp_manifest_fixtures(&fixture);
+
+    // TOLKIN_NO_SIDECAR=1 is already set by run_optimize; confirming exit 0
+    // and no advisory output.
+    let (stdout, success) = run_optimize(&data_dir, &home_dir, &fixture, &["--task", "mcp"]);
+    assert!(
+        success,
+        "optimize --task mcp with no sidecar should exit 0; got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("model advisory (local)"),
+        "no advisory when model path is off; got:\n{stdout}"
+    );
+    // Deterministic skeleton must still render.
+    assert!(
+        stdout.contains("Deterministic summary"),
+        "deterministic skeleton must still render; got:\n{stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&data_dir);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+#[test]
+fn mcp_zero_manifests_prints_probe_hint_and_exits_zero() {
+    let data_dir = tmp("mcp-zero-data");
+    let home_dir = tmp("mcp-zero-home");
+    let fixture = tmp("mcp-zero-fixture");
+    // Create fixture dir WITHOUT any manifests.
+    create_fixture_dir(&fixture);
+
+    let (stdout, success) = run_optimize(
+        &data_dir,
+        &home_dir,
+        &fixture,
+        &["--task", "mcp", "--dry-run"],
+    );
+    assert!(success, "zero manifests should exit 0; got:\n{stdout}");
+    assert!(
+        stdout.contains("no cached manifests") || stdout.contains("tolkin mcp --probe"),
+        "should mention the probe hint; got:\n{stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&data_dir);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+#[test]
+fn mcp_dry_run_show_prompts_prints_mcp_system_and_index() {
+    let data_dir = tmp("mcp-prompts-data");
+    let home_dir = tmp("mcp-prompts-home");
+    let fixture = tmp("mcp-prompts-fixture");
+    create_fixture_dir(&fixture);
+    create_mcp_manifest_fixtures(&fixture);
+
+    let (stdout, success) = run_optimize(
+        &data_dir,
+        &home_dir,
+        &fixture,
+        &["--task", "mcp", "--dry-run", "--show-prompts"],
+    );
+    assert!(
+        success,
+        "mcp --dry-run --show-prompts should exit 0; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--- mcp system ---"),
+        "show-prompts must print the mcp system prompt; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--- mcp user ---"),
+        "show-prompts must print the mcp user prompt; got:\n{stdout}"
+    );
+    // The index must contain lines from both servers.
+    assert!(
+        stdout.contains("alpha :: search_files"),
+        "index must include alpha server tools; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("beta :: find_files"),
+        "index must include beta server tools; got:\n{stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&data_dir);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&fixture);
+}

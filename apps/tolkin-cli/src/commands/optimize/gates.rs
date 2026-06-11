@@ -197,12 +197,14 @@ pub struct ValidatedMcpLint {
 /// Validate one MCP lint JSON object against the index text the model saw.
 ///
 /// Gates applied, in order:
+///
 /// 1. Schema parse (strict enums via serde).
 /// 2. Overlap findings missing related_tool are dropped.
 /// 3. Referential: server, tool, related_server (when set), related_tool
 ///    (when set) must each appear in the index as exact tokens.
 /// 4. Evidence quote must be a verbatim (trim-insensitive) substring of the
 ///    index text.
+///
 /// Violating findings are dropped individually; summary is clamped to 200 chars.
 pub fn validate_mcp_payload(
     raw_json: &str,
