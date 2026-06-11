@@ -888,15 +888,18 @@ mod tests {
     /// gap, and dollar math.
     #[test]
     fn cross_file_retention_keeps_winners_cache_tuple_not_losers() {
+        struct CacheFields {
+            output: u64,
+            read: u64,
+            w5: u64,
+            w1: u64,
+        }
         fn write_cache_record(
             path: &Path,
             message_id: &str,
             request_id: &str,
             ts: &str,
-            output: u64,
-            read: u64,
-            w5: u64,
-            w1: u64,
+            fields: &CacheFields,
         ) {
             let line = format!(
                 concat!(
@@ -909,11 +912,11 @@ mod tests {
                 message_id = message_id,
                 request_id = request_id,
                 ts = ts,
-                output = output,
-                read = read,
-                creation = w5 + w1,
-                w5 = w5,
-                w1 = w1,
+                output = fields.output,
+                read = fields.read,
+                creation = fields.w5 + fields.w1,
+                w5 = fields.w5,
+                w1 = fields.w1,
             );
             let mut existing = fs::read_to_string(path).unwrap_or_default();
             if !existing.is_empty() && !existing.ends_with('\n') {
@@ -937,20 +940,24 @@ mod tests {
             "m1",
             "r1",
             "2026-06-10T12:00:00Z",
-            50,
-            1000,
-            0,
-            2000,
+            &CacheFields {
+                output: 50,
+                read: 1000,
+                w5: 0,
+                w1: 2000,
+            },
         );
         write_cache_record(
             &b,
             "m1",
             "r1",
             "2026-06-10T12:00:00Z",
-            500,
-            3000,
-            0,
-            7000,
+            &CacheFields {
+                output: 500,
+                read: 3000,
+                w5: 0,
+                w1: 7000,
+            },
         );
         let data = read(&root);
         let retained_w1: u64 = data
