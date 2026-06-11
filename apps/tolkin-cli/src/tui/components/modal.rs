@@ -46,8 +46,8 @@ pub fn dialog_rect(area: Rect, width: ModalWidth, lines: u16) -> Rect {
 
 /// Dim every cell of the current frame under the modal. The mono theme
 /// skips the dim (its palette has no headroom) and relies on the cleared
-/// dialog region for separation.
-fn apply_scrim(frame: &mut Frame, theme: &Theme) {
+/// dialog region for separation. The command palette shares this scrim.
+pub fn apply_scrim(frame: &mut Frame, theme: &Theme) {
     if theme.name == "mono" {
         return;
     }

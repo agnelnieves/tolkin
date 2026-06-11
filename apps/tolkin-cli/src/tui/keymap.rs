@@ -93,17 +93,13 @@ pub enum Context {
     List,
     DayStrip,
     Modal,
-    /// Constructed when the palette ships (next wave); resolve already
-    /// implements its typing rules.
-    #[allow(dead_code)]
     PaletteInput,
-    /// Constructed when the list filter ships (next wave).
+    /// Constructed when the list filter ships (later in this wave).
     #[allow(dead_code)]
     FilterInput,
 }
 
-/// Help overlay grouping (rendered in later waves; declared now so the
-/// table never needs a schema change).
+/// Help overlay grouping.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
     Navigate,
@@ -119,8 +115,7 @@ pub struct Binding {
     pub keys_label: &'static str,
     /// Short hint verb, e.g. "navigate".
     pub hint: &'static str,
-    /// Help overlay grouping; read when the help overlay ships.
-    #[allow(dead_code)]
+    /// Help overlay grouping.
     pub group: Group,
 }
 
@@ -440,22 +435,94 @@ pub fn label_for(action: Action, context: Context) -> Option<(&'static str, &'st
         .map(|b| (b.keys_label, b.hint))
 }
 
-/// The top footer hints for a context: the actions Wave 1 actually performs,
-/// most discoverable first. Rendered by the chrome from the table so labels
-/// never drift.
+/// Palette display name for every action. The palette renders these with
+/// the table's key label muted on the right; tests assert full coverage.
+pub fn action_name(action: Action) -> &'static str {
+    match action {
+        Action::Quit => "quit tolkin",
+        Action::Back => "close / back",
+        Action::GoTab(TabId::Overview) => "go to overview",
+        Action::GoTab(TabId::Project) => "go to project",
+        Action::GoTab(TabId::Machine) => "go to machine",
+        Action::GoTab(TabId::Spend) => "go to spend",
+        Action::NextTab => "next tab",
+        Action::PrevTab => "previous tab",
+        Action::Down => "select next row",
+        Action::Up => "select previous row",
+        Action::Top => "jump to first row",
+        Action::Bottom => "jump to last row",
+        Action::HalfPageDown => "half page down",
+        Action::HalfPageUp => "half page up",
+        Action::DayLeft => "previous day",
+        Action::DayRight => "next day",
+        Action::PanelNext => "focus next panel",
+        Action::PanelPrev => "focus previous panel",
+        Action::OpenDetail => "open detail",
+        Action::Refresh => "refresh snapshot",
+        Action::Rescan => "rescan project",
+        Action::AuditSelected => "audit selected file",
+        Action::GenerateReport => "generate html report",
+        Action::CopySelection => "copy selection",
+        Action::FilterList => "filter list",
+        Action::CycleSort => "cycle sort",
+        Action::CycleTheme => "cycle theme",
+        Action::Help => "help",
+        Action::Palette => "command palette",
+    }
+}
+
+/// Every action exactly once, in table order: the palette's base list.
+pub fn palette_actions() -> Vec<Action> {
+    let mut out: Vec<Action> = Vec::with_capacity(BINDINGS.len());
+    for b in BINDINGS {
+        if !out.contains(&b.action) {
+            out.push(b.action);
+        }
+    }
+    out
+}
+
+/// Key label of an action's first table binding (the palette right column).
+pub fn primary_label(action: Action) -> &'static str {
+    BINDINGS
+        .iter()
+        .find(|b| b.action == action)
+        .map(|b| b.keys_label)
+        .unwrap_or("")
+}
+
+/// (action, keys_label, hint) rows for one help group: deduped by action,
+/// table order. The help overlay renders the labels; tests use the action
+/// for coverage checks.
+pub fn help_entries(group: Group) -> Vec<(Action, &'static str, &'static str)> {
+    let mut seen: Vec<Action> = Vec::new();
+    let mut out = Vec::new();
+    for b in BINDINGS.iter().filter(|b| b.group == group) {
+        if seen.contains(&b.action) {
+            continue;
+        }
+        seen.push(b.action);
+        out.push((b.action, b.keys_label, b.hint));
+    }
+    out
+}
+
+/// The top footer hints for a context, most discoverable first. Rendered
+/// by the chrome from the table so labels never drift. The palette opens
+/// with these as its suggested actions.
 pub fn footer_actions(context: Context) -> Vec<Action> {
     match context {
         Context::List => vec![
             Action::Down,
-            Action::NextTab,
-            Action::Refresh,
+            Action::OpenDetail,
             Action::Rescan,
+            Action::Help,
         ],
         Context::DayStrip => vec![
             Action::DayLeft,
             Action::PanelNext,
-            Action::NextTab,
             Action::Refresh,
+            Action::Help,
         ],
         Context::Modal => vec![Action::Back],
         _ => vec![
@@ -599,6 +666,44 @@ mod tests {
                     "footer action {action:?} missing from table"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn palette_lists_every_action_once_with_name_and_label() {
+        let actions = palette_actions();
+        let mut seen = Vec::new();
+        for action in &actions {
+            assert!(!seen.contains(action), "{action:?} listed twice");
+            seen.push(*action);
+            assert!(
+                !action_name(*action).is_empty(),
+                "{action:?} has no palette name"
+            );
+            assert!(
+                !primary_label(*action).is_empty(),
+                "{action:?} has no key label"
+            );
+        }
+        // Spot-check the table order: quit is the first table entry.
+        assert_eq!(actions[0], Action::Quit);
+        assert!(actions.contains(&Action::Palette));
+    }
+
+    #[test]
+    fn help_groups_cover_every_action() {
+        let mut covered: Vec<Action> = Vec::new();
+        for group in [Group::Navigate, Group::Act, Group::View] {
+            let entries = help_entries(group);
+            assert!(!entries.is_empty(), "{group:?} renders empty");
+            for (action, keys, hint) in entries {
+                assert!(!keys.is_empty() && !hint.is_empty());
+                assert!(!covered.contains(&action), "{action:?} in two groups");
+                covered.push(action);
+            }
+        }
+        for action in palette_actions() {
+            assert!(covered.contains(&action), "{action:?} missing from help");
         }
     }
 }

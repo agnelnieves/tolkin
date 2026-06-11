@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crossterm::event::KeyEventKind;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -28,8 +28,10 @@ use super::anim::{AnimKey, Animator, Ease};
 use super::components::bars;
 use super::components::chrome::{self, FooterProps, HeaderProps};
 use super::components::empty;
+use super::components::help;
 use super::components::list::Selection;
 use super::components::modal::{self, ModalWidth};
+use super::components::palette::{self, PaletteState};
 use super::components::spinner;
 use super::data::{self, DayDetail, HeavyRow, MachineProject, ModelRow};
 use super::event::Msg;
@@ -77,6 +79,8 @@ pub enum Overlay {
     File(FileDetailState),
     Project(ProjectDetailState),
     Advisory(AdvisoryDetailState),
+    Help,
+    Palette(PaletteState),
 }
 
 /// Lifecycle of the single-file audit a file-detail modal owns.
@@ -380,8 +384,10 @@ impl Model {
 
     /// The input context for keymap resolution.
     pub fn context(&self) -> Context {
-        if !self.overlays.is_empty() {
-            return Context::Modal;
+        match self.overlays.last() {
+            Some(Overlay::Palette(_)) => return Context::PaletteInput,
+            Some(_) => return Context::Modal,
+            None => {}
         }
         match self.tab {
             TabId::Spend if self.spend_focus == SpendFocus::Days => Context::DayStrip,
@@ -567,6 +573,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             if key.kind != KeyEventKind::Press {
                 return Vec::new();
             }
+            // The palette owns printable keys while open; everything it
+            // does not consume falls through to the keymap (esc, ctrl+c).
+            if let Some(cmds) = handle_palette_key(model, &key) {
+                return cmds;
+            }
             let Some(action) = keymap::resolve(&key, model.context()) else {
                 return Vec::new();
             };
@@ -705,17 +716,66 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
         }
         Action::OpenDetail => return open_detail(model),
         Action::AuditSelected => return audit_selected(model),
-        // Wired later in this wave: report, copy, filter, sort, help,
-        // palette. The bindings exist so help and the palette stay
-        // complete; pressing them is a deliberate no-op until then.
-        Action::GenerateReport
-        | Action::CopySelection
-        | Action::FilterList
-        | Action::CycleSort
-        | Action::Help
-        | Action::Palette => {}
+        Action::Help => {
+            // Stack help over whatever is open (help over a detail modal
+            // works); a second ? while it is topmost stays a single copy.
+            if !matches!(model.overlays.last(), Some(Overlay::Help)) {
+                model.overlays.push(Overlay::Help);
+            }
+        }
+        Action::Palette => {
+            let suggested = keymap::footer_actions(model.context());
+            model
+                .overlays
+                .push(Overlay::Palette(PaletteState::new(suggested)));
+        }
+        // Wired later in this wave: report, copy, filter, sort. The
+        // bindings exist so help and the palette stay complete; pressing
+        // them is a deliberate no-op until then.
+        Action::GenerateReport | Action::CopySelection | Action::FilterList | Action::CycleSort => {
+        }
     }
     Vec::new()
+}
+
+/// Palette typing rules, applied before keymap resolution while a palette
+/// is topmost. Returns `None` for keys the palette does not consume (esc
+/// and ctrl+c resolve through the PaletteInput context).
+fn handle_palette_key(model: &mut Model, key: &KeyEvent) -> Option<Vec<Cmd>> {
+    let Some(Overlay::Palette(state)) = model.overlays.last_mut() else {
+        return None;
+    };
+    match key.code {
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.query.push(c);
+            state.refilter();
+            Some(Vec::new())
+        }
+        KeyCode::Backspace => {
+            state.query.pop();
+            state.refilter();
+            Some(Vec::new())
+        }
+        KeyCode::Down => {
+            if state.sel + 1 < state.matches.len() {
+                state.sel += 1;
+            }
+            Some(Vec::new())
+        }
+        KeyCode::Up => {
+            state.sel = state.sel.saturating_sub(1);
+            Some(Vec::new())
+        }
+        KeyCode::Enter => {
+            let action = state.matches.get(state.sel).copied();
+            model.overlays.pop();
+            match action {
+                Some(action) => Some(handle_action(model, action)),
+                None => Some(Vec::new()),
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Enter: with a dialog open it confirms (dismisses) it; otherwise it opens
@@ -871,6 +931,10 @@ pub fn view(frame: &mut Frame, model: &Model) {
     chrome::render_footer(frame, rows[2], &footer, &model.theme);
 
     for overlay in &model.overlays {
+        if let Overlay::Palette(state) = overlay {
+            palette::render_palette(frame, state, &model.theme);
+            continue;
+        }
         let (title, width) = overlay_chrome(overlay);
         let body = overlay_body(overlay, area, model.now_epoch, &model.theme);
         modal::render_modal(frame, &title, &body, width, &model.theme);
@@ -878,7 +942,8 @@ pub fn view(frame: &mut Frame, model: &Model) {
 }
 
 /// Title and dialog width per overlay kind. Shared by render and (later)
-/// mouse hit-testing.
+/// mouse hit-testing. The palette draws its own dialog; its entry here
+/// exists only to keep the function total.
 fn overlay_chrome(overlay: &Overlay) -> (String, ModalWidth) {
     match overlay {
         Overlay::File(f) => {
@@ -892,6 +957,8 @@ fn overlay_chrome(overlay: &Overlay) -> (String, ModalWidth) {
         // Advisory paragraphs carry the longest copy; the xlarge width keeps
         // wrapping comfortable on wide terminals and clamps on narrow ones.
         Overlay::Advisory(a) => (format!("advisory: {}", a.title), ModalWidth::XLarge),
+        Overlay::Help => ("help".to_string(), ModalWidth::Large),
+        Overlay::Palette(_) => ("commands".to_string(), ModalWidth::Medium),
     }
 }
 
@@ -909,6 +976,9 @@ fn overlay_body(
         Overlay::File(f) => file_detail_body(f, theme),
         Overlay::Project(p) => project_detail_body(p, wrap, now_epoch, theme),
         Overlay::Advisory(a) => advisory_detail_body(a, wrap, theme),
+        Overlay::Help => help::lines(theme),
+        // The palette renders through its own dialog, never this path.
+        Overlay::Palette(_) => Vec::new(),
     }
 }
 
@@ -1305,7 +1375,6 @@ mod tests {
             KeyCode::Char('y'),
             KeyCode::Char('/'),
             KeyCode::Char(','),
-            KeyCode::Char('?'),
         ] {
             assert!(update(&mut model, key(code)).is_empty());
             assert!(model.overlays.is_empty(), "{code:?} must not open a dialog");
@@ -1500,6 +1569,122 @@ mod tests {
         assert!(text.contains("2 finding(s)"), "scan findings missing");
         assert!(text.contains("press a to audit"), "audit hint missing");
         assert!(text.contains("esc close"), "esc affordance missing");
+    }
+
+    #[test]
+    fn palette_opens_filters_and_executes_actions() {
+        let (mut model, _clock) = test_model();
+        // ctrl+k opens; the context flips to PaletteInput.
+        update(&mut model, ctrl('k'));
+        assert!(matches!(model.overlays.last(), Some(Overlay::Palette(_))));
+        assert_eq!(model.context(), Context::PaletteInput);
+        // Typing q must NOT quit: it edits the query.
+        assert!(update(&mut model, key(KeyCode::Char('q'))).is_empty());
+        let Some(Overlay::Palette(p)) = model.overlays.last() else {
+            panic!("palette stays open");
+        };
+        assert_eq!(p.query, "q");
+        // Backspace then type a filter that lands on cycle theme.
+        update(&mut model, key(KeyCode::Backspace));
+        for c in "theme".chars() {
+            update(&mut model, key(KeyCode::Char(c)));
+        }
+        let Some(Overlay::Palette(p)) = model.overlays.last() else {
+            panic!("palette stays open");
+        };
+        assert_eq!(p.matches.first(), Some(&Action::CycleTheme));
+        // Enter executes the action and closes the palette.
+        let before = model.theme.name;
+        update(&mut model, key(KeyCode::Enter));
+        assert!(model.overlays.is_empty(), "palette closes on execute");
+        assert_ne!(model.theme.name, before, "action ran");
+    }
+
+    #[test]
+    fn palette_opens_with_colon_and_esc_closes_it() {
+        let (mut model, _clock) = test_model();
+        update(&mut model, key(KeyCode::Char(':')));
+        assert!(matches!(model.overlays.last(), Some(Overlay::Palette(_))));
+        update(&mut model, key(KeyCode::Esc));
+        assert!(model.overlays.is_empty());
+        // Quitting from the palette works through ctrl+c.
+        update(&mut model, ctrl('k'));
+        assert_eq!(update(&mut model, ctrl('c')), vec![Cmd::Quit]);
+    }
+
+    #[test]
+    fn help_stacks_over_details_and_never_duplicates() {
+        let (mut model, _clock) = test_model();
+        model.tab = TabId::Project;
+        model.derived.heavy = vec![seeded_heavy_row()];
+        update(&mut model, key(KeyCode::Enter));
+        assert_eq!(model.overlays.len(), 1);
+        // ? stacks help over the file detail.
+        update(&mut model, key(KeyCode::Char('?')));
+        assert_eq!(model.overlays.len(), 2);
+        assert!(matches!(model.overlays.last(), Some(Overlay::Help)));
+        // A second ? while help is topmost does not stack another copy.
+        update(&mut model, key(KeyCode::Char('?')));
+        assert_eq!(model.overlays.len(), 2);
+        // Esc pops help first, the detail next.
+        update(&mut model, key(KeyCode::Esc));
+        assert!(matches!(model.overlays.last(), Some(Overlay::File(_))));
+        update(&mut model, key(KeyCode::Esc));
+        assert!(model.overlays.is_empty());
+    }
+
+    #[test]
+    fn help_overlay_renders_groups_and_agent_contracts() {
+        let (mut model, _clock) = test_model();
+        update(&mut model, key(KeyCode::Char('?')));
+
+        let backend = ratatui::backend::TestBackend::new(110, 34);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| view(frame, &model)).unwrap();
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..34 {
+            for x in 0..110 {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        for needle in [
+            "navigate",
+            "act",
+            "view",
+            "agents",
+            "tolkin stats --json --global",
+            "tolkin mcp --json",
+            "exits 2",
+            "NO_COLOR",
+        ] {
+            assert!(text.contains(needle), "{needle} missing:\n{text}");
+        }
+    }
+
+    #[test]
+    fn palette_overlay_renders_input_and_suggestions() {
+        let (mut model, _clock) = test_model();
+        update(&mut model, ctrl('k'));
+        let backend = ratatui::backend::TestBackend::new(110, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| view(frame, &model)).unwrap();
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..30 {
+            for x in 0..110 {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        assert!(text.contains("commands"), "palette title missing");
+        assert!(text.contains(">"), "input prompt missing");
+        // Suggested actions (List footer hints) float first.
+        assert!(
+            text.contains("select next row"),
+            "suggested action missing:\n{text}"
+        );
     }
 
     #[test]

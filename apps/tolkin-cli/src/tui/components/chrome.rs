@@ -177,7 +177,7 @@ pub fn render_footer(frame: &mut Frame, area: Rect, props: &FooterProps, theme: 
     }
     frame.render_widget(Paragraph::new(Line::from(hints)), row0);
 
-    if let Some((keys, hint)) = keymap::label_for(keymap::Action::Quit, props.context) {
+    if let Some((keys, hint)) = keymap::label_for(keymap::Action::Palette, props.context) {
         let right = Line::from(vec![
             Span::styled(keys, Style::default().fg(theme.accent)),
             Span::styled(format!(" {hint} "), Style::default().fg(theme.faint)),
@@ -274,7 +274,8 @@ mod tests {
         let text = flatten(&terminal);
         assert!(text.contains("input savings, output may vary"));
         assert!(text.contains("j/k"));
-        assert!(text.contains("q quit"));
+        assert!(text.contains("enter detail"), "detail hint: {text}");
+        assert!(text.contains("ctrl+k commands"), "palette hint: {text}");
         assert!(text.contains("prices 2026-06-10"));
     }
 

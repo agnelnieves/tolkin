@@ -6,6 +6,8 @@ pub mod card;
 pub mod chrome;
 pub mod empty;
 pub mod gauge;
+pub mod help;
 pub mod list;
 pub mod modal;
+pub mod palette;
 pub mod spinner;
