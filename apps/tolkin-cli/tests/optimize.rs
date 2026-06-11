@@ -392,3 +392,120 @@ fn mcp_dry_run_show_prompts_prints_mcp_system_and_index() {
     let _ = fs::remove_dir_all(&home_dir);
     let _ = fs::remove_dir_all(&fixture);
 }
+
+/// Under CI=1 and TOLKIN_NO_SIDECAR=1 the model path is disabled, so
+/// `suggested_model` must be null (not populated) in the JSON output.
+#[test]
+fn dry_run_json_suggested_model_null_when_disabled() {
+    let data_dir = tmp("sm-disabled-data");
+    let home_dir = tmp("sm-disabled-home");
+    let fixture = tmp("sm-disabled-fixture");
+    create_fixture_dir(&fixture);
+
+    let (stdout, success) = run_optimize(&data_dir, &home_dir, &fixture, &["--dry-run", "--json"]);
+    assert!(success, "optimize --dry-run --json should exit 0");
+
+    let doc: serde_json::Value = serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+    // CI=1 and TOLKIN_NO_SIDECAR=1 are set by run_optimize; the model path is
+    // disabled, so suggested_model must be null, not a populated object.
+    assert!(
+        doc["suggested_model"].is_null(),
+        "suggested_model must be null when the model path is disabled; got: {}",
+        doc["suggested_model"]
+    );
+
+    let _ = fs::remove_dir_all(&data_dir);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+/// The JSON output shape for `suggested_model` is either null (model path
+/// disabled) or an object with the required stable keys. Under CI the model
+/// path is disabled so this test only exercises the null branch, but it
+/// confirms the document always parses and never blocks.
+#[test]
+fn dry_run_json_suggested_model_is_null_or_well_formed() {
+    let data_dir = tmp("sm-shape-data");
+    let home_dir = tmp("sm-shape-home");
+    let fixture = tmp("sm-shape-fixture");
+    create_fixture_dir(&fixture);
+
+    let (stdout, success) = run_optimize(&data_dir, &home_dir, &fixture, &["--dry-run", "--json"]);
+    assert!(success, "optimize --dry-run --json should exit 0");
+
+    let doc: serde_json::Value = serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+
+    let sm = &doc["suggested_model"];
+    if !sm.is_null() {
+        // If populated, all required keys must be present.
+        assert!(
+            sm["model"].is_string(),
+            "suggested_model.model must be a string"
+        );
+        assert!(
+            sm["download_gb"].is_number(),
+            "suggested_model.download_gb must be a number"
+        );
+        assert!(
+            sm["reason"].is_string(),
+            "suggested_model.reason must be a string"
+        );
+        assert!(
+            sm["assumed_ram"].is_boolean(),
+            "suggested_model.assumed_ram must be a bool"
+        );
+        assert!(
+            sm["setup_hint"].is_string(),
+            "suggested_model.setup_hint must be a string"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&data_dir);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+/// Non-TTY JSON run with no sidecar must exit promptly without blocking on
+/// stdin. run_optimize sets stdin=Stdio::null() which simulates a pipe.
+#[test]
+fn non_tty_json_never_blocks_on_stdin() {
+    let data_dir = tmp("ntty-json-data");
+    let home_dir = tmp("ntty-json-home");
+    let fixture = tmp("ntty-json-fixture");
+    create_fixture_dir(&fixture);
+
+    let (stdout, success) = run_optimize(&data_dir, &home_dir, &fixture, &["--json"]);
+    assert!(success, "optimize --json should exit 0 in non-TTY mode");
+    let doc: serde_json::Value = serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+    assert!(doc["version"].is_string());
+    assert!(doc["skeleton"].is_object());
+
+    let _ = fs::remove_dir_all(&data_dir);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+/// Non-TTY human-mode run with no sidecar must not block on stdin and must
+/// not print the interactive guide prompt.
+#[test]
+fn non_tty_human_never_blocks_on_stdin() {
+    let data_dir = tmp("ntty-human-data");
+    let home_dir = tmp("ntty-human-home");
+    let fixture = tmp("ntty-human-fixture");
+    create_fixture_dir(&fixture);
+
+    let (stdout, success) = run_optimize(&data_dir, &home_dir, &fixture, &[]);
+    assert!(success, "optimize should exit 0 in non-TTY mode");
+    assert!(
+        stdout.contains("Deterministic summary"),
+        "deterministic skeleton must still render; got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Would you like to see how to install"),
+        "interactive prompt must not appear in non-TTY output; got:\n{stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&data_dir);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&fixture);
+}

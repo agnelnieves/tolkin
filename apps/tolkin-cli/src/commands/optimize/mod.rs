@@ -13,6 +13,7 @@
 
 mod gates;
 mod prompts;
+mod setup;
 mod skeleton;
 
 use std::collections::BTreeMap;
@@ -255,6 +256,16 @@ pub fn run(args: OptimizeArgs, yes: bool) -> Result<()> {
         mcp_plan.as_ref(),
     );
 
+    // Build a model recommendation when the sidecar is absent and the model
+    // path is not disabled. Detection was skipped entirely when disabled, so
+    // we can rely on probe.sidecar being None here.
+    let recommendation = if !disabled && probe.sidecar.is_none() {
+        let ram = setup::detect_ram_gb();
+        Some(setup::recommend(ram))
+    } else {
+        None
+    };
+
     let ctx = RenderCtx {
         args: &args,
         root: &root,
@@ -267,6 +278,8 @@ pub fn run(args: OptimizeArgs, yes: bool) -> Result<()> {
         mcp_plan: mcp_plan.as_ref(),
         warnings: &warnings,
         disabled,
+        yes,
+        recommendation,
     };
 
     if args.json {
@@ -831,6 +844,12 @@ struct RenderCtx<'a> {
     mcp_plan: Option<&'a McpPlan>,
     warnings: &'a [String],
     disabled: bool,
+    /// The global --yes flag: suppresses interactive questions but never
+    /// auto-grants consent. Threaded here so renderers can check it.
+    yes: bool,
+    /// Recommendation is populated when sidecar detection found nothing and the
+    /// model path is not disabled. None otherwise.
+    recommendation: Option<setup::Recommendation>,
 }
 
 /// Stable machine shape. model_advisory is null whenever no live calls ran.
@@ -876,6 +895,15 @@ fn print_json(ctx: &RenderCtx, advisory: Option<&Advisory>) -> Result<()> {
         })
     });
     let manifest_count = ctx.mcp_plan.map_or(0, |p| p.manifest_entries.len());
+    let suggested_model_json = ctx.recommendation.as_ref().map(|r| {
+        json!({
+            "model": r.model_id,
+            "download_gb": r.download_gb,
+            "reason": r.tier_note,
+            "assumed_ram": r.assumed,
+            "setup_hint": "run tolkin optimize in a terminal for guided setup",
+        })
+    });
     let doc = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "dry_run": ctx.args.dry_run,
@@ -889,6 +917,7 @@ fn print_json(ctx: &RenderCtx, advisory: Option<&Advisory>) -> Result<()> {
             "manifest_count": manifest_count,
         },
         "model_advisory": advisory_json,
+        "suggested_model": suggested_model_json,
     });
     println!("{}", serde_json::to_string_pretty(&doc)?);
     Ok(())
@@ -920,7 +949,18 @@ fn human_flow(ctx: &RenderCtx, skeleton_json: &str) {
                 println!("local model path disabled (CI=true or TOLKIN_NO_SIDECAR=1); deterministic summary only.");
             } else {
                 println!("no local model server detected; deeper local analysis is available.");
-                println!("setup: run an OpenAI-compatible server on loopback (mlx-lm, Ollama, LM Studio, or llama-server), then re-run tolkin optimize.");
+                println!();
+                if let Some(rec) = &ctx.recommendation {
+                    let wall = setup::narration_wall_time();
+                    println!(
+                        "Suggested model for this machine: {} ({:.1} GB download)",
+                        rec.model_id, rec.download_gb
+                    );
+                    println!("  {}", rec.tier_note);
+                    println!("  Narration time: {}", wall);
+                    println!();
+                    offer_setup_guide(rec, ctx);
+                }
             }
         }
         Consent::Declined => {
@@ -943,6 +983,36 @@ fn human_flow(ctx: &RenderCtx, skeleton_json: &str) {
                 print_advisory(&adv);
             }
         }
+    }
+}
+
+/// Offer the interactive setup guide when running in a full TTY and neither
+/// --yes nor --json is set. On yes, print the guide. In all other cases
+/// (non-TTY, --yes, --json), do nothing (never blocks on stdin).
+fn offer_setup_guide(rec: &setup::Recommendation, ctx: &RenderCtx) {
+    if ctx.args.json || ctx.yes {
+        return;
+    }
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    if !interactive {
+        return;
+    }
+    use std::io::{BufRead, Write};
+    {
+        let mut out = std::io::stdout().lock();
+        let _ = write!(
+            out,
+            "Would you like to see how to install and set it up? [y/N] "
+        );
+        let _ = out.flush();
+    }
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line).is_err() {
+        return;
+    }
+    if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        println!();
+        print!("{}", setup::setup_guide(rec));
     }
 }
 
@@ -1130,6 +1200,20 @@ fn print_dry_run(ctx: &RenderCtx) {
     print_eta_line(ctx);
     if ctx.args.show_prompts {
         print_prompts(ctx);
+    }
+    // Show the model recommendation in dry-run too; offer the guide in TTY
+    // (uniform with the non-dry path; zero model calls either way).
+    if let Some(rec) = &ctx.recommendation {
+        println!();
+        let wall = setup::narration_wall_time();
+        println!(
+            "Suggested model for this machine: {} ({:.1} GB download)",
+            rec.model_id, rec.download_gb
+        );
+        println!("  {}", rec.tier_note);
+        println!("  Narration time: {}", wall);
+        println!();
+        offer_setup_guide(rec, ctx);
     }
     println!("dry run: no model calls were made");
 }
