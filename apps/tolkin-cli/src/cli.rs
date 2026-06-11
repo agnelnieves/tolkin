@@ -55,6 +55,8 @@ pub enum Commands {
     Cache(commands::cache::CacheArgs),
     /// Render a self-contained HTML savings report for stakeholder sharing.
     Report(commands::report::ReportArgs),
+    /// Deterministic optimization summary, plus an opt-in local-model advisory (narration, skill lint).
+    Optimize(commands::optimize::OptimizeArgs),
     /// Check for a newer tolkin release (one explicit HTTPS request to the npm registry).
     Update(commands::update::UpdateArgs),
     /// Print the underlying tolkin-core version.
@@ -77,6 +79,7 @@ pub fn dispatch(cmd: Commands, yes: bool) -> Result<()> {
         Commands::Stats(args) => commands::stats::run(args),
         Commands::Cache(args) => commands::cache::run(args),
         Commands::Report(args) => commands::report::run(args),
+        Commands::Optimize(args) => commands::optimize::run(args, yes),
         Commands::Update(args) => commands::update::run(args),
         Commands::Version => {
             println!("tolkin-core {}", tolkin_core::version());

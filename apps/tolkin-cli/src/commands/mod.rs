@@ -6,6 +6,7 @@ pub mod count;
 pub mod drift;
 pub mod init;
 pub mod mcp;
+pub mod optimize;
 pub mod project;
 pub mod redact;
 pub mod report;
