@@ -31,14 +31,34 @@ fn main() -> ExitCode {
     }
 
     match cli.command {
-        Some(cmd) => match cli::dispatch(cmd, cli.yes) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("Error: {e}");
-                ExitCode::from(1)
+        Some(cmd) => {
+            // The update command already prints version state; no notice there.
+            let suppress_notice = matches!(&cmd, cli::Commands::Update(_));
+            match cli::dispatch(cmd, cli.yes) {
+                Ok(()) => {
+                    maybe_print_update_notice(suppress_notice);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(1)
+                }
             }
-        },
+        }
         None => run_bare(),
+    }
+}
+
+/// Consent-gated, once-a-day update notice on stderr after a successful
+/// command. Stderr only (JSON consumers read stdout), TTY only (scripts see
+/// nothing), and never after the update command itself. All other gating
+/// (consent, cadence, CI, env kills) lives in update::passive_refresh_and_notice.
+fn maybe_print_update_notice(suppress: bool) {
+    if suppress || !std::io::stderr().is_terminal() {
+        return;
+    }
+    if let Some(line) = update::passive_refresh_and_notice() {
+        eprintln!("{line}");
     }
 }
 

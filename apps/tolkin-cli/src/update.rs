@@ -191,15 +191,50 @@ pub fn check_now() -> Result<UpdateStatus, String> {
     })
 }
 
+/// Decide whether the once-a-day passive refresh should fire. Pure.
+fn should_refresh(consent: Option<bool>, last_check: Option<u64>, now: u64) -> bool {
+    consent == Some(true) && now.saturating_sub(last_check.unwrap_or(0)) >= 86_400
+}
+
+/// Consent-gated passive update notice, run by main after a normal command.
+///
+/// Guards, in order: TOLKIN_NO_UPDATE_CHECK=1, ledger-disabling env (CI and
+/// TOLKIN_NO_LEDGER, which also mean "leave no state"), missing config, and
+/// consent_update_check anything but Some(true). When due (at most once per
+/// 86400s), refreshes the cached latest version with the same single GET as
+/// `tolkin update`; the attempt time is recorded even on network failure so
+/// an offline machine is not stalled on every run. Returns the stderr notice
+/// line, or None. Never prompts, never touches stdout.
+pub fn passive_refresh_and_notice() -> Option<String> {
+    if std::env::var("TOLKIN_NO_UPDATE_CHECK").as_deref() == Ok("1") {
+        return None;
+    }
+    if crate::ledger::disabled_by_env() {
+        return None;
+    }
+    let mut cfg = crate::ledger::load_config()?;
+    if cfg.consent_update_check != Some(true) {
+        return None;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    if should_refresh(cfg.consent_update_check, cfg.last_update_check, now) {
+        if let Ok(latest) = fetch_latest() {
+            cfg.last_seen_latest = Some(latest);
+        }
+        cfg.last_update_check = Some(now);
+        let _ = crate::ledger::save_config(&cfg);
+    }
+    passive_notice_line(env!("CARGO_PKG_VERSION"), cfg.last_seen_latest.as_deref())
+}
+
 /// Pure helper for a passive update notice. No IO, no network.
 ///
 /// Returns Some("tolkin {v} is available (you have {current}). Run: tolkin update")
-/// when last_seen_latest is Some and semver-greater than current. Other code
-/// is responsible for persisting and supplying last_seen_latest.
-///
-/// The function is public and intentionally not yet called: other code will
-/// wire it to a persistent last-seen cache in a follow-up.
-#[allow(dead_code)]
+/// when last_seen_latest is Some and semver-greater than current.
+/// `passive_refresh_and_notice` supplies the persisted last-seen value.
 pub fn passive_notice_line(current: &str, last_seen_latest: Option<&str>) -> Option<String> {
     let latest = last_seen_latest?;
     if cmp_semver(latest, current) == Ordering::Greater {
@@ -386,5 +421,27 @@ mod tests {
     #[test]
     fn passive_notice_none_when_no_last_seen() {
         assert!(passive_notice_line("0.12.0", None).is_none());
+    }
+
+    // should_refresh
+
+    #[test]
+    fn refresh_requires_explicit_consent() {
+        assert!(!should_refresh(None, None, 1_000_000));
+        assert!(!should_refresh(Some(false), None, 1_000_000));
+        assert!(should_refresh(Some(true), None, 1_000_000));
+    }
+
+    #[test]
+    fn refresh_fires_at_most_once_a_day() {
+        let day = 86_400u64;
+        assert!(!should_refresh(Some(true), Some(1_000_000), 1_000_000 + day - 1));
+        assert!(should_refresh(Some(true), Some(1_000_000), 1_000_000 + day));
+    }
+
+    #[test]
+    fn refresh_tolerates_clock_skew() {
+        // last_check in the future must not panic or fire.
+        assert!(!should_refresh(Some(true), Some(2_000_000), 1_000_000));
     }
 }
