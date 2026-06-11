@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { PanelCard, PanelHeader } from "@/components/analyzer/panel";
 import { count } from "../lib/tokenize";
 import { AnthropicCard } from "./verify-anthropic";
 
@@ -68,11 +69,18 @@ export function TokenizerPanel({ text }: { text: string }) {
   const chars = text.length;
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-      <ProviderCard name="OpenAI" subtitle="o200k_base, exact" state={openai} chars={chars} />
-      <AnthropicCard text={text} state={anthropic} />
-      <ProviderCard name="Gemini" subtitle="Gemma SPM, exact" state={gemini} chars={chars} />
-    </div>
+    <PanelCard>
+      <PanelHeader
+        title="Token counts"
+        blurb="Exact counts for OpenAI and Gemini. Anthropic is a labeled estimate with an optional opt-in verify."
+        status={chars > 0 ? `${chars.toLocaleString()} chars` : undefined}
+      />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <ProviderCard name="OpenAI" subtitle="o200k_base, exact" state={openai} chars={chars} />
+        <AnthropicCard text={text} state={anthropic} />
+        <ProviderCard name="Gemini" subtitle="Gemma SPM, exact" state={gemini} chars={chars} />
+      </div>
+    </PanelCard>
   );
 }
 
@@ -90,28 +98,30 @@ function ProviderCard({
   chars: number;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+    <div className="rounded-lg border border-white/10 bg-black/30 p-4">
       <div className="flex items-baseline justify-between gap-2">
-        <h2 className="text-sm font-medium text-zinc-300">{name}</h2>
-        <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+        <h3 className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+          {name}
+        </h3>
+        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70 tabular-nums">
           {chars.toLocaleString()} chars
         </span>
       </div>
-      <p className="mt-3 text-3xl font-semibold tabular-nums text-zinc-100">
+      <p className="mt-3 font-display text-3xl font-semibold tabular-nums text-foreground">
         {state.error ? (
-          <span className="text-base font-normal text-red-400">error</span>
+          <span className="text-base font-normal text-destructive">error</span>
         ) : state.value === null && state.loading ? (
-          <span className="text-base font-normal text-zinc-500">loading...</span>
+          <span className="text-base font-normal text-muted-foreground">loading</span>
         ) : state.value === null ? (
-          <span className="text-base font-normal text-zinc-500">-</span>
+          <span className="text-base font-normal text-muted-foreground">no input</span>
         ) : (
           <>
-            {state.value.toLocaleString()}
-            <span className="ml-2 text-sm font-normal text-zinc-500">tokens</span>
+            <span className="text-lime-300">{state.value.toLocaleString()}</span>
+            <span className="ml-2 text-sm font-normal text-muted-foreground">tokens</span>
           </>
         )}
       </p>
-      <p className="mt-1 text-xs text-zinc-500">{state.error ?? subtitle}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{state.error ?? subtitle}</p>
     </div>
   );
 }

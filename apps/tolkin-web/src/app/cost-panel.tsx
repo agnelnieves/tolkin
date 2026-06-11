@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { PanelCard, PanelHeader } from "@/components/analyzer/panel";
 import type { CoreProvider, CostBreakdown, ModelPrice } from "../lib/core";
 import { cost as coreCost, models as coreModels, pricesObserved } from "../lib/core";
 import { count } from "../lib/tokenize";
@@ -170,46 +171,53 @@ export function CostPanel({ text }: { text: string }) {
   const notes = breakdowns.find((b) => b.notes.length > 0)?.notes ?? [];
 
   return (
-    <section className="w-full space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-medium text-zinc-300">Cost calculator</h2>
-        <label className="flex items-center gap-2 text-xs text-zinc-400">
-          <span>Model</span>
-          <select
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
-          >
-            <option value="compare">Compare defaults</option>
-            {catalog.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.display}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+    <PanelCard>
+      <PanelHeader
+        title="Cost calculator"
+        blurb="What it would cost to send this input. Output cost varies; you can model it or leave input-only."
+        action={
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="font-mono uppercase tracking-[0.16em]">Model</span>
+            <select
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              className="rounded-md border border-white/10 bg-black/40 px-2 py-1.5 text-xs text-foreground focus:border-lime-300/60 focus:outline-none"
+            >
+              <option value="compare">Compare defaults</option>
+              {catalog.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.display}
+                </option>
+              ))}
+            </select>
+          </label>
+        }
+      />
 
       <Controls toggles={toggles} onChange={setToggles} />
 
       {catalogError ? (
-        <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 text-sm text-red-400">
+        <p className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
           {catalogError}
         </p>
       ) : countState.error ? (
-        <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 text-sm text-red-400">
+        <p className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
           {countState.error}
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-3">
           {breakdowns.map((b) => (
             <CostCard key={b.model_id} breakdown={b} showCacheSplit={showCacheSplit} />
           ))}
-          {breakdowns.length === 0 ? <p className="text-xs text-zinc-500">loading...</p> : null}
+          {breakdowns.length === 0 ? (
+            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">
+              loading
+            </p>
+          ) : null}
         </div>
       )}
 
-      <div className="space-y-1 border-t border-zinc-800 pt-3 text-xs leading-5 text-zinc-500">
+      <div className="mt-4 space-y-1 border-t border-white/10 pt-3 text-xs leading-5 text-muted-foreground">
         <p>Input-token-bounded. Output cost varies by response.</p>
         {observed ? (
           <p>Prices observed {observed}. Verify against provider pricing pages.</p>
@@ -219,18 +227,18 @@ export function CostPanel({ text }: { text: string }) {
         ))}
       </div>
 
-      <p className="text-[11px] leading-5 text-zinc-500">
+      <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
         Default per-call total is input-side only. Turn on the output estimate or enter an output
         token count to model your workload.
       </p>
-    </section>
+    </PanelCard>
   );
 }
 
 function Controls({ toggles, onChange }: { toggles: Toggles; onChange: (next: Toggles) => void }) {
   const outputPlaceholder = toggles.estimateOutput ? "rough estimate" : "input only";
   return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-white/10 bg-black/30 p-4 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3">
       <Field label="Cache hit rate">
         <div className="flex items-center gap-2">
           <input
@@ -240,9 +248,10 @@ function Controls({ toggles, onChange }: { toggles: Toggles; onChange: (next: To
             step={0.05}
             value={toggles.cacheHitRate}
             onChange={(e) => onChange({ ...toggles, cacheHitRate: Number(e.target.value) })}
-            className="w-full accent-zinc-400"
+            className="w-full accent-lime-300"
+            aria-label="Cache hit rate"
           />
-          <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-zinc-400">
+          <span className="w-9 shrink-0 text-right font-mono text-[11px] tabular-nums text-foreground">
             {Math.round(toggles.cacheHitRate * 100)}%
           </span>
         </div>
@@ -256,17 +265,17 @@ function Controls({ toggles, onChange }: { toggles: Toggles; onChange: (next: To
           placeholder={outputPlaceholder}
           value={toggles.outputTokens}
           onChange={(e) => onChange({ ...toggles, outputTokens: e.target.value })}
-          className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs tabular-nums text-zinc-200 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
+          className="w-full rounded-md border border-white/10 bg-black/40 px-2 py-2 text-sm tabular-nums text-foreground placeholder:text-muted-foreground/60 focus:border-lime-300/60 focus:outline-none sm:text-xs"
         />
       </Field>
 
       <Field label="Estimate output">
-        <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+        <label className="flex min-h-9 items-center gap-2 text-[11px] text-muted-foreground">
           <input
             type="checkbox"
             checked={toggles.estimateOutput}
             onChange={(e) => onChange({ ...toggles, estimateOutput: e.target.checked })}
-            className="size-3 accent-zinc-400"
+            className="size-3.5 accent-lime-300"
           />
           <span>rough volume assumption</span>
         </label>
@@ -279,7 +288,7 @@ function Controls({ toggles, onChange }: { toggles: Toggles; onChange: (next: To
           inputMode="numeric"
           value={toggles.calls}
           onChange={(e) => onChange({ ...toggles, calls: e.target.value })}
-          className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs tabular-nums text-zinc-200 focus:border-zinc-600 focus:outline-none"
+          className="w-full rounded-md border border-white/10 bg-black/40 px-2 py-2 text-sm tabular-nums text-foreground focus:border-lime-300/60 focus:outline-none sm:text-xs"
         />
       </Field>
 
@@ -292,9 +301,10 @@ function Controls({ toggles, onChange }: { toggles: Toggles; onChange: (next: To
             step={0.05}
             value={toggles.batchFraction}
             onChange={(e) => onChange({ ...toggles, batchFraction: Number(e.target.value) })}
-            className="w-full accent-zinc-400"
+            className="w-full accent-lime-300"
+            aria-label="Batch fraction"
           />
-          <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-zinc-400">
+          <span className="w-9 shrink-0 text-right font-mono text-[11px] tabular-nums text-foreground">
             {Math.round(toggles.batchFraction * 100)}%
           </span>
         </div>
@@ -304,7 +314,7 @@ function Controls({ toggles, onChange }: { toggles: Toggles; onChange: (next: To
         <select
           value={toggles.cacheTtl}
           onChange={(e) => onChange({ ...toggles, cacheTtl: e.target.value as "5m" | "1h" })}
-          className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
+          className="w-full rounded-md border border-white/10 bg-black/40 px-2 py-2 text-sm text-foreground focus:border-lime-300/60 focus:outline-none sm:text-xs"
         >
           <option value="5m">5m</option>
           <option value="1h">1h</option>
@@ -316,8 +326,10 @@ function Controls({ toggles, onChange }: { toggles: Toggles; onChange: (next: To
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="block space-y-1">
-      <span className="block text-[10px] uppercase tracking-wider text-zinc-500">{label}</span>
+    <label className="block space-y-1.5">
+      <span className="block font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+        {label}
+      </span>
       {children}
     </label>
   );
@@ -337,15 +349,19 @@ function CostCard({
   const outputPrefix = breakdown.output_estimated ? "~ " : "";
 
   return (
-    <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+    <div className="space-y-3 rounded-lg border border-white/10 bg-black/30 p-4">
       <div className="flex items-baseline justify-between gap-2">
-        <h3 className="text-sm font-medium text-zinc-300">{breakdown.display}</h3>
+        <h3 className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground">
+          {breakdown.display}
+        </h3>
         {isAnthropic ? (
-          <span className="text-[10px] uppercase tracking-wider text-amber-400/80">estimate</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-amber-300">
+            estimate
+          </span>
         ) : null}
       </div>
 
-      <div className="space-y-1 text-xs text-zinc-500">
+      <div className="space-y-1 text-xs text-muted-foreground">
         <Row label="input">
           {inputPrefix}
           {breakdown.input_tokens.toLocaleString()} tok
@@ -362,18 +378,20 @@ function CostCard({
         ) : null}
       </div>
 
-      <div className="space-y-1 border-t border-zinc-800 pt-3">
+      <div className="space-y-1 border-t border-white/10 pt-3">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-[10px] uppercase tracking-wider text-zinc-500">per call</span>
-          <span className="font-mono text-sm tabular-nums text-zinc-200">
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+            per call
+          </span>
+          <span className="font-mono text-sm tabular-nums text-foreground">
             {formatUsd(breakdown.per_call.total)}
           </span>
         </div>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
             total ({breakdown.calls.toLocaleString()})
           </span>
-          <span className="font-mono text-base font-semibold tabular-nums text-zinc-100">
+          <span className="font-mono text-base font-semibold tabular-nums text-lime-300">
             {formatUsd(breakdown.total.total)}
           </span>
         </div>
@@ -385,8 +403,8 @@ function CostCard({
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-2">
-      <span>{label}</span>
-      <span className="font-mono tabular-nums text-zinc-300">{children}</span>
+      <span className="font-mono text-[11px] uppercase tracking-[0.16em]">{label}</span>
+      <span className="font-mono tabular-nums text-foreground">{children}</span>
     </div>
   );
 }

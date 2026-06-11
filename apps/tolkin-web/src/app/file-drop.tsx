@@ -73,9 +73,7 @@ export function FileDrop({
 
   const base =
     "group/drop block w-full cursor-pointer rounded-lg border border-dashed bg-black/30 text-left transition-colors duration-150 ease-out focus-within:border-lime-300/60 hover:[@media(hover:hover)]:border-white/25";
-  const tone = dragging
-    ? "border-lime-300/60 bg-lime-300/5"
-    : "border-white/15";
+  const tone = dragging ? "border-lime-300/60 bg-lime-300/5" : "border-white/15";
   const size = compact ? "px-4 py-3" : "min-h-32 px-4 py-6";
 
   return (

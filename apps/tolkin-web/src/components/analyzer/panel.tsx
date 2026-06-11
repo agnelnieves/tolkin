@@ -17,10 +17,7 @@ export function PanelCard({
 } & React.HTMLAttributes<HTMLDivElement>) {
   return (
     <As
-      className={cn(
-        "rounded-xl border border-white/10 bg-white/[0.015] p-4 sm:p-5",
-        className,
-      )}
+      className={cn("rounded-xl border border-white/10 bg-white/[0.015] p-4 sm:p-5", className)}
       {...rest}
     >
       {children}
@@ -78,13 +75,7 @@ export function EmptyHint({ children }: { children: ReactNode }) {
 // Single-row mono shimmer used while a panel is waiting. We allow at most one
 // shimmer in view at a time per the design brief. The pulse is opacity only
 // and is gated behind motion-safe so reduced-motion users get a static state.
-export function Shimmer({
-  className,
-  children,
-}: {
-  className?: string;
-  children?: ReactNode;
-}) {
+export function Shimmer({ className, children }: { className?: string; children?: ReactNode }) {
   return (
     <div
       aria-busy="true"

@@ -22,7 +22,7 @@ export function CoreVersion() {
     };
   }, []);
 
-  if (error) return <span className="text-red-400">core load failed: {error}</span>;
-  if (!version) return <span className="text-zinc-500">loading core...</span>;
-  return <span className="text-zinc-400">core {version}</span>;
+  if (error) return <span className="text-destructive">core load failed: {error}</span>;
+  if (!version) return <span className="text-muted-foreground/70">loading core</span>;
+  return <span className="text-muted-foreground">core {version}</span>;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
+import { EmptyHint, PanelCard, PanelHeader } from "@/components/analyzer/panel";
 import type { Provider, Segment } from "../lib/tokenize";
 import { segments } from "../lib/tokenize";
 
@@ -69,35 +70,38 @@ export function Visualizer({ text }: { text: string }) {
   }, [provider, text]);
 
   return (
-    <section className="w-full space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-medium text-zinc-300">Token visualizer</h2>
-        <div
-          className="inline-flex rounded-lg border border-zinc-800 bg-zinc-900/40 p-0.5"
-          role="tablist"
-          aria-label="Tokenizer provider"
-        >
-          {TABS.map((tab) => {
-            const active = provider === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setProvider(tab.id)}
-                className={
-                  active
-                    ? "rounded-md bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-100"
-                    : "rounded-md px-3 py-1 text-xs font-medium text-zinc-500 hover:text-zinc-300"
-                }
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+    <PanelCard>
+      <PanelHeader
+        title="Token visualizer"
+        blurb="See exactly how each provider chops your text. Whitespace shows as dots; line breaks as returns."
+        action={
+          <div
+            className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-0.5"
+            role="tablist"
+            aria-label="Tokenizer provider"
+          >
+            {TABS.map((tab) => {
+              const active = provider === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setProvider(tab.id)}
+                  className={
+                    active
+                      ? "rounded-md bg-lime-300/15 px-3 py-1.5 font-mono text-xs font-medium text-lime-200"
+                      : "rounded-md px-3 py-1.5 font-mono text-xs font-medium text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
+                  }
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        }
+      />
 
       {provider === "anthropic" ? (
         <AnthropicView tokens={state.tokens} loading={state.loading} error={state.error} />
@@ -110,7 +114,7 @@ export function Visualizer({ text }: { text: string }) {
           error={state.error}
         />
       )}
-    </section>
+    </PanelCard>
   );
 }
 
@@ -128,34 +132,34 @@ function ChipView({
   error: string | null;
 }) {
   const chars = text.length;
-  const ratio = tokens > 0 ? (chars / tokens).toFixed(2) : "-";
+  const ratio = tokens > 0 ? (chars / tokens).toFixed(2) : "0";
   const shown = Math.min(segments.length, CHIP_CAP);
   const capped = segments.length > CHIP_CAP;
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-xs text-zinc-500">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 font-mono text-[11px] text-muted-foreground">
         <Stat label="tokens" value={tokens.toLocaleString()} />
         <Stat label="chars" value={chars.toLocaleString()} />
         <Stat label="chars / token" value={ratio} />
       </div>
 
-      <div className="min-h-24 rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 font-mono text-sm leading-7 text-zinc-100">
+      <div className="min-h-24 rounded-lg border border-white/10 bg-black/40 px-4 py-3 font-mono text-sm leading-7 text-foreground">
         {error ? (
-          <span className="text-sm text-red-400">{error}</span>
+          <span className="text-sm text-destructive">{error}</span>
         ) : loading && segments.length === 0 ? (
-          <span className="text-sm text-zinc-500">loading...</span>
-        ) : segments.length === 0 ? (
-          <span className="text-sm text-zinc-600">
-            Nothing to tokenize yet. Paste or drop a file above.
+          <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">
+            loading
           </span>
+        ) : segments.length === 0 ? (
+          <EmptyHint>Nothing to tokenize yet. Paste or drop a file.</EmptyHint>
         ) : (
           segments.slice(0, shown).map((seg, i) => <Chip key={i} index={i} seg={seg} />)
         )}
       </div>
 
       {capped ? (
-        <p className="text-xs text-zinc-500">
+        <p className="font-mono text-[11px] text-muted-foreground">
           Showing first {CHIP_CAP.toLocaleString()} of {segments.length.toLocaleString()} tokens.
         </p>
       ) : null}
@@ -171,7 +175,7 @@ function Chip({ index, seg }: { index: number; seg: Segment }) {
   const tone = index % 6;
   const runs = splitRuns(seg.text);
   return (
-    <span className={`tok-chip tok-chip-${tone}`} title={`#${index} · id ${seg.id}`}>
+    <span className={`tok-chip tok-chip-${tone}`} title={`#${index} id ${seg.id}`}>
       {runs.map((run, i) => {
         if (run.kind === "space") {
           return (
@@ -236,36 +240,40 @@ function AnthropicView({
   const high = Math.round(tokens * 1.1);
 
   return (
-    <div className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+    <div className="space-y-4 rounded-lg border border-white/10 bg-black/30 p-5">
       {error ? (
-        <p className="text-sm text-red-400">{error}</p>
+        <p className="text-sm text-destructive">{error}</p>
       ) : (
         <>
           <div>
-            <p className="text-xs uppercase tracking-wider text-zinc-500">Estimated tokens</p>
-            <p className="mt-1 text-3xl font-semibold tabular-nums text-zinc-100">
+            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+              Estimated tokens
+            </p>
+            <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-foreground">
               {loading && tokens === 0 ? (
-                <span className="text-base font-normal text-zinc-500">loading...</span>
+                <span className="text-base font-normal text-muted-foreground">loading</span>
               ) : (
                 <>
-                  <span className="text-zinc-500">~ </span>
-                  {tokens.toLocaleString()}
+                  <span className="text-muted-foreground">~ </span>
+                  <span className="text-lime-300">{tokens.toLocaleString()}</span>
                 </>
               )}
             </p>
           </div>
 
           <div>
-            <p className="text-xs uppercase tracking-wider text-zinc-500">Confidence band</p>
-            <p className="mt-1 font-mono text-lg tabular-nums text-zinc-200">
+            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+              Confidence band
+            </p>
+            <p className="mt-1 font-mono text-lg tabular-nums text-foreground">
               {low.toLocaleString()} - {high.toLocaleString()}
             </p>
-            <p className="mt-1 text-xs text-zinc-500">estimate via cl100k_base proxy</p>
+            <p className="mt-1 text-xs text-muted-foreground">estimate via cl100k_base proxy</p>
           </div>
         </>
       )}
 
-      <p className="border-t border-zinc-800 pt-4 text-xs leading-5 text-zinc-400">
+      <p className="border-t border-white/10 pt-4 text-xs leading-5 text-muted-foreground">
         Anthropic has not published its tokenizer, so Tolkin does not show fabricated per-token
         boundaries for Claude. The number above is a labeled estimate, not an exact count.
       </p>
@@ -273,7 +281,7 @@ function AnthropicView({
       <button
         type="button"
         disabled
-        className="cursor-not-allowed rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-500"
+        className="cursor-not-allowed rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-muted-foreground"
         title="Available in Phase 2"
       >
         Verify exact count with Anthropic (Phase 2)
@@ -285,8 +293,8 @@ function AnthropicView({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <span className="inline-flex items-baseline gap-1.5">
-      <span className="font-mono tabular-nums text-zinc-200">{value}</span>
-      <span>{label}</span>
+      <span className="font-mono tabular-nums text-foreground">{value}</span>
+      <span className="uppercase tracking-[0.16em]">{label}</span>
     </span>
   );
 }

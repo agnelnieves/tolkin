@@ -56,54 +56,56 @@ export function AnthropicCard({ text, state }: { text: string; state: CountState
   }
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+    <div className="rounded-lg border border-white/10 bg-black/30 p-4">
       <div className="flex items-baseline justify-between gap-2">
-        <h2 className="text-sm font-medium text-zinc-300">Anthropic</h2>
-        <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+        <h3 className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+          Anthropic
+        </h3>
+        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70 tabular-nums">
           {text.length.toLocaleString()} chars
         </span>
       </div>
 
-      <p className="mt-3 text-3xl font-semibold tabular-nums text-zinc-100">
+      <p className="mt-3 font-display text-3xl font-semibold tabular-nums text-foreground">
         {state.error && !verified ? (
-          <span className="text-base font-normal text-red-400">error</span>
+          <span className="text-base font-normal text-destructive">error</span>
         ) : verified ? (
           <>
-            {verified.result.inputTokens.toLocaleString()}
-            <span className="ml-2 text-sm font-normal text-zinc-500">tokens</span>
+            <span className="text-lime-300">{verified.result.inputTokens.toLocaleString()}</span>
+            <span className="ml-2 text-sm font-normal text-muted-foreground">tokens</span>
           </>
         ) : state.value === null && state.loading ? (
-          <span className="text-base font-normal text-zinc-500">loading...</span>
+          <span className="text-base font-normal text-muted-foreground">loading</span>
         ) : state.value === null ? (
-          <span className="text-base font-normal text-zinc-500">-</span>
+          <span className="text-base font-normal text-muted-foreground">no input</span>
         ) : (
           <>
-            <span className="text-zinc-500">~ </span>
-            {state.value.toLocaleString()}
-            <span className="ml-2 text-sm font-normal text-zinc-500">tokens</span>
+            <span className="text-muted-foreground">~ </span>
+            <span className="text-lime-300">{state.value.toLocaleString()}</span>
+            <span className="ml-2 text-sm font-normal text-muted-foreground">tokens</span>
           </>
         )}
       </p>
 
       {verified ? (
         <>
-          <p className="mt-1 text-xs text-emerald-400">exact (verified), {verified.result.model}</p>
+          <p className="mt-1 text-xs text-lime-300">exact (verified), {verified.result.model}</p>
           {verified.localEstimate !== null && verified.result.inputTokens > 0 ? (
-            <p className="mt-1 text-xs text-zinc-500">
+            <p className="mt-1 text-xs text-muted-foreground">
               local estimate was ~{verified.localEstimate.toLocaleString()} (
               {deltaLabel(verified.localEstimate, verified.result.inputTokens)})
             </p>
           ) : null}
         </>
       ) : (
-        <p className="mt-1 text-xs text-zinc-500">
+        <p className="mt-1 text-xs text-muted-foreground">
           {state.error ?? "estimate, cl100k_base, +/- 10%"}
         </p>
       )}
 
       {expanded ? (
-        <div className="mt-3 space-y-2 border-t border-zinc-800 pt-3">
-          <p className="text-[11px] leading-4 text-zinc-500">
+        <div className="mt-3 space-y-2 border-t border-white/10 pt-3">
+          <p className="text-[11px] leading-4 text-muted-foreground">
             Sends the redacted text to api.anthropic.com using your key. The key stays in memory and
             is never stored.
           </p>
@@ -115,32 +117,32 @@ export function AnthropicCard({ text, state }: { text: string; state: CountState
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="sk-ant-..."
             aria-label="Anthropic API key"
-            className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 font-mono text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
+            className="block w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 font-mono text-base text-foreground placeholder:text-muted-foreground/60 focus:border-lime-300/60 focus:outline-none sm:text-xs"
           />
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={onConfirm}
               disabled={pending || apiKey.trim().length === 0 || text.length === 0}
-              className="rounded-md border border-emerald-800 bg-emerald-950/40 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-950/70 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-11 items-center justify-center rounded-md border border-lime-300/40 bg-lime-300/10 px-3 py-2 text-xs text-lime-200 transition-colors duration-150 ease-out hover:bg-lime-300/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-lime-300/60 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {pending ? "verifying..." : "Verify"}
+              {pending ? "verifying" : "Verify"}
             </button>
             <button
               type="button"
               onClick={() => setExpanded(false)}
-              className="text-xs text-zinc-500 hover:text-zinc-300"
+              className="text-xs text-muted-foreground hover:text-foreground"
             >
               cancel
             </button>
           </div>
-          {failure ? <p className="text-xs text-red-400">{failure}</p> : null}
+          {failure ? <p className="text-xs text-destructive">{failure}</p> : null}
         </div>
       ) : (
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="mt-3 rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+          className="mt-3 inline-flex min-h-11 items-center rounded-md border border-white/10 bg-white/[0.02] px-3 py-2 text-xs text-muted-foreground transition-colors duration-150 ease-out hover:border-lime-300/40 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-lime-300/60"
         >
           {verified ? "Re-verify with Anthropic" : "Verify with Anthropic"}
         </button>

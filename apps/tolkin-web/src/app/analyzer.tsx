@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Finding } from "../lib/core";
-import { redact } from "../lib/core";
 import { ANALYZER_EXAMPLES } from "@/components/analyzer/examples";
 import { PanelCard, PanelHeader } from "@/components/analyzer/panel";
+import type { Finding } from "../lib/core";
+import { redact } from "../lib/core";
 import { AuditPanel } from "./audit-panel";
 import { CompressPanel } from "./compress-panel";
-import { CostPanel } from "./cost-panel";
 import { CoreVersion } from "./core-version";
+import { CostPanel } from "./cost-panel";
 import { FileDrop } from "./file-drop";
 import { RedactionLedger } from "./redaction-ledger";
 import { TokenizerPanel } from "./tokenizer-panel";

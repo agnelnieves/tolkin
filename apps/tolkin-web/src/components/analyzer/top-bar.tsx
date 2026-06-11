@@ -16,10 +16,7 @@ export function AnalyzerTopBar() {
           >
             tolkin
           </Link>
-          <span
-            aria-hidden="true"
-            className="hidden h-4 w-px bg-white/10 sm:block"
-          />
+          <span aria-hidden="true" className="hidden h-4 w-px bg-white/10 sm:block" />
           <span className="hidden font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground sm:inline">
             Analyzer
           </span>
@@ -27,10 +24,7 @@ export function AnalyzerTopBar() {
 
         <div className="ml-auto flex items-center gap-3 sm:gap-5">
           <PrivacyTag className="hidden md:inline-flex" />
-          <span
-            aria-hidden="true"
-            className="hidden h-4 w-px bg-white/10 md:block"
-          />
+          <span aria-hidden="true" className="hidden h-4 w-px bg-white/10 md:block" />
           <Link
             href="/bench"
             className="rounded-md px-2 py-1 font-mono text-xs text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"

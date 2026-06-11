@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { EmptyHint, PanelCard, PanelHeader } from "@/components/analyzer/panel";
 import type {
   CoreProvider,
   McpAnalysis,
@@ -79,28 +80,25 @@ export function McpAnalyzer() {
   }, [config, provider]);
 
   return (
-    <section className="w-full space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-1">
-          <h2 className="text-sm font-medium text-zinc-300">MCP analyzer</h2>
-          <p className="text-xs text-zinc-500">
-            Paste any agent's MCP config. See what its tool definitions cost and which servers to
-            swap for a CLI.
-          </p>
-        </div>
-        <label className="flex items-center gap-2 text-xs text-zinc-400">
-          <span>Provider</span>
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value as CoreProvider)}
-            className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
-          >
-            <option value="anthropic">Anthropic</option>
-            <option value="openai">OpenAI</option>
-            <option value="gemini">Gemini</option>
-          </select>
-        </label>
-      </div>
+    <PanelCard>
+      <PanelHeader
+        title="MCP analyzer"
+        blurb="Paste any agent's MCP config. See what its tool definitions cost and which servers to swap for a CLI."
+        action={
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="font-mono uppercase tracking-[0.16em]">Provider</span>
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value as CoreProvider)}
+              className="rounded-md border border-white/10 bg-black/40 px-2 py-1.5 text-xs text-foreground focus:border-lime-300/60 focus:outline-none"
+            >
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+            </select>
+          </label>
+        }
+      />
 
       <label className="block">
         <span className="sr-only">Paste an MCP config to analyze</span>
@@ -110,28 +108,30 @@ export function McpAnalyzer() {
           placeholder="Paste an MCP config. Nothing leaves your browser."
           rows={10}
           spellCheck={false}
-          className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 font-mono text-sm leading-6 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none focus:ring-2 focus:ring-zinc-700"
+          className="block w-full resize-y rounded-lg border border-white/10 bg-black/40 px-4 py-3 font-mono text-base leading-6 text-foreground placeholder:text-muted-foreground/60 focus:border-lime-300/60 focus:outline-none focus:ring-2 focus:ring-lime-300/40 sm:text-sm"
         />
       </label>
 
-      {state.status === "error" ? (
-        <ErrorBox message={state.message} />
-      ) : state.status === "idle" ? (
-        <EmptyState />
-      ) : state.status === "loading" ? (
-        <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-500">
-          analyzing...
-        </p>
-      ) : (
-        <Results analysis={state.analysis} provider={provider} />
-      )}
+      <div className="mt-4">
+        {state.status === "error" ? (
+          <ErrorBox message={state.message} />
+        ) : state.status === "idle" ? (
+          <EmptyHint>
+            Paste an MCP config above to see its token cost and swap recommendations.
+          </EmptyHint>
+        ) : state.status === "loading" ? (
+          <EmptyHint>analyzing</EmptyHint>
+        ) : (
+          <Results analysis={state.analysis} provider={provider} />
+        )}
+      </div>
 
       <ToolsListSection provider={provider} />
 
-      <p className="border-t border-zinc-800 pt-3 text-xs leading-5 text-zinc-500">
+      <p className="mt-4 border-t border-white/10 pt-3 text-xs leading-5 text-muted-foreground">
         Estimates are input-token-bounded. Your config never leaves the browser.
       </p>
-    </section>
+    </PanelCard>
   );
 }
 
@@ -196,24 +196,26 @@ function ToolsListSection({ provider }: { provider: CoreProvider }) {
   const detail = state.status === "ok" ? (state.analysis.servers[0]?.tools_detail ?? null) : null;
 
   return (
-    <div className="space-y-4 border-t border-zinc-800 pt-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-1">
-          <h3 className="text-sm font-medium text-zinc-300">tools/list manifest (exact counts)</h3>
-          <p className="text-xs text-zinc-500">
+    <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1.5">
+          <h3 className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+            tools/list manifest (exact counts)
+          </h3>
+          <p className="max-w-prose text-[13px] leading-relaxed text-muted-foreground">
             Paste a server's tools/list JSON for exact per-tool counts and description smells.
             Tokenized with o200k_base in your browser; nothing leaves it.
           </p>
         </div>
-        <label className="flex items-center gap-2 text-xs text-zinc-400">
-          <span>Server name</span>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-mono uppercase tracking-[0.16em]">Server name</span>
           <input
             type="text"
             value={serverName}
             onChange={(e) => setServerName(e.target.value)}
             placeholder="e.g. github"
             spellCheck={false}
-            className="w-32 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
+            className="w-36 rounded-md border border-white/10 bg-black/40 px-2 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-lime-300/60 focus:outline-none"
           />
         </label>
       </div>
@@ -228,16 +230,14 @@ function ToolsListSection({ provider }: { provider: CoreProvider }) {
           }
           rows={6}
           spellCheck={false}
-          className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 font-mono text-sm leading-6 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none focus:ring-2 focus:ring-zinc-700"
+          className="block w-full resize-y rounded-lg border border-white/10 bg-black/40 px-4 py-3 font-mono text-base leading-6 text-foreground placeholder:text-muted-foreground/60 focus:border-lime-300/60 focus:outline-none focus:ring-2 focus:ring-lime-300/40 sm:text-sm"
         />
       </label>
 
       {state.status === "error" ? (
         <ErrorBox message={state.message} />
       ) : state.status === "loading" ? (
-        <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-500">
-          tokenizing manifest...
-        </p>
+        <EmptyHint>tokenizing manifest</EmptyHint>
       ) : state.status === "ok" ? (
         <div className="space-y-4">
           <Results analysis={state.analysis} provider={provider} />
@@ -252,19 +252,19 @@ function ToolsDetailView({ detail }: { detail: McpToolInventory }) {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h4 className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+        <h4 className="font-mono text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
           Per-tool breakdown
         </h4>
-        <span className="text-[11px] tabular-nums text-zinc-500">
+        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
           {detail.tool_count} tools, {detail.total_tokens.toLocaleString()} tokens,{" "}
-          <span className="text-emerald-400">{detail.basis}</span>
+          <span className="text-lime-300">{detail.basis}</span>
         </span>
       </div>
 
-      <div className="max-h-96 overflow-auto rounded-lg border border-zinc-800">
+      <div className="max-h-96 overflow-auto rounded-lg border border-white/10">
         <table className="w-full border-collapse text-left text-xs">
-          <thead className="sticky top-0 bg-zinc-900">
-            <tr className="border-b border-zinc-800 text-[10px] uppercase tracking-wider text-zinc-500">
+          <thead className="sticky top-0 bg-black/80 backdrop-blur">
+            <tr className="border-b border-white/10 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
               <th className="px-3 py-2 font-medium">Tool</th>
               <th className="px-3 py-2 text-right font-medium">Tokens</th>
               <th className="px-3 py-2 text-right font-medium">Share of server</th>
@@ -273,15 +273,15 @@ function ToolsDetailView({ detail }: { detail: McpToolInventory }) {
           </thead>
           <tbody>
             {detail.tools.map((row) => (
-              <tr key={row.name} className="border-b border-zinc-900 last:border-b-0">
-                <td className="px-3 py-1.5 font-mono text-zinc-200">{row.name}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums text-zinc-400">
+              <tr key={row.name} className="border-b border-white/5 last:border-b-0">
+                <td className="px-3 py-1.5 font-mono text-foreground">{row.name}</td>
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
                   {row.tokens.toLocaleString()}
                 </td>
-                <td className="px-3 py-1.5 text-right tabular-nums text-zinc-400">
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
                   {row.share_pct.toFixed(2)}%
                 </td>
-                <td className="px-3 py-1.5 text-right tabular-nums text-zinc-500">
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums text-muted-foreground/80">
                   {row.description_tokens.toLocaleString()}
                 </td>
               </tr>
@@ -291,37 +291,35 @@ function ToolsDetailView({ detail }: { detail: McpToolInventory }) {
       </div>
 
       {detail.smells.length === 0 ? (
-        <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 text-xs text-zinc-500">
-          Description smells: none found.
-        </p>
+        <EmptyHint>Description smells: none found.</EmptyHint>
       ) : (
         <div className="space-y-2">
-          <h4 className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+          <h4 className="font-mono text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
             Description smells ({detail.smells.length})
           </h4>
           {detail.smells.map((smell) => (
             <div
               key={`${smell.rule}:${smell.tools.join(",")}`}
-              className="space-y-1 rounded-lg border border-amber-900/50 bg-amber-950/15 p-3"
+              className="space-y-1 rounded-lg border border-amber-400/30 bg-amber-400/5 p-3"
             >
               <p className="text-xs">
-                <span className="rounded bg-amber-950 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-amber-300">
+                <span className="rounded border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-amber-300">
                   {smell.rule}
                 </span>{" "}
-                <span className="font-mono text-[11px] text-zinc-300">
+                <span className="font-mono text-[11px] text-foreground">
                   {smell.tools.length > 6
                     ? `${smell.tools.slice(0, 6).join(", ")} and ${smell.tools.length - 6} more`
                     : smell.tools.join(", ")}
                 </span>
               </p>
-              <p className="text-[11px] leading-5 text-zinc-400">{smell.detail}</p>
-              <p className="text-[11px] leading-5 text-amber-300/80">{smell.recommendation}</p>
+              <p className="text-[11px] leading-5 text-muted-foreground">{smell.detail}</p>
+              <p className="text-[11px] leading-5 text-amber-300/90">{smell.recommendation}</p>
             </div>
           ))}
         </div>
       )}
 
-      <div className="space-y-1 text-[11px] leading-5 text-zinc-500">
+      <div className="space-y-1 text-[11px] leading-5 text-muted-foreground">
         {detail.notes.map((n) => (
           <p key={n}>{n}</p>
         ))}
@@ -350,12 +348,12 @@ function Results({ analysis, provider }: { analysis: McpAnalysis; provider: Core
         provider={provider}
       />
 
-      <div className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+      <div className="space-y-3 rounded-lg border border-white/10 bg-black/30 p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="text-xs text-zinc-400">
-            Detected <span className="font-medium text-zinc-200">{client}</span>
+          <span className="text-xs text-muted-foreground">
+            Detected <span className="font-medium text-foreground">{client}</span>
           </span>
-          <span className="text-[11px] tabular-nums text-zinc-500">
+          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
             {totals.servers} {totals.servers === 1 ? "server" : "servers"}, {totals.matched} matched
             {totals.unknown > 0 ? `, ${totals.unknown} unknown` : ""}
           </span>
@@ -371,7 +369,7 @@ function Results({ analysis, provider }: { analysis: McpAnalysis; provider: Core
       <ServerTable servers={servers} />
 
       {notes.length > 0 ? (
-        <div className="space-y-1 text-xs leading-5 text-zinc-500">
+        <div className="space-y-1 text-xs leading-5 text-muted-foreground">
           {notes.map((n) => (
             <p key={n}>{n}</p>
           ))}
@@ -401,9 +399,11 @@ function Headline({
 
   if (!hasSavings && !hasSlim) {
     return (
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-        <p className="text-sm text-zinc-300">No CLI swaps or slim options found for this config.</p>
-        <p className="mt-1 text-xs text-zinc-500">
+      <div className="rounded-lg border border-white/10 bg-black/30 p-4">
+        <p className="text-sm text-foreground">
+          No CLI swaps or slim options found for this config.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
           The servers here are already lean or are not in the catalog. Nothing to reclaim.
         </p>
       </div>
@@ -412,17 +412,17 @@ function Headline({
 
   if (!hasSavings) {
     return (
-      <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/30 p-4">
-        <p className="text-[10px] uppercase tracking-wider text-emerald-400/80">
+      <div className="rounded-lg border border-lime-300/30 bg-lime-300/[0.05] p-4">
+        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-lime-300/90">
           reclaimable per cold session (estimate)
         </p>
         <p className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="text-3xl font-semibold tabular-nums text-emerald-200">
+          <span className="font-display text-3xl font-semibold tabular-nums text-lime-300">
             ~{slimTokens.toLocaleString()}
           </span>
-          <span className="text-sm text-emerald-300/80">tokens by slimming</span>
+          <span className="text-sm text-muted-foreground">tokens by slimming</span>
         </p>
-        <p className="mt-2 text-xs text-emerald-300/70">
+        <p className="mt-2 text-xs text-muted-foreground">
           Keep {slimmable === 1 ? "this server" : `these ${slimmable} servers`} but register fewer
           tools. Snippets are in the table below.
         </p>
@@ -431,26 +431,26 @@ function Headline({
   }
 
   return (
-    <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/30 p-4">
-      <p className="text-[10px] uppercase tracking-wider text-emerald-400/80">
+    <div className="rounded-lg border border-lime-300/30 bg-lime-300/[0.05] p-4">
+      <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-lime-300/90">
         reclaimable per cold session
       </p>
       <p className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-3xl font-semibold tabular-nums text-emerald-200">
+        <span className="font-display text-3xl font-semibold tabular-nums text-lime-300">
           {savingsTokens.toLocaleString()}
         </span>
-        <span className="text-sm text-emerald-300/80">tokens</span>
-        <span className="text-2xl font-semibold tabular-nums text-emerald-200">
+        <span className="text-sm text-muted-foreground">tokens</span>
+        <span className="font-display text-2xl font-semibold tabular-nums text-lime-300">
           {formatUsd(savingsUsd)}
         </span>
-        <span className="text-sm text-emerald-300/80">at {PROVIDER_LABELS[provider]} rates</span>
+        <span className="text-sm text-muted-foreground">at {PROVIDER_LABELS[provider]} rates</span>
       </p>
-      <p className="mt-2 text-xs text-emerald-300/70">
+      <p className="mt-2 text-xs text-muted-foreground">
         Swap {swappable} {swappable === 1 ? "server" : "servers"} for an official CLI to reclaim
         this context.
       </p>
       {hasSlim ? (
-        <p className="mt-1 text-xs text-emerald-300/70">
+        <p className="mt-1 text-xs text-muted-foreground">
           Or keep {slimmable === 1 ? "a server" : "servers"} and slim{" "}
           {slimmable === 1 ? "it" : "them"}: ~{slimTokens.toLocaleString()} tokens by registering
           fewer tools. Per server, swap and slim are alternatives, not additive.
@@ -462,18 +462,14 @@ function Headline({
 
 function ServerTable({ servers }: { servers: McpServerReport[] }) {
   if (servers.length === 0) {
-    return (
-      <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-500">
-        No servers found in this config.
-      </p>
-    );
+    return <EmptyHint>No servers found in this config.</EmptyHint>;
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-zinc-800">
+    <div className="overflow-hidden rounded-lg border border-white/10">
       <table className="w-full border-collapse text-left text-xs">
         <thead>
-          <tr className="border-b border-zinc-800 bg-zinc-900/40 text-[10px] uppercase tracking-wider text-zinc-500">
+          <tr className="border-b border-white/10 bg-white/[0.03] font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
             <th className="px-3 py-2 font-medium">Server</th>
             <th className="px-3 py-2 text-right font-medium">Tools</th>
             <th className="px-3 py-2 text-right font-medium">Cold tok</th>
@@ -497,14 +493,14 @@ function ServerRow({ server }: { server: McpServerReport }) {
 
   return (
     <>
-      <tr className="border-b border-zinc-900 last:border-b-0">
+      <tr className="border-b border-white/5 last:border-b-0">
         <td className="px-3 py-2">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-zinc-200">{server.display || server.name}</span>
+            <span className="font-mono text-foreground">{server.display || server.name}</span>
             <RecommendationBadge recommendation={server.recommendation} />
             {slim != null ? (
               slim.already_slimmed ? (
-                <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                <span className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                   slimmed
                 </span>
               ) : (
@@ -512,7 +508,7 @@ function ServerRow({ server }: { server: McpServerReport }) {
                   type="button"
                   onClick={() => setSlimOpen((open) => !open)}
                   aria-expanded={slimOpen}
-                  className="rounded bg-sky-950 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-300 hover:bg-sky-900 focus:outline-none focus:ring-1 focus:ring-sky-600"
+                  className="rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-sky-300 transition-colors duration-150 ease-out hover:bg-sky-400/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
                 >
                   slim available {slimOpen ? "▾" : "▸"}
                 </button>
@@ -520,21 +516,23 @@ function ServerRow({ server }: { server: McpServerReport }) {
             ) : null}
           </div>
         </td>
-        <td className="px-3 py-2 text-right tabular-nums text-zinc-400">{server.tools ?? "-"}</td>
-        <td className="px-3 py-2 text-right tabular-nums text-zinc-400">
+        <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
+          {server.tools ?? "-"}
+        </td>
+        <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
           {server.cold_tokens != null ? server.cold_tokens.toLocaleString() : "-"}
         </td>
-        <td className="px-3 py-2 font-mono text-zinc-300">{server.cli_alternative ?? "-"}</td>
-        <td className="px-3 py-2 text-right tabular-nums">
+        <td className="px-3 py-2 font-mono text-foreground">{server.cli_alternative ?? "-"}</td>
+        <td className="px-3 py-2 text-right font-mono tabular-nums">
           {server.savings_tokens > 0 ? (
-            <span className="text-emerald-300">{server.savings_tokens.toLocaleString()}</span>
+            <span className="text-lime-300">{server.savings_tokens.toLocaleString()}</span>
           ) : (
-            <span className="text-zinc-600">-</span>
+            <span className="text-muted-foreground/60">-</span>
           )}
         </td>
       </tr>
       {slim != null && !slim.already_slimmed && slimOpen ? (
-        <tr className="border-b border-zinc-900 last:border-b-0">
+        <tr className="border-b border-white/5 last:border-b-0">
           <td colSpan={5} className="px-3 pb-3">
             <SlimDetails slim={slim} />
           </td>
@@ -544,8 +542,8 @@ function ServerRow({ server }: { server: McpServerReport }) {
           no-native-filtering guidance); unknown servers keep their generic note
           out of the table. */}
       {server.note && server.matched_id != null ? (
-        <tr className="border-b border-zinc-900 last:border-b-0">
-          <td colSpan={5} className="px-3 pb-2 text-[11px] leading-5 text-zinc-500">
+        <tr className="border-b border-white/5 last:border-b-0">
+          <td colSpan={5} className="px-3 pb-2 text-[11px] leading-5 text-muted-foreground">
             {server.note}
           </td>
         </tr>
@@ -556,11 +554,11 @@ function ServerRow({ server }: { server: McpServerReport }) {
 
 function SlimDetails({ slim }: { slim: McpSlimRecommendation }) {
   return (
-    <div className="space-y-2 rounded-md border border-sky-900/50 bg-sky-950/20 p-3">
-      <p className="text-[11px] leading-5 text-sky-200">
+    <div className="space-y-2 rounded-md border border-sky-400/30 bg-sky-400/[0.05] p-3">
+      <p className="text-[11px] leading-5 text-sky-100">
         <span className="font-medium">{slim.option.mechanism}</span>
         {slim.est_tokens_saved > 0 ? (
-          <span className="text-sky-300/80">
+          <span className="text-sky-200/80">
             {" "}
             saves an estimated ~{slim.est_tokens_saved.toLocaleString()} input tokens if you keep
             this server.
@@ -568,13 +566,13 @@ function SlimDetails({ slim }: { slim: McpSlimRecommendation }) {
         ) : null}
       </p>
       <div className="flex items-start gap-2">
-        <pre className="min-w-0 flex-1 overflow-x-auto rounded bg-zinc-950 px-3 py-2 font-mono text-[11px] leading-5 text-zinc-200">
+        <pre className="min-w-0 flex-1 overflow-x-auto rounded bg-black/60 px-3 py-2 font-mono text-[11px] leading-5 text-foreground">
           {slim.option.snippet}
         </pre>
         <CopyButton text={slim.option.snippet} />
       </div>
-      <p className="text-[11px] leading-5 text-zinc-500">{slim.option.note}</p>
-      <p className="text-[10px] text-zinc-600">{slim.option.source_hint}</p>
+      <p className="text-[11px] leading-5 text-muted-foreground">{slim.option.note}</p>
+      <p className="text-[10px] text-muted-foreground/70">{slim.option.source_hint}</p>
     </div>
   );
 }
@@ -595,7 +593,7 @@ function CopyButton({ text }: { text: string }) {
             // Clipboard access denied; the snippet stays selectable by hand.
           });
       }}
-      className="shrink-0 rounded border border-zinc-700 px-2 py-1 text-[10px] uppercase tracking-wider text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+      className="shrink-0 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground transition-colors duration-150 ease-out hover:border-lime-300/40 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-lime-300/60"
     >
       {copied ? "copied" : "copy"}
     </button>
@@ -604,10 +602,10 @@ function CopyButton({ text }: { text: string }) {
 
 function RecommendationBadge({ recommendation }: { recommendation: Recommendation }) {
   const styles: Record<Recommendation, string> = {
-    replace: "bg-emerald-950 text-emerald-300",
-    "replace-for-ad-hoc": "bg-amber-950 text-amber-300",
-    keep: "bg-blue-950 text-blue-300",
-    unknown: "bg-zinc-800 text-zinc-400",
+    replace: "border-lime-300/30 bg-lime-300/10 text-lime-200",
+    "replace-for-ad-hoc": "border-amber-400/30 bg-amber-400/10 text-amber-300",
+    keep: "border-sky-400/30 bg-sky-400/10 text-sky-300",
+    unknown: "border-white/10 bg-white/[0.03] text-muted-foreground",
   };
   const labels: Record<Recommendation, string> = {
     replace: "replace",
@@ -617,7 +615,7 @@ function RecommendationBadge({ recommendation }: { recommendation: Recommendatio
   };
   return (
     <span
-      className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${styles[recommendation]}`}
+      className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.18em] ${styles[recommendation]}`}
     >
       {labels[recommendation]}
     </span>
@@ -636,25 +634,19 @@ function TotalStat({
   const display = raw ? value : typeof value === "number" ? value.toLocaleString() : value;
   return (
     <div className="space-y-1">
-      <span className="block text-[10px] uppercase tracking-wider text-zinc-500">{label}</span>
-      <span className="block font-mono text-base tabular-nums text-zinc-200">{display}</span>
+      <span className="block font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="block font-mono text-base tabular-nums text-foreground">{display}</span>
     </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-500">
-      Paste an MCP config above to see its token cost and swap recommendations.
-    </p>
   );
 }
 
 function ErrorBox({ message }: { message: string }) {
   return (
-    <div className="space-y-1 rounded-lg border border-amber-900/60 bg-amber-950/20 p-4">
+    <div className="space-y-1 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4">
       <p className="text-xs font-medium text-amber-300">Could not parse this config.</p>
-      <p className="font-mono text-[11px] leading-5 text-amber-300/70">{message}</p>
+      <p className="font-mono text-[11px] leading-5 text-amber-300/80">{message}</p>
     </div>
   );
 }

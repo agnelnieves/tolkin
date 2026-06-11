@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
+import { AnalyzerTopBar } from "@/components/analyzer/top-bar";
 import { Analyzer } from "../analyzer";
 import { McpAnalyzer } from "../mcp-analyzer";
-import { AnalyzerTopBar } from "@/components/analyzer/top-bar";
 
 export const metadata: Metadata = {
   title: "Analyzer",
@@ -39,7 +39,10 @@ export default function AnalyzerPage() {
 
       <AnalyzerTopBar />
 
-      <main id="analyzer-main" className="mx-auto w-full max-w-[1320px] px-4 pt-8 pb-16 sm:px-6 sm:pt-12">
+      <main
+        id="analyzer-main"
+        className="mx-auto w-full max-w-[1320px] px-4 pt-8 pb-16 sm:px-6 sm:pt-12"
+      >
         <header className="mb-8 space-y-3 sm:mb-12">
           <h1 className="font-display text-3xl font-semibold tracking-tight text-balance sm:text-4xl md:text-5xl">
             Analyzer
