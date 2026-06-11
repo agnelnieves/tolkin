@@ -395,4 +395,47 @@ mod tests {
         assert!(frame.contains("tolkin init"), "setup card missing: {frame}");
         assert!(frame.contains("q to quit"));
     }
+
+    /// The compact frame is a shareable artifact: two renders of the same
+    /// data dir must be byte-identical (animator disabled, no selection
+    /// chrome, ages pinned to the snapshot's load time).
+    #[test]
+    fn static_frame_is_byte_deterministic_and_selection_free() {
+        let dir = tmp_dir("frame-determinism");
+        let cfg = Config::new(true, false);
+        ledger::save_config_to(&dir, &cfg).expect("save config");
+        ledger::append_in(
+            &dir,
+            "project",
+            &dir,
+            json!({
+                "always_tokens": 9_000,
+                "reclaimable_min": 200,
+                "reclaimable_max": 800,
+                "files_scanned": 120,
+            }),
+        )
+        .expect("append");
+        let first = render_static_frame(Some(StatsSnapshot::load_in(&dir)), 100, 30).unwrap();
+        let second = render_static_frame(Some(StatsSnapshot::load_in(&dir)), 100, 30).unwrap();
+        assert_eq!(first, second, "compact frame must render byte-stable");
+        // No selection artifacts: the rail glyph never reaches the buffer.
+        assert!(
+            !first.contains('▌'),
+            "selection rail leaked into the static frame:\n{first}"
+        );
+        // The Overview surfaces are all present in the artifact.
+        for needle in [
+            "today",
+            "30 days",
+            "cache hit",
+            "reclaimable",
+            "spend, last 30 days",
+            "this machine",
+            "advisory",
+        ] {
+            assert!(first.contains(needle), "{needle} missing:\n{first}");
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

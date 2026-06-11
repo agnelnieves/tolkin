@@ -275,7 +275,7 @@ fn render_advisories(frame: &mut Frame, area: Rect, model: &Model) {
         frame,
         inner,
         &rows,
-        Some(model.sel_overview.idx),
+        model.selection(model.sel_overview.idx),
         true,
         theme,
     );

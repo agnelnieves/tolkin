@@ -223,18 +223,25 @@ pub fn render_footer(frame: &mut Frame, area: Rect, props: &FooterProps, theme: 
         frame.render_widget(Paragraph::new(right), right_area);
     }
 
+    // The honesty sentence is sacred and always leads. The legend prefers
+    // today's full text; when the terminal cannot carry it, a compressed
+    // legend keeps the prices date visible instead of clipping it away.
+    let lead = format!(" {HONESTY_LINE}. ");
+    let full = format!(
+        "tiers: identified (advisory), realized (measured structure), measured (ground truth). rate: {} prices {}.",
+        props.rate_model_display, props.prices_observed
+    );
+    let legend = if lead.chars().count() + full.chars().count() <= area.width as usize {
+        full
+    } else {
+        format!(
+            "tiers: identified / realized / measured. prices {}.",
+            props.prices_observed
+        )
+    };
     let honesty = Line::from(vec![
-        Span::styled(
-            format!(" {HONESTY_LINE}. "),
-            Style::default().fg(theme.warn),
-        ),
-        Span::styled(
-            format!(
-                "tiers: identified (advisory), realized (measured structure), measured (ground truth). rate: {} prices {}.",
-                props.rate_model_display, props.prices_observed
-            ),
-            Style::default().fg(theme.faint),
-        ),
+        Span::styled(lead, Style::default().fg(theme.warn)),
+        Span::styled(legend, Style::default().fg(theme.faint)),
     ]);
     frame.render_widget(Paragraph::new(honesty), row1);
 }
@@ -311,6 +318,36 @@ mod tests {
         assert!(text.contains("enter detail"), "detail hint: {text}");
         assert!(text.contains("ctrl+k commands"), "palette hint: {text}");
         assert!(text.contains("prices 2026-06-10"));
+    }
+
+    #[test]
+    fn footer_compresses_the_legend_on_narrow_frames_keeping_the_prices_date() {
+        let t = theme::by_name("mono", false).unwrap();
+        let backend = TestBackend::new(100, 2);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let props = FooterProps {
+                    context: Context::List,
+                    rate_model_display: "claude-sonnet-4.6",
+                    prices_observed: "2026-06-10",
+                };
+                render_footer(f, f.area(), &props, &t);
+            })
+            .unwrap();
+        let text = flatten(&terminal);
+        assert!(
+            text.contains("input savings, output may vary"),
+            "honesty verbatim at every width"
+        );
+        assert!(
+            text.contains("prices 2026-06-10"),
+            "prices date survives the narrow footer: {text}"
+        );
+        assert!(
+            text.contains("identified / realized / measured"),
+            "compressed legend: {text}"
+        );
     }
 
     #[test]

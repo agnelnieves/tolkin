@@ -418,3 +418,30 @@ PROGRESS.md entry, final report.
   `cargo clippy --all-targets -- -D warnings`, `cargo fmt -- --check`.
 - If a contract in section 1 forces a design change, stop that piece, note it in
   the final message, do not improvise around a contract.
+
+## 14. As built (deviations from the sections above)
+
+Waves 1 and 2:
+- Spend day captions show pro-rata `~` costs (cross-day sessions split evenly).
+- The cache panel drops the standalone total line (gauge, health, TTL verdict).
+- Advisory detail "levers" paragraphs reuse the model-mix sentences verbatim.
+- `,` also binds in DayStrip (the Spend models table is not focusable).
+- Modal height is body + 2 border rows, clamped to the frame, not fixed sizes.
+
+Wave 3:
+- Reveal and weight tweens key on row identity (FNV-1a of path / project key /
+  line text); refreshes ramp only genuinely new rows; Overview and Spend
+  advisories share one reveal namespace; stagger fires for the first 64 rows.
+- The scanner's 3-frame end holds count the arrival frame.
+- The setup pulse maps its sine onto border_active / accent / accent_bright;
+  reduced motion pins it at plain accent, and the loop idles while busy under
+  reduced motion (the spinner is static, so 30 fps would only burn battery).
+- Mono selection renders through REVERSED, not selection colors.
+- The footer compresses the tier legend on narrow frames so the honesty
+  sentence stays verbatim and the prices date stays visible.
+- The compact frame suppresses selection chrome (`static_frame`): no rails,
+  the day cursor renders as today's accent highlight.
+- Modals scroll (j/k, arrows, wheel) when the body exceeds the dialog; the
+  offset resets on stack changes; the border advertises remaining rows.
+- No-data cards distinguish consent-off ("off (tolkin init)") from
+  ingestion-on-but-empty ("no sessions yet").

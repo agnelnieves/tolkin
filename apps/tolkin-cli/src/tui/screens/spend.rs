@@ -108,7 +108,9 @@ fn render_day_strip(frame: &mut Frame, area: Rect, model: &Model) {
             },
             target,
         ));
-        roles.push(if i == cursor {
+        // The cursor is interactive chrome: static frames render today's
+        // accent highlight instead of a selection cell.
+        roles.push(if i == cursor && !model.static_frame {
             DayRole::Selected
         } else if i == len - 1 {
             DayRole::Today
@@ -328,7 +330,7 @@ fn render_advisories(frame: &mut Frame, area: Rect, model: &Model) {
         frame,
         inner,
         &rows,
-        Some(model.sel_spend.idx),
+        model.selection(model.sel_spend.idx),
         focused,
         theme,
     );

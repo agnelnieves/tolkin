@@ -389,6 +389,9 @@ pub struct Model {
     pub viewport: (u16, u16),
     pub version: &'static str,
     pub prices_observed: &'static str,
+    /// True for the compact frame and static tests: selection chrome is
+    /// suppressed so the shareable artifact carries no cursor artifacts.
+    pub static_frame: bool,
 }
 
 impl Model {
@@ -434,6 +437,7 @@ impl Model {
             viewport: (0, 0),
             version: env!("CARGO_PKG_VERSION"),
             prices_observed: tolkin_core::pricing::PRICES_OBSERVED,
+            static_frame: false,
         };
         model
             .animator
@@ -444,16 +448,28 @@ impl Model {
 
     /// Deterministic model for the compact frame and static tests: disabled
     /// animator (every tween snaps), clock pinned to the snapshot's load
-    /// time so relative ages render stable.
+    /// time so relative ages render stable, selection chrome suppressed.
     pub fn compact(snapshot: Option<Box<StatsSnapshot>>, theme: Theme) -> Model {
         let now = snapshot.as_ref().map(|s| s.now).unwrap_or(0);
-        Model::new(
+        let mut model = Model::new(
             snapshot,
             theme,
             ThemeEnv::default(),
             Animator::disabled(),
             now,
-        )
+        );
+        model.static_frame = true;
+        model
+    }
+
+    /// The selection a list renders: the live cursor, or none in a static
+    /// frame (a shareable artifact carries no cursor).
+    pub fn selection(&self, idx: usize) -> Option<usize> {
+        if self.static_frame {
+            None
+        } else {
+            Some(idx)
+        }
     }
 
     pub fn is_busy(&self) -> bool {

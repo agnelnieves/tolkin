@@ -197,7 +197,14 @@ fn render_heavy_files(frame: &mut Frame, area: Rect, model: &Model) {
             super::reveal_row(model, reveal::HEAVY, &h.path, line, theme)
         })
         .collect();
-    render_select_list(frame, inner, &rows, Some(model.sel_heavy.idx), true, theme);
+    render_select_list(
+        frame,
+        inner,
+        &rows,
+        model.selection(model.sel_heavy.idx),
+        true,
+        theme,
+    );
 }
 
 fn render_savings(frame: &mut Frame, area: Rect, model: &Model) {

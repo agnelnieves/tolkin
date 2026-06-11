@@ -233,7 +233,7 @@ fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
         frame,
         inner,
         &rows,
-        Some(model.sel_machine.idx),
+        model.selection(model.sel_machine.idx),
         true,
         theme,
     );
