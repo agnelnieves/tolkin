@@ -101,9 +101,16 @@ export function renderResults(r: BenchResults): string {
   lines.push("");
   lines.push(`> ${r.tracks.lossy.rct_caveat}`);
   lines.push("");
-  lines.push(
-    `Quality scoring: scored=${r.tracks.lossy.quality_scoring.scored}, method=${r.tracks.lossy.quality_scoring.method}. Each ratio runs the compressor once and tokenizes the output three times to enforce the deterministic-count contract.`,
-  );
+  {
+    const qs = r.tracks.lossy.quality_scoring;
+    const base = `Quality scoring: scored=${qs.scored}, method=${qs.method}.`;
+    const scoredSuffix = qs.scored
+      ? ` grader_model=${qs.grader_model}, anthropic_version=${qs.anthropic_version}.`
+      : "";
+    lines.push(
+      `${base}${scoredSuffix} Each ratio runs the compressor once and tokenizes the output three times to enforce the deterministic-count contract.`,
+    );
+  }
   lines.push("");
   lines.push(
     "| Case | Fixture | Technique | Tokenizer | Target | Before | After | Achieved | Saved % |",

@@ -77,6 +77,41 @@ Capture date for all five fixtures: 2026-06-10 (local), on macOS arm64.
   appear in the all-defaults full fixture do NOT appear here)
 - License: MIT (vendored at `LICENSE-github-mcp-server`)
 
+### notion-mcp-server.tools.json
+
+- Source project: https://github.com/makenotion/notion-mcp-server
+- Package captured: `@notionhq/notion-mcp-server@2.2.1` (npm), run via
+  `node node_modules/.bin/tsx scripts/start-server.ts` against the package
+  tarball after `npm install --omit=dev` inside it (the published bin
+  `bin/cli.mjs` is a minified bundle and behaves identically; we used the
+  source entry to keep the capture diffable). No NOTION_TOKEN was set: the
+  server derives the tools/list from `scripts/notion-openapi.json` at boot
+  and registers them on the wire without contacting the Notion API. No
+  network call to api.notion.com happens during initialize plus tools/list
+- serverInfo on this build: protocol-only; the wrapper class is
+  `MCPProxy` constructed as `new MCPProxy("Notion API", openApiSpec)` per
+  `src/init-server.ts`, so the live initialize response identifies the
+  server by that name (the 2.2.1 release does not pass a structured
+  serverInfo.version through to the wire)
+- Tools captured: 22 (the upstream OpenAPI spec generates one MCP tool per
+  HTTP operation: 4 get, 3 retrieve, 2 patch, 2 update, 2 create, 1 post,
+  plus 8 ungrouped passthroughs covering blocks, pages, comments,
+  databases, and data sources; matches the recipes/notion.json mapping in
+  the closed-source notion-slim package's transformation algorithm, which
+  groups 14 of these 22 into 6 action tools and passes the remaining 4
+  through plus the 4 not in any recipe group, for a slim total of 10)
+- License: MIT (Copyright (c) 2025 Notion Labs, Inc.; vendored at
+  `LICENSE-notion-mcp-server`)
+- Note: this server's catalog entry in tolkin (mcp.rs `notion`) currently
+  cites a representative cold cost of 26,000 tokens for the all-defaults
+  21-tool era. The measured manifest here is 22 tools at o200k_base, and
+  the configuration row supersedes that estimate. The `notion-slim` row
+  appears in the configuration comparisons table as
+  `not-runnable-headless`: the slim package's npm tarball only ships
+  Windows binaries despite the README claiming macOS/Linux support, so
+  this bun-on-macOS/Linux harness cannot exercise the transformation
+  headlessly; the row carries that precise reason
+
 ## How the benchmark counts these
 
 The runner shells the built `tolkin` binary: `tolkin mcp <manifest> --json`.

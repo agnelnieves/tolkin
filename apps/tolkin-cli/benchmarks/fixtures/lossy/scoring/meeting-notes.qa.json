@@ -1,0 +1,36 @@
+{
+  "fixture_id": "lossy/meeting-notes",
+  "fixture_path": "apps/tolkin-cli/benchmarks/fixtures/lossy/meeting-notes.txt",
+  "note": "Verifiable extraction questions for the BYOK quality-scoring harness. Answers are short and present verbatim in the source text. The harness checks whether the same answers are still recoverable after LLMLingua-2 compresses the text at each target ratio.",
+  "questions": [
+    {
+      "id": "note-taker",
+      "question": "Who is the note taker for this meeting?",
+      "accepted_answers": ["sasha"]
+    },
+    {
+      "id": "contract-coverage",
+      "question": "What contract test coverage has the team reached?",
+      "accepted_answers": ["eighty two percent", "82 percent", "82%", "eighty-two percent"]
+    },
+    {
+      "id": "cutover-time",
+      "question": "At what time does the catalog cutover proceed on Tuesday?",
+      "accepted_answers": ["09:30 pacific", "09:30", "9:30 pacific", "9:30"]
+    },
+    {
+      "id": "tracing-sample-rate",
+      "question": "What sample rate will the tracing pipeline run at on the first day?",
+      "accepted_answers": ["five percent", "5 percent", "5%"]
+    },
+    {
+      "id": "browse-experience",
+      "question": "When does the new browse experience ship?",
+      "accepted_answers": [
+        "one week after cutover",
+        "a week after cutover",
+        "one week after cutover, behind a feature flag"
+      ]
+    }
+  ]
+}

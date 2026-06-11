@@ -94,9 +94,41 @@ export interface ConfigurationCase {
 export interface LossyTrack {
   fidelity: "lossy";
   rct_caveat: string;
-  quality_scoring: { scored: boolean; method: string };
+  quality_scoring: LossyQualityScoring;
   cases: LossyCase[];
   comparisons: ExternalComparison[];
+}
+
+// Track-level scoring metadata. When `scored: false`, only `method` is
+// populated (e.g. "BYOK extraction-QA harness, off by default"). When
+// `scored: true`, the grader_model and the Anthropic API version are
+// recorded so a scored row's basis is fully self-describing.
+export interface LossyQualityScoring {
+  scored: boolean;
+  method: string;
+  // Present only when scored=true.
+  grader_model?: string;
+  anthropic_version?: string;
+}
+
+// Per-question scored answer recorded when --score-quality runs. The model's
+// reply and the author's accepted answers ship together so the grading is
+// reproducible (anyone running the harness can re-verify the substring
+// match without rerunning the API call).
+export interface LossyScoredAnswer {
+  question_id: string;
+  question: string;
+  reply: string;
+  accepted_answers: string[];
+  correct: boolean;
+}
+
+export interface LossyScoredCase {
+  case_id: string;
+  questions_total: number;
+  questions_correct: number;
+  accuracy: number;
+  answers: LossyScoredAnswer[];
 }
 
 export interface LossyCase {
@@ -110,6 +142,8 @@ export interface LossyCase {
   achieved_ratio: number;
   savings_pct: number;
   notes?: string;
+  // Present only when --score-quality ran for this case.
+  scored?: LossyScoredCase;
 }
 
 export interface ExternalComparison {

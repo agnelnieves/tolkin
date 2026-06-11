@@ -1,0 +1,40 @@
+{
+  "fixture_id": "lossy/verbose-instructions",
+  "fixture_path": "apps/tolkin-cli/benchmarks/fixtures/lossy/verbose-instructions.txt",
+  "note": "Verifiable extraction questions for the BYOK quality-scoring harness. Answers are short and present verbatim in the source text.",
+  "questions": [
+    {
+      "id": "step-one",
+      "question": "What is step one of the onboarding?",
+      "accepted_answers": [
+        "confirm that all of your accounts are working",
+        "to confirm that all of your accounts are working",
+        "confirm all your accounts are working"
+      ]
+    },
+    {
+      "id": "step-three-doc",
+      "question": "What document does step three ask the new hire to read?",
+      "accepted_answers": [
+        "the architectural overview document",
+        "architectural overview document",
+        "architectural overview"
+      ]
+    },
+    {
+      "id": "recommended-kata",
+      "question": "Which kata does the team recommend starting with?",
+      "accepted_answers": ["the database kata", "database kata"]
+    },
+    {
+      "id": "solo-ticket-timing",
+      "question": "By the end of which week should the new hire take their first solo ticket?",
+      "accepted_answers": ["second week", "the second week", "end of second week", "end of the second week"]
+    },
+    {
+      "id": "sustainable-pace",
+      "question": "What is the only pace that ships, according to the document?",
+      "accepted_answers": ["sustainable pace", "a sustainable pace"]
+    }
+  ]
+}

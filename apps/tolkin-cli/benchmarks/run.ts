@@ -20,8 +20,9 @@ import { ensureBinary, REPO_ROOT, tolkinVersion } from "./lib/cli";
 import { runConfiguration, runConfigurationComparisons } from "./lib/configuration";
 import { runLossy, runLossyComparisons } from "./lib/lossy";
 import { renderResults } from "./lib/render";
+import { decideScoring, scoreAllCases } from "./lib/scoring";
 import { runStructural } from "./lib/structural";
-import type { BenchResults } from "./lib/types";
+import type { BenchResults, LossyQualityScoring } from "./lib/types";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BENCH_ROOT = HERE;
@@ -60,16 +61,44 @@ function envInfo(): { runner: string; os: string; tokenizers: Record<string, str
   };
 }
 
-async function buildResults(generatedAt: string): Promise<BenchResults> {
+async function buildResults(generatedAt: string, scoreFlagPassed: boolean): Promise<BenchResults> {
   await ensureBinary();
   const tokVersion = await tolkinVersion();
-  const [structural, configuration, configComps, lossy, lossyComps] = await Promise.all([
+  const [structural, configuration, configComps, lossyRun, lossyComps] = await Promise.all([
     runStructural(),
     runConfiguration(),
     runConfigurationComparisons(),
     runLossy(),
     runLossyComparisons(),
   ]);
+  const lossy = lossyRun.cases;
+
+  // BYOK scoring decision: --score-quality + ANTHROPIC_API_KEY together gate
+  // the live model call. Anything else stays at scored=false with the exact
+  // reason recorded in quality_scoring.method (per the methodology).
+  let qualityScoring: LossyQualityScoring;
+  const decision = decideScoring(scoreFlagPassed);
+  if (decision.enabled) {
+    const { qualityScoring: scoringMeta, scoredByCase } = await scoreAllCases(
+      lossy,
+      lossyRun.compressedByCase,
+    );
+    qualityScoring = scoringMeta;
+    // Attach per-case accuracy in place; cases are otherwise identical.
+    for (const c of lossy) {
+      const scored = scoredByCase.get(c.id);
+      if (scored !== undefined) {
+        c.scored = scored;
+        c.notes = `${(c.notes ?? "").trim()} Quality scored: ${scored.questions_correct}/${scored.questions_total} extraction questions correct (accuracy ${(scored.accuracy * 100).toFixed(2)}%).`;
+      }
+    }
+  } else {
+    qualityScoring = {
+      scored: false,
+      method: `BYOK extraction-QA harness, off by default (reason: ${decision.reason})`,
+    };
+  }
+
   const r: BenchResults = {
     // v2: configuration track moved to tokenized manifests (see lib/types.ts).
     v: 2,
@@ -90,7 +119,7 @@ async function buildResults(generatedAt: string): Promise<BenchResults> {
         fidelity: "lossy",
         rct_caveat:
           "Aggressive compression can increase total cost because outputs grow; every number here is input-token bounded.",
-        quality_scoring: { scored: false, method: "BYOK extraction-QA harness, off by default" },
+        quality_scoring: qualityScoring,
         cases: lossy,
         comparisons: lossyComps,
       },
@@ -172,10 +201,22 @@ function diffResults(a: BenchResults, b: BenchResults): DiffSummary {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const check = args.includes("--check-determinism");
+  // --score-quality is the BYOK quality-scoring switch; documented in
+  // methodology.md's reproduction section. Without it, scored=false is
+  // recorded with the precise reason "default off". Determinism mode
+  // refuses to run scoring because Claude calls add non-determinism the
+  // contract treats as failure; the contract specifies that scoring is a
+  // separate, owner-driven action.
+  const scoreQuality = args.includes("--score-quality");
 
   if (check) {
-    const r1 = await buildResults(new Date().toISOString());
-    const r2 = await buildResults(new Date().toISOString());
+    if (scoreQuality) {
+      throw new Error(
+        "--check-determinism and --score-quality cannot be combined: BYOK scoring calls Claude live and is not byte-for-byte deterministic; run determinism without scoring, then run scoring separately.",
+      );
+    }
+    const r1 = await buildResults(new Date().toISOString(), scoreQuality);
+    const r2 = await buildResults(new Date().toISOString(), scoreQuality);
     const diff = diffResults(r1, r2);
     if (!diff.diffOnlyGeneratedAt) {
       const why =
@@ -190,7 +231,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const r = await buildResults(new Date().toISOString());
+  const r = await buildResults(new Date().toISOString(), scoreQuality);
   writeArtifacts(r);
   process.stdout.write(`wrote ${RESULTS_JSON}, ${RESULTS_MD}, ${SYNCED_JSON}, and ${MIRROR_MD}\n`);
 }

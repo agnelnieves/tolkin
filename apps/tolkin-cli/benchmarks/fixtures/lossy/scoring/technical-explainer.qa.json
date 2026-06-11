@@ -1,0 +1,36 @@
+{
+  "fixture_id": "lossy/technical-explainer",
+  "fixture_path": "apps/tolkin-cli/benchmarks/fixtures/lossy/technical-explainer.txt",
+  "note": "Verifiable extraction questions for the BYOK quality-scoring harness. Answers are short, normalized to lowercase before comparison; accepted_answers is the set of strings a correct answer must match (case-insensitive, whitespace-collapsed). Questions chosen so a literal reader of the original text can produce the exact answer; the BYOK scoring harness measures how often that holds after LLMLingua-2 compresses the text at each target ratio.",
+  "questions": [
+    {
+      "id": "topic",
+      "question": "What kind of system does this text describe?",
+      "accepted_answers": ["atomic inventory reservation", "atomic inventory reservations"]
+    },
+    {
+      "id": "naive-bug",
+      "question": "When two carts race through the naive read-then-write approach for the same one-unit stock, what is the final stock value?",
+      "accepted_answers": ["minus one", "-1"]
+    },
+    {
+      "id": "first-fix",
+      "question": "What is the first reliable fix the text names for the race condition?",
+      "accepted_answers": ["a database row lock", "database row lock", "row lock"]
+    },
+    {
+      "id": "second-fix",
+      "question": "What is the second reliable fix the text names?",
+      "accepted_answers": ["a compare and swap update", "compare and swap update", "compare and swap"]
+    },
+    {
+      "id": "common-failure",
+      "question": "According to the text, what is the most common failure mode in production?",
+      "accepted_answers": [
+        "the moment the cache and the database disagree about how many units exist",
+        "cache and database disagree about how many units exist",
+        "cache and the database disagree about how many units exist"
+      ]
+    }
+  ]
+}

@@ -32,6 +32,8 @@ const MCP_SERVERS_LICENSE =
   "MIT per npm package.json (repo LICENSE records the MIT to Apache-2.0 transition); vendored at fixtures/configuration/manifests/LICENSE-modelcontextprotocol-servers";
 const GITHUB_LICENSE =
   "MIT; vendored at fixtures/configuration/manifests/LICENSE-github-mcp-server";
+const NOTION_LICENSE =
+  "MIT (Copyright (c) 2025 Notion Labs, Inc.); vendored at fixtures/configuration/manifests/LICENSE-notion-mcp-server";
 
 interface ManifestSpec {
   id: string;
@@ -114,6 +116,25 @@ const CASES: ManifestSpec[] = [
     },
     notes:
       "The same binary captured with the exact slim snippet tolkin recommends (GITHUB_TOOLSETS=repos,issues; setting the env explicitly gates off the other default toolsets, including context, so this fixture is repos+issues only and the issues set registers get_label per upstream labels.go). This row IS the slim profile, so its own slim cell is 0.",
+  },
+  {
+    // Vendored full Notion tools/list. The slim variant (notion-slim) is
+    // a closed-source binary the npm tarball only ships for Windows; the
+    // slim measurement therefore lives in runConfigurationComparisons as
+    // not-runnable-headless. Measuring the full side closes the half of
+    // the claim that IS publicly obtainable.
+    id: "configuration/notion-mcp-server",
+    filename: "notion-mcp-server.tools.json",
+    clientShape: "tools/list manifest (single server)",
+    provenance: {
+      source:
+        "https://github.com/makenotion/notion-mcp-server, npm @notionhq/notion-mcp-server@2.2.1",
+      license: NOTION_LICENSE,
+      captured: CAPTURED,
+      server_version: "notion-mcp-server 2.2.1, default toolset (no env vars set)",
+    },
+    notes:
+      "Notion's official MCP server at v2.2.1. The tools are generated from scripts/notion-openapi.json at boot; no NOTION_TOKEN is required to respond to tools/list (the manifest is derived from the OpenAPI spec, no api.notion.com call happens during the initialize/tools-list handshake). Catalog representative cold is 26,000 tokens for the 21-tool era; the measured manifest (22 tools at o200k_base) supersedes that estimate. The catalog's `notion-slim, about 52% fewer tokens` note cites a fork whose npm publication only ships Windows binaries, so the slim side of that claim ships as `not-runnable-headless` in the comparisons table below.",
   },
 ];
 
@@ -204,6 +225,7 @@ export async function runConfigurationComparisons(): Promise<ExternalComparison[
 
   let totalBefore = 0;
   let totalAfter = 0;
+  let notionFullCold = 0;
   const scratch = await mkdtemp(join(tmpdir(), "tolkin-bench-caveman-"));
   try {
     for (const spec of primary) {
@@ -211,6 +233,12 @@ export async function runConfigurationComparisons(): Promise<ExternalComparison[
       const before = await mcpAnalyzeManifest(manifestPath);
       const beforeDetail = before.servers[0].tools_detail;
       if (beforeDetail === undefined) throw new Error(`${spec.filename}: no tools_detail`);
+      // Stash the measured full Notion cold for the notion-slim comparison
+      // row below: the slim cannot be measured here, but the FULL side is
+      // measured and the row publishes that with the claim's denominator.
+      if (spec.id === "configuration/notion-mcp-server") {
+        notionFullCold = beforeDetail.total_tokens;
+      }
 
       const parsed = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
       mod.compressDescriptionsInPlace(parsed, ["description"]);
@@ -237,7 +265,7 @@ export async function runConfigurationComparisons(): Promise<ExternalComparison[
     after_tokens: totalAfter,
     savings_pct: round2(savingsPct),
     reason:
-      "Runnable headlessly (MIT, pure Node, vendored). Its compressDescriptionsInPlace rewrites description fields inside tools/list responses; applied to the four primary vendored manifests (github slim excluded to avoid double-counting one server) and re-tokenized through the same tolkin CLI path (o200k_base).",
+      "Runnable headlessly (MIT, pure Node, vendored). Its compressDescriptionsInPlace rewrites description fields inside tools/list responses; applied to the five primary vendored manifests (the four reference servers plus the full Notion manifest; github slim excluded to avoid double-counting one server) and re-tokenized through the same tolkin CLI path (o200k_base).",
     notes:
       "Input-side effect of lossy description rewriting on real manifests; tool names and schemas untouched. No quality claim: shrunken descriptions are not evaluated for selection accuracy.",
   });
@@ -247,6 +275,25 @@ export async function runConfigurationComparisons(): Promise<ExternalComparison[
     status: "not-runnable-headless",
     reason:
       "MIT-licensed and exposes a Python CLI (caveman_compress_nlp.py) that runs offline, but it requires a Python virtual environment plus the spaCy en_core_web_sm model (~50 MB) which this bun-only harness does not provision. Comparable measurements can be added by running caveman_compress_nlp.py on the same manifest descriptions externally and amending this file.",
+  });
+
+  // notion-slim: the catalog cites "about 52% fewer tokens" against the
+  // full Notion MCP. The npm package (notion-slim@2.0.0-slim.1.10) ships
+  // only Windows binaries (mcpslim.exe, mcpslim-windows-x64.exe) despite
+  // the README claiming macOS/Linux support; the transformation runs
+  // inside a closed-source binary not present on this platform, and the
+  // GitHub repository has no published release assets. The contract
+  // forbids substituting a hand-built approximation of the algorithm.
+  // The row therefore ships not-runnable-headless with the measured
+  // full Notion cold (the upper denominator of the claim) recorded in
+  // notes so a reader can derive the claimed slim count themselves and
+  // re-verify when a runnable macOS/Linux build appears upstream.
+  comparisons.push({
+    name: "notion-slim (mcpslim/notion-slim, npm notion-slim@2.0.0-slim.1.10)",
+    status: "not-runnable-headless",
+    reason:
+      "MIT-licensed, but the npm tarball at notion-slim@2.0.0-slim.1.10 only ships Windows binaries (bin/mcpslim.exe and bin/mcpslim-windows-x64.exe); index.js references mcpslim-darwin-arm64 and mcpslim-linux-x64 paths that are not in the tarball, the GitHub repository has no published releases, and the transformation runs inside a closed-source binary. This bun-on-macOS/Linux harness cannot exercise the slim transformation headlessly, and substituting a hand-built approximation of the recipe (recipes/notion.json grouping the 22 upstream tools into 10) is forbidden by the methodology. To verify externally: install notion-slim@<version> on Windows, capture its tools/list with the same JSON-RPC handshake as fixtures/configuration/manifests/capture.ts, vendor it next to notion-mcp-server.tools.json, add it to the configuration cases, and re-run the harness; the achieved saved percent will land next to the catalog's about-52-percent figure.",
+    notes: `Full Notion manifest measured at ${notionFullCold.toLocaleString("en-US")} tokens (o200k_base, configuration/notion-mcp-server row above). Upstream claim "about 52 percent fewer tokens" is against this denominator; published basis: notion-slim package.json mcpslim.tokenReduction field and README, no methodology disclosed. Implied measured-after target if the claim holds exactly: ${Math.round(notionFullCold * 0.48).toLocaleString("en-US")} tokens.`,
   });
 
   return comparisons;

@@ -83,9 +83,33 @@ export interface ConfigurationCase {
 export interface LossyTrack {
   fidelity: "lossy";
   rct_caveat: string;
-  quality_scoring: { scored: boolean; method: string };
+  quality_scoring: LossyQualityScoring;
   cases: LossyCase[];
   comparisons: ExternalComparison[];
+}
+
+// Track-level scoring metadata. See bench.ts for full doc.
+export interface LossyQualityScoring {
+  scored: boolean;
+  method: string;
+  grader_model?: string;
+  anthropic_version?: string;
+}
+
+export interface LossyScoredAnswer {
+  question_id: string;
+  question: string;
+  reply: string;
+  accepted_answers: string[];
+  correct: boolean;
+}
+
+export interface LossyScoredCase {
+  case_id: string;
+  questions_total: number;
+  questions_correct: number;
+  accuracy: number;
+  answers: LossyScoredAnswer[];
 }
 
 export interface LossyCase {
@@ -99,6 +123,7 @@ export interface LossyCase {
   achieved_ratio: number;
   savings_pct: number;
   notes?: string;
+  scored?: LossyScoredCase;
 }
 
 export interface ExternalComparison {

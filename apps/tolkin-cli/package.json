@@ -10,5 +10,9 @@
     "lint": "cargo clippy --all-targets -- -D warnings",
     "lint:rust": "cargo clippy --all-targets -- -D warnings",
     "test": "cargo test"
+  },
+  "devDependencies": {
+    "cavemem": "0.2.1",
+    "repomix": "1.14.1"
   }
 }

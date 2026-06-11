@@ -44,6 +44,11 @@ const NPM_SERVERS: Array<{ out: string; pkg: string; args: string[] }> = [
     pkg: "@modelcontextprotocol/server-everything@2026.1.26",
     args: [],
   },
+  {
+    out: "notion-mcp-server.tools.json",
+    pkg: "@notionhq/notion-mcp-server@2.2.1",
+    args: [],
+  },
 ];
 
 interface JsonRpcMessage {

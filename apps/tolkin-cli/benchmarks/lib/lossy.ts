@@ -9,10 +9,11 @@
 // This is dev-tooling for the harness and is documented in the case notes
 // and methodology.
 
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { countTokens, REPO_ROOT } from "./cli";
+import { cavememCompressFile, repomixPackBoth } from "./external-runners";
 import type { ExternalComparison, LossyCase } from "./types";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -127,8 +128,21 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-export async function runLossy(): Promise<LossyCase[]> {
+/**
+ * Output of runLossy: the case rows AND the compressed text per case ID, so
+ * the scoring harness can run on the same byte-faithful artifact the bench
+ * counts. Without this, scoring would have to re-run the compressor (a wall
+ * of model inference) AND would not be guaranteed to match the count's input
+ * if any non-determinism crept in.
+ */
+export interface LossyRun {
+  cases: LossyCase[];
+  compressedByCase: Map<string, string>;
+}
+
+export async function runLossy(): Promise<LossyRun> {
   const cases: LossyCase[] = [];
+  const compressedByCase = new Map<string, string>();
   const compressor = await ensureCompressor();
   for (const spec of CASES) {
     const fixture = resolve(FIXTURE_ROOT, spec.filename);
@@ -139,8 +153,9 @@ export async function runLossy(): Promise<LossyCase[]> {
       const afterTokens = await tokenize3x(after, `${spec.id}@${rate}/after`);
       const achievedRatio = beforeTokens === 0 ? 0 : afterTokens / beforeTokens;
       const savingsPct = beforeTokens === 0 ? 0 : (1 - afterTokens / beforeTokens) * 100;
+      const caseId = `${spec.id}@rate=${rate}`;
       cases.push({
-        id: `${spec.id}@rate=${rate}`,
+        id: caseId,
         fixture: relative(REPO_ROOT, fixture),
         technique: "LLMLingua-2 (atjsh/llmlingua-2-js-tinybert-meetingbank)",
         tokenizer: "o200k_base (exact)",
@@ -152,9 +167,10 @@ export async function runLossy(): Promise<LossyCase[]> {
         notes:
           "Quality not scored (track-level rct_caveat applies). Model weights fetched once from the Hugging Face Hub (atjsh/llmlingua-2-js-tinybert-meetingbank); subsequent runs reuse the on-disk cache, so the count is the only run-to-run variable.",
       });
+      compressedByCase.set(caseId, after);
     }
   }
-  return cases;
+  return { cases, compressedByCase };
 }
 
 export async function runLossyComparisons(): Promise<ExternalComparison[]> {
@@ -195,6 +211,65 @@ export async function runLossyComparisons(): Promise<ExternalComparison[]> {
     status: "not-runnable-headless",
     reason:
       "MIT-licensed and exposes a Python CLI (caveman_compress_nlp.py) that runs offline, but it requires a Python virtual environment plus the spaCy en_core_web_sm model (~50 MB) which this bun-only harness does not provision. Comparable measurements can be added by running caveman_compress_nlp.py on the lossy fixtures externally and amending this file.",
+  });
+
+  // repomix --compress: published README claims about 70 percent token
+  // reduction without a stated basis. Pinned via bun (repomix@1.14.1 in
+  // apps/tolkin-cli/devDependencies); run on the self-authored declared
+  // corpus at fixtures/lossy/repomix-corpus and tokenized o200k_base
+  // through the same tolkin CLI path the other rows use.
+  const repomixCorpus = resolve(
+    REPO_ROOT,
+    "apps/tolkin-cli/benchmarks/fixtures/lossy/repomix-corpus",
+  );
+  const pack = await repomixPackBoth(repomixCorpus);
+  try {
+    const baseline = await readFile(pack.baselinePath, "utf8");
+    const compressed = await readFile(pack.compressedPath, "utf8");
+    const baselineTokens = await countTokens(baseline, "openai");
+    const compressedTokens = await countTokens(compressed, "openai");
+    const repomixSavingsPct =
+      baselineTokens === 0 ? 0 : (1 - compressedTokens / baselineTokens) * 100;
+    comparisons.push({
+      name: "repomix --compress (yamadashy/repomix, npm repomix@1.14.1)",
+      status: "measured",
+      before_tokens: baselineTokens,
+      after_tokens: compressedTokens,
+      savings_pct: round2(repomixSavingsPct),
+      reason:
+        "MIT-licensed, runs headlessly with no network call once installed. Pinned via bun (apps/tolkin-cli devDependencies); LICENSE vendored at benchmarks/external/repomix-LICENSE. Packed the self-authored declared corpus at benchmarks/fixtures/lossy/repomix-corpus (auth.ts, billing.ts, email.py) twice through repomix v1.14.1, once with --compress and once without, then tokenized both XML packs through the same `tolkin count --model openai` path the other rows use. The README's about-70-percent figure has no stated basis (no benchmark file, no methodology, no fixture published with the claim); this row publishes what the harness measures alongside it.",
+      notes:
+        "Achieved-versus-claimed is denominator-sensitive: repomix's claim is whole-repo packs with tree-sitter-strippable bodies, this corpus is three small files chosen to keep the fixture reviewable. Run on a larger fixture and the saved percent moves; the published number is what the same one-command harness produces on the declared corpus in this tree.",
+    });
+  } finally {
+    await rm(pack.scratchDir, { recursive: true, force: true });
+  }
+
+  // cavemem compress: published README claims about 46 percent compression
+  // for memory storage. The cross-reference review flagged this figure as
+  // unverified. Pinned via bun (cavemem@0.2.1 in apps/tolkin-cli
+  // devDependencies); the `compress` subcommand is pure-JS and does not
+  // require the sqlite store or the embedding worker, so it runs headlessly.
+  let cavememBefore = 0;
+  let cavememAfter = 0;
+  for (const spec of CASES) {
+    const fixture = resolve(FIXTURE_ROOT, spec.filename);
+    const text = await readFile(fixture, "utf8");
+    const { compressed } = await cavememCompressFile(text);
+    cavememBefore += await countTokens(text, "openai");
+    cavememAfter += await countTokens(compressed, "openai");
+  }
+  const cavememSavingsPct = cavememBefore === 0 ? 0 : (1 - cavememAfter / cavememBefore) * 100;
+  comparisons.push({
+    name: "cavemem compress (JuliusBrussee/cavemem, npm cavemem@0.2.1)",
+    status: "measured",
+    before_tokens: cavememBefore,
+    after_tokens: cavememAfter,
+    savings_pct: round2(cavememSavingsPct),
+    reason:
+      "MIT-licensed, runs headlessly via `cavemem compress <file>`; the subcommand is pure-JS and does not touch the sqlite store or the embedding worker. Pinned via bun (apps/tolkin-cli devDependencies); LICENSE vendored at benchmarks/external/cavemem-LICENSE. Run on the same three prose fixtures the LLMLingua-2 cases use, with token counts from the same `tolkin count --model openai` path. Upstream README claims about 46 percent for memory-store compression; basis: undisclosed (the 46 percent figure is distinct from cavemem's caveman-grammar reference of about 75 percent for prose, and from the parent caveman skill's about 65 percent for output).",
+    notes:
+      "The cross-reference review (REVIEW-FINDINGS.md) flagged this claim as unverified at the gap-1 surface. This row is the measurement: bench fixtures, same tokenizer, same one-command harness as the other comparisons.",
   });
 
   return comparisons;
