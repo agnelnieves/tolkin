@@ -79,6 +79,7 @@ fn stats_compact_renders_frame_and_exits_zero() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("tolkin"), "header missing: {stdout}");
+    assert!(stdout.contains("Overview"), "Overview tab title missing");
     assert!(stdout.contains("Project"), "Project tab title missing");
     assert!(stdout.contains("Machine"), "Machine tab title missing");
     assert!(stdout.contains("Spend"), "Spend tab title missing");
