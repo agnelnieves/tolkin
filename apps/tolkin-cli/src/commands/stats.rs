@@ -110,6 +110,14 @@ pub fn run(args: StatsArgs) -> Result<()> {
             "ingestion": {
                 "enabled": snapshot.ingestion_on,
                 "sessions_scanned": snapshot.usage_data.as_ref().map(|d| d.sessions.len()),
+                "parent_sessions": snapshot
+                    .usage_data
+                    .as_ref()
+                    .map(|d| d.parent_session_count()),
+                "subagent_streams": snapshot
+                    .usage_data
+                    .as_ref()
+                    .map(|d| d.subagent_stream_count()),
                 "skipped_lines": snapshot.usage_data.as_ref().map(|d| d.skipped_lines),
                 "skipped_files": snapshot.usage_data.as_ref().map(|d| d.skipped_files),
             },
@@ -129,6 +137,10 @@ pub fn run(args: StatsArgs) -> Result<()> {
         skipped: snapshot.skipped,
         ingestion_on: snapshot.ingestion_on,
         rate_display: snapshot.rate_model_display,
+        session_split: snapshot
+            .usage_data
+            .as_ref()
+            .map(|d| (d.parent_session_count(), d.subagent_stream_count())),
     };
     print_plain(&plain_args);
     Ok(())
@@ -143,6 +155,9 @@ struct PlainArgs<'a> {
     skipped: u64,
     ingestion_on: bool,
     rate_display: &'a str,
+    // (parent sessions, subagent streams); the measured session count is the
+    // sum and would read as a tripled headline without the split.
+    session_split: Option<(usize, usize)>,
 }
 
 fn print_plain(args: &PlainArgs) {
@@ -155,6 +170,7 @@ fn print_plain(args: &PlainArgs) {
         skipped,
         ingestion_on,
         rate_display,
+        session_split,
     } = args;
     match scope_project {
         Some(p) => println!("Tolkin stats: {p}"),
@@ -240,7 +256,13 @@ fn print_plain(args: &PlainArgs) {
                 (Some(f), Some(l)) => format!("{} to {}", format_utc(f), format_utc(l)),
                 _ => "no sessions in scope".to_string(),
             };
-            println!("  {} sessions, {span}", m.sessions);
+            match session_split {
+                Some((parents, streams)) if *streams > 0 => println!(
+                    "  {} sessions ({parents} working sessions + {streams} subagent streams), {span}",
+                    m.sessions
+                ),
+                _ => println!("  {} sessions, {span}", m.sessions),
+            }
             println!(
                 "  input: {} fresh, {} cache read, {} cache write; output: {}",
                 commas(m.totals.input_tokens),
