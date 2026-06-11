@@ -60,7 +60,28 @@ and `/tolkin:tolkin-optimize`.
 /plugin install tolkin@tolkin
 ```
 
-### 3. GitHub Action
+### 3. Homebrew (macOS and Linux)
+
+Tap the repository once, then install:
+
+```sh
+brew tap agnelnieves/tolkin
+brew install tolkin
+```
+
+Or install in a single command without a prior tap:
+
+```sh
+brew install agnelnieves/tolkin/tolkin
+```
+
+The tap is at `agnelnieves/homebrew-tolkin`. Homebrew covers macOS arm64
+(Apple Silicon), macOS x64 (Intel), Linux x64, and Linux arm64. Windows
+users should use `npx tolkin-cli` instead. Bottles and source builds from
+homebrew-core are out of scope until the project reaches the OSS extraction
+milestone; this tap provides pre-built binary installs only.
+
+### 4. GitHub Action
 
 Add to any repository to get a PR comment with the agent-context load profile,
 heaviest files, findings, and identified savings on every pull request that touches
@@ -127,13 +148,13 @@ repository.
 
 ## Support matrix
 
-| Platform | Status |
-| :--- | :--- |
-| macOS arm64 (Apple Silicon) | Live |
-| macOS x64 (Intel) | Live |
-| Linux x64 | Live |
-| Linux arm64 | Live |
-| Windows x64 | Live |
+| Platform | npx / bunx | Homebrew |
+| :--- | :--- | :--- |
+| macOS arm64 (Apple Silicon) | Live | Live (tap) |
+| macOS x64 (Intel) | Live | Live (tap) |
+| Linux x64 | Live | Live (tap) |
+| Linux arm64 | Live | Live (tap) |
+| Windows x64 | Live | Not supported (use npx) |
 
 ## License
 
