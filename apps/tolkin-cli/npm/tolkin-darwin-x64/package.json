@@ -1,6 +1,6 @@
 {
   "name": "tolkin-darwin-x64",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Tolkin CLI binary for macOS x64.",
   "license": "MIT",
   "os": [

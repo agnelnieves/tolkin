@@ -7,7 +7,7 @@ description: |
   sent to the model on every session. Also triggers on: "how heavy is my context",
   "what is my token footprint", "audit my agent files", "tolkin project".
 metadata:
-  version: 0.9.1
+  version: 0.10.0
 ---
 
 # tolkin-audit
