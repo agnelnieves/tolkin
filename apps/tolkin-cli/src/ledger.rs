@@ -96,6 +96,25 @@ fn is_truthy_env(name: &str) -> bool {
 ///   runway advisory entirely (no prompting when unset). Set this to the
 ///   Claude monthly limit you are working within, for example
 ///   `monthly_cap_usd = 50.0`.
+///
+/// - `consent_local_model`: whether the user has opted in to the local-model
+///   layer. None means the question has never been asked (the optimize command
+///   will ask lazily on first use). Never serialized when None.
+///
+/// - `consent_update_check`: whether the user has opted in to the once-a-day
+///   version check against the npm registry. None means never asked. The
+///   non-interactive path always leaves this None: privacy changes are
+///   explicit, never silent.
+///
+/// - `sidecar_base_url`, `sidecar_model`: user overrides for the local-model
+///   server. Both absent by default; unset means use the built-in defaults.
+///
+/// - `last_update_check`: unix seconds of the last successful update check.
+///   Absent by default; the update module writes this after each check.
+///
+/// - `last_seen_latest`: the latest version string seen during the last update
+///   check. Absent by default; stored so the CLI can surface the advisory on
+///   subsequent runs without re-fetching immediately.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     pub v: u32,
@@ -113,6 +132,26 @@ pub struct Config {
     /// via the `default` attribute (reads None if absent from the file).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub monthly_cap_usd: Option<f64>,
+    /// Opt-in to the local-model layer. None means the question has never been
+    /// asked. The optimize command will ask lazily on first use.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub consent_local_model: Option<bool>,
+    /// Opt-in to the once-a-day version check against the npm registry. None
+    /// means never asked. Non-interactive paths leave this None.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub consent_update_check: Option<bool>,
+    /// User override for the local-model sidecar base URL.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub sidecar_base_url: Option<String>,
+    /// User override for the local-model sidecar model name.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub sidecar_model: Option<String>,
+    /// Unix seconds of the last successful update check.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub last_update_check: Option<u64>,
+    /// Latest version string seen during the last update check.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub last_seen_latest: Option<String>,
 }
 
 impl Config {
@@ -124,6 +163,12 @@ impl Config {
             onboarded_at: now_secs(),
             session_rate_per_day: None,
             monthly_cap_usd: None,
+            consent_local_model: None,
+            consent_update_check: None,
+            sidecar_base_url: None,
+            sidecar_model: None,
+            last_update_check: None,
+            last_seen_latest: None,
         }
     }
 }
@@ -334,5 +379,96 @@ mod tests {
         assert!(check("1"));
         assert!(check("true"));
         assert!(check("yes"));
+    }
+
+    /// Old config.toml without the new fields must deserialize cleanly, with
+    /// all new Option fields returning None.
+    #[test]
+    fn old_config_without_new_fields_deserializes_with_new_fields_none() {
+        let dir = tmp("old-cfg-compat");
+        let old_toml = "v = 1\nconsent_ledger = true\nconsent_log_ingestion = false\nonboarded_at = 1700000000\n";
+        fs::write(dir.join(CONFIG_FILE), old_toml).unwrap();
+        let cfg = load_config_from(&dir).expect("must load");
+        assert_eq!(cfg.v, 1);
+        assert!(cfg.consent_ledger);
+        assert!(!cfg.consent_log_ingestion);
+        assert!(
+            cfg.consent_local_model.is_none(),
+            "consent_local_model must be None"
+        );
+        assert!(
+            cfg.consent_update_check.is_none(),
+            "consent_update_check must be None"
+        );
+        assert!(
+            cfg.sidecar_base_url.is_none(),
+            "sidecar_base_url must be None"
+        );
+        assert!(cfg.sidecar_model.is_none(), "sidecar_model must be None");
+        assert!(
+            cfg.last_update_check.is_none(),
+            "last_update_check must be None"
+        );
+        assert!(
+            cfg.last_seen_latest.is_none(),
+            "last_seen_latest must be None"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// None fields must not appear in the serialized TOML output.
+    #[test]
+    fn none_fields_are_absent_from_serialized_toml() {
+        let dir = tmp("none-absent");
+        let cfg = Config::new(true, false);
+        save_config_to(&dir, &cfg).unwrap();
+        let text = fs::read_to_string(dir.join(CONFIG_FILE)).unwrap();
+        assert!(
+            !text.contains("consent_local_model"),
+            "should be absent: {text}"
+        );
+        assert!(
+            !text.contains("consent_update_check"),
+            "should be absent: {text}"
+        );
+        assert!(
+            !text.contains("sidecar_base_url"),
+            "should be absent: {text}"
+        );
+        assert!(!text.contains("sidecar_model"), "should be absent: {text}");
+        assert!(
+            !text.contains("last_update_check"),
+            "should be absent: {text}"
+        );
+        assert!(
+            !text.contains("last_seen_latest"),
+            "should be absent: {text}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// New Option fields round-trip correctly when set to Some values.
+    #[test]
+    fn new_fields_round_trip_when_set() {
+        let dir = tmp("new-fields-rt");
+        let mut cfg = Config::new(true, false);
+        cfg.consent_local_model = Some(false);
+        cfg.consent_update_check = Some(true);
+        cfg.sidecar_base_url = Some("http://localhost:11434".to_string());
+        cfg.sidecar_model = Some("llama3".to_string());
+        cfg.last_update_check = Some(1_700_000_042);
+        cfg.last_seen_latest = Some("1.2.3".to_string());
+        save_config_to(&dir, &cfg).unwrap();
+        let loaded = load_config_from(&dir).expect("must load");
+        assert_eq!(loaded.consent_local_model, Some(false));
+        assert_eq!(loaded.consent_update_check, Some(true));
+        assert_eq!(
+            loaded.sidecar_base_url.as_deref(),
+            Some("http://localhost:11434")
+        );
+        assert_eq!(loaded.sidecar_model.as_deref(), Some("llama3"));
+        assert_eq!(loaded.last_update_check, Some(1_700_000_042));
+        assert_eq!(loaded.last_seen_latest.as_deref(), Some("1.2.3"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }
