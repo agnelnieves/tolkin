@@ -21,6 +21,19 @@ pub fn default_dirs(home: &Path) -> (PathBuf, PathBuf) {
     (claude, codex)
 }
 
+/// The home root usage discovery resolves from. Honors the `TOLKIN_HOME_DIR`
+/// override (test and dev plumbing, the same family as `TOLKIN_DATA_DIR`)
+/// before falling back to the real home dir. The seam exists because
+/// `dirs::home_dir()` on Windows resolves through the known-folder API, which
+/// ignores HOME and USERPROFILE, so integration tests that seed a synthetic
+/// log tree have no environment lever without it.
+pub fn home_root() -> Option<PathBuf> {
+    match std::env::var_os("TOLKIN_HOME_DIR") {
+        Some(v) if !v.is_empty() => Some(PathBuf::from(v)),
+        _ => dirs::home_dir(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

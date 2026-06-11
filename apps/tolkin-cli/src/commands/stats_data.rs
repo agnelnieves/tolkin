@@ -51,7 +51,7 @@ impl StatsSnapshot {
         let (records, skipped) = ledger::read_records_in(dir);
         let project_key = canonical_cwd();
 
-        let home = dirs::home_dir();
+        let home = usage::home_root();
         let ingestion_on = config
             .as_ref()
             .is_some_and(|c| c.consent_log_ingestion && !ledger::disabled_by_env())

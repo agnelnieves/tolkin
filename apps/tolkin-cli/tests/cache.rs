@@ -30,6 +30,7 @@ fn cmd(data_dir: &Path, home: &Path) -> Command {
         .env_remove("TOKLER_NO_LEDGER")
         .env("TOLKIN_DATA_DIR", data_dir)
         .env("HOME", home)
+        .env("TOLKIN_HOME_DIR", home)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
