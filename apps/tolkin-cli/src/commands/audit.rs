@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Args;
@@ -8,6 +8,21 @@ use tolkin_core::audit::{self, AuditOptions, AuditReport};
 use crate::input;
 use crate::ledger;
 use crate::tokenize::{self, Provider};
+
+/// Audit one file and return the engine report. No printing, no filtering,
+/// no ledger write: the TUI's audit worker consumes this seam off the main
+/// thread; the CLI command path below keeps its own flow.
+pub fn audit_file(path: &Path) -> Result<AuditReport> {
+    let text = input::read(Some(path))?;
+    let input_tokens = tokenize::count(Provider::OpenAi, &text)? as u64;
+    Ok(audit::audit(
+        &text,
+        &AuditOptions {
+            input_tokens: Some(input_tokens),
+            include_experimental: false,
+        },
+    ))
+}
 
 #[derive(Args, Debug)]
 pub struct AuditArgs {
@@ -164,4 +179,39 @@ fn commas(n: u64) -> String {
         out.push(char::from(*b));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn audit_file_returns_a_report_for_a_real_file_and_errors_on_missing() {
+        let dir = std::env::temp_dir().join(format!(
+            "tolkin-audit-file-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("context.md");
+        let para = "This exact paragraph repeats verbatim several times so the \
+                    near-duplicate rule has real material to consider during the audit.";
+        fs::write(&path, format!("{para}\n\n{para}\n\n{para}\n")).unwrap();
+
+        let report = audit_file(&path).expect("audit runs on a real file");
+        assert!(report.total_savings_min <= report.total_savings_max);
+        for f in &report.findings {
+            assert!(f.savings_min <= f.savings_max);
+        }
+
+        assert!(
+            audit_file(&dir.join("missing.md")).is_err(),
+            "missing files error cleanly instead of panicking"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

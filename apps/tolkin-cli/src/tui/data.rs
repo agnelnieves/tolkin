@@ -13,7 +13,9 @@ use crate::project::ProjectReport;
 use crate::tiers::TierReport;
 use crate::usage::types::UsageTotals;
 
-/// Cap for the per-project heavy-files list shown on the Project tab.
+/// Cap for the capped heavy-files helper below. The selectable list on the
+/// Project tab scrolls instead of capping; both stay for API stability.
+#[allow(dead_code)]
 pub const PROJECT_TOP_FILES_CAP: usize = 8;
 /// Days of history shown on the Spend tab.
 pub const SPEND_DAYS_WINDOW: usize = 30;
@@ -26,11 +28,112 @@ pub const REALIZED_SPARK_POINTS: usize = 32;
 pub struct MachineProject {
     pub key: String,
     pub always_tokens: u64,
-    /// Timestamp of the latest snapshot for the project; reserved for the
-    /// v1.1 polish where the row footer shows "as of" times.
-    #[allow(dead_code)]
+    /// Timestamp of the latest snapshot for the project; the Machine tab
+    /// renders it as the row's relative "as of" time.
     pub last_ts: u64,
     pub sessions: u64,
+}
+
+/// Sort orders for the Machine tab's project list. Weight is the default;
+/// the `,` sort cycle walks the variants in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MachineSort {
+    Weight,
+    Sessions,
+    Recency,
+}
+
+impl MachineSort {
+    pub fn next(self) -> MachineSort {
+        match self {
+            MachineSort::Weight => MachineSort::Sessions,
+            MachineSort::Sessions => MachineSort::Recency,
+            MachineSort::Recency => MachineSort::Weight,
+        }
+    }
+
+    /// Sort indicator label for the panel title.
+    pub fn label(self) -> &'static str {
+        match self {
+            MachineSort::Weight => "weight",
+            MachineSort::Sessions => "sessions",
+            MachineSort::Recency => "recency",
+        }
+    }
+}
+
+/// Sort orders for the Spend tab's models table. Input volume is the
+/// default; the `,` sort cycle walks the variants in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelSort {
+    Input,
+    Output,
+    Cost,
+}
+
+impl ModelSort {
+    pub fn next(self) -> ModelSort {
+        match self {
+            ModelSort::Input => ModelSort::Output,
+            ModelSort::Output => ModelSort::Cost,
+            ModelSort::Cost => ModelSort::Input,
+        }
+    }
+
+    /// Sort indicator label for the panel title.
+    pub fn label(self) -> &'static str {
+        match self {
+            ModelSort::Input => "input volume",
+            ModelSort::Output => "output volume",
+            ModelSort::Cost => "cost",
+        }
+    }
+}
+
+/// Re-sort the model rows in place. Every order is descending with the
+/// model id as the deterministic tiebreak; unpriced costs sort last.
+pub fn sort_models(rows: &mut [ModelRow], sort: ModelSort) {
+    match sort {
+        ModelSort::Input => rows.sort_by(|a, b| {
+            b.totals
+                .input_side()
+                .cmp(&a.totals.input_side())
+                .then_with(|| a.model.cmp(&b.model))
+        }),
+        ModelSort::Output => rows.sort_by(|a, b| {
+            b.totals
+                .output_tokens
+                .cmp(&a.totals.output_tokens)
+                .then_with(|| a.model.cmp(&b.model))
+        }),
+        ModelSort::Cost => rows.sort_by(|a, b| {
+            b.cost_usd
+                .unwrap_or(-1.0)
+                .total_cmp(&a.cost_usd.unwrap_or(-1.0))
+                .then_with(|| a.model.cmp(&b.model))
+        }),
+    }
+}
+
+/// Re-sort a machine project list in place. Every order is descending
+/// (heaviest, busiest, most recent first) with the project key as the
+/// deterministic tiebreak.
+pub fn sort_machine(projects: &mut [MachineProject], sort: MachineSort) {
+    match sort {
+        MachineSort::Weight => {
+            projects.sort_by(|a, b| {
+                b.always_tokens
+                    .cmp(&a.always_tokens)
+                    .then_with(|| a.key.cmp(&b.key))
+            });
+        }
+        MachineSort::Sessions => {
+            projects.sort_by(|a, b| b.sessions.cmp(&a.sessions).then_with(|| a.key.cmp(&b.key)));
+        }
+        MachineSort::Recency => {
+            projects.sort_by(|a, b| b.last_ts.cmp(&a.last_ts).then_with(|| a.key.cmp(&b.key)));
+        }
+    }
 }
 
 /// One row of the Spend tab's per-model breakdown.
@@ -52,7 +155,9 @@ pub struct DayBar {
 }
 
 /// Bar scaling: returns ceil((value / max) * width), saturating at `width`.
-/// Returns 0 when max == 0 (never divides by zero).
+/// Returns 0 when max == 0 (never divides by zero). Kept for the module's
+/// public API; the animated bar components scale through the animator now.
+#[allow(dead_code)]
 pub fn scale_bar(value: u64, max: u64, width: u16) -> u16 {
     if max == 0 || width == 0 {
         return 0;
@@ -225,12 +330,13 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-/// Top 5 model rows by input-side volume, used by the Spend tab.
-pub fn top_model_rows(report: &TierReport) -> Vec<ModelRow> {
+/// Every model row from the measured tier, unsorted. The Spend tab caches
+/// these sorted by the active [`ModelSort`] and renders the top 5.
+pub fn model_rows(report: &TierReport) -> Vec<ModelRow> {
     let Some(measured) = report.measured.as_ref() else {
         return Vec::new();
     };
-    let mut rows: Vec<ModelRow> = measured
+    measured
         .by_model
         .iter()
         .map(|(model, mu)| ModelRow {
@@ -238,20 +344,160 @@ pub fn top_model_rows(report: &TierReport) -> Vec<ModelRow> {
             totals: mu.totals,
             cost_usd: mu.cost_usd,
         })
-        .collect();
-    rows.sort_by_key(|r| std::cmp::Reverse(r.totals.input_side()));
-    rows.truncate(5);
-    rows
+        .collect()
 }
 
 /// Top heavy files from a live project scan, capped per the constant.
-/// Returns `(path, tokens)` rows ready for rendering.
+/// Returns `(path, tokens)` rows ready for rendering. Kept for the
+/// module's public API; the dashboard renders [`heavy_file_rows`] now.
+#[allow(dead_code)]
 pub fn top_heavy_files(report: &ProjectReport) -> Vec<(String, u64)> {
     report
         .heaviest
         .iter()
         .take(PROJECT_TOP_FILES_CAP)
         .map(|h| (h.path.clone(), h.tokens))
+        .collect()
+}
+
+/// One heavy-file row for the Project tab's selectable list: path, tokens,
+/// the share of the always-loaded profile this file represents, plus the
+/// scan's per-file finding rollup (the file-detail modal renders it).
+#[derive(Clone, Debug)]
+pub struct HeavyRow {
+    pub path: String,
+    pub tokens: u64,
+    /// tokens / always-profile tokens, as a percentage. 0.0 when the
+    /// always profile is empty.
+    pub pct_always: f64,
+    /// Finding count from the live scan's per-file audit.
+    pub findings: usize,
+    /// Identified-tier savings range from the scan's findings.
+    pub savings_min: u64,
+    pub savings_max: u64,
+}
+
+/// Heavy-file rows with percent-of-always for the Project tab. Uncapped:
+/// the selectable list scrolls, so it shows everything the report carries.
+pub fn heavy_file_rows(report: &ProjectReport) -> Vec<HeavyRow> {
+    let always = report.profiles.always.tokens;
+    report
+        .heaviest
+        .iter()
+        .map(|h| HeavyRow {
+            path: h.path.clone(),
+            tokens: h.tokens,
+            pct_always: if always > 0 {
+                h.tokens as f64 / always as f64 * 100.0
+            } else {
+                0.0
+            },
+            findings: h.findings,
+            savings_min: h.savings_min,
+            savings_max: h.savings_max,
+        })
+        .collect()
+}
+
+/// Always-loaded weight across one project's `project` snapshots, oldest
+/// first, with the bracketing timestamps. The Machine tab's project-detail
+/// modal renders the series as a sparkline. `None` when the project has no
+/// snapshot carrying `always_tokens`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectHistory {
+    pub series: Vec<u64>,
+    pub first_ts: u64,
+    pub last_ts: u64,
+}
+
+pub fn project_history(records: &[LedgerRecord], project_key: &str) -> Option<ProjectHistory> {
+    let mut snaps: Vec<(u64, u64)> = records
+        .iter()
+        .filter(|r| r.command == "project" && r.project_key == project_key)
+        .filter_map(|r| {
+            r.headline
+                .get("always_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|always| (r.ts, always))
+        })
+        .collect();
+    if snaps.is_empty() {
+        return None;
+    }
+    snaps.sort_by_key(|s| s.0);
+    Some(ProjectHistory {
+        first_ts: snaps[0].0,
+        last_ts: snaps[snaps.len() - 1].0,
+        series: snaps.into_iter().map(|(_, always)| always).collect(),
+    })
+}
+
+/// One day in the Spend window with everything the day caption renders.
+/// `cost_usd` is allocated from per-session priced costs proportionally to
+/// each day's token volume (the same attribution the cap-runway advisory
+/// uses); a day with no priced traffic is 0.0.
+#[derive(Clone, Debug)]
+pub struct DayDetail {
+    pub day: String,
+    pub input_side: u64,
+    pub input_fresh: u64,
+    pub cache_read: u64,
+    pub output: u64,
+    pub cost_usd: f64,
+}
+
+/// Build the 30-day detail series (oldest first, today last) from the
+/// snapshot's sessions. Mirrors [`spend_day_bars`] for the input-side
+/// series and adds fresh/cache/output splits plus pro-rata day costs.
+pub fn spend_day_details(
+    snapshot: &StatsSnapshot,
+    today: &str,
+    cost_fn: &dyn Fn(&str, &UsageTotals) -> Option<f64>,
+) -> Vec<DayDetail> {
+    let mut totals_by_day: BTreeMap<String, UsageTotals> = BTreeMap::new();
+    let mut cost_by_day: BTreeMap<String, f64> = BTreeMap::new();
+    if let Some(usage) = snapshot.usage_data.as_ref() {
+        for session in &usage.sessions {
+            for (day, totals) in &session.by_day {
+                totals_by_day.entry(day.clone()).or_default().add(totals);
+            }
+            // Pro-rata cost attribution by day volume share, matching
+            // advisories::compute_cap_runway.
+            let session_volume = session.totals.input_side() + session.totals.output_tokens;
+            for (model, mu) in &session.by_model {
+                let Some(cost) = cost_fn(model, mu) else {
+                    continue;
+                };
+                if session.by_day.is_empty() || session_volume == 0 {
+                    let day = day_string(session.last_ts);
+                    *cost_by_day.entry(day).or_insert(0.0) += cost;
+                    continue;
+                }
+                for (day, day_totals) in &session.by_day {
+                    let day_volume = day_totals.input_side() + day_totals.output_tokens;
+                    if day_volume > 0 {
+                        let frac = day_volume as f64 / session_volume as f64;
+                        *cost_by_day.entry(day.clone()).or_insert(0.0) += cost * frac;
+                    }
+                }
+            }
+        }
+    }
+    let mut days = window_days(today, SPEND_DAYS_WINDOW);
+    days.reverse(); // oldest first so charts render left-to-right
+    days.into_iter()
+        .map(|day| {
+            let totals = totals_by_day.get(&day).copied().unwrap_or_default();
+            let cost_usd = cost_by_day.get(&day).copied().unwrap_or(0.0);
+            DayDetail {
+                input_side: totals.input_side(),
+                input_fresh: totals.input_tokens,
+                cache_read: totals.cache_read_tokens,
+                output: totals.output_tokens,
+                cost_usd,
+                day,
+            }
+        })
         .collect()
 }
 
@@ -384,5 +630,247 @@ mod tests {
         assert_eq!(day_string(0), "1970-01-01");
         // 2024-01-01 00:00:00 UTC = 1_704_067_200
         assert_eq!(day_string(1_704_067_200), "2024-01-01");
+    }
+
+    #[test]
+    fn sort_machine_orders_by_each_key_with_stable_tiebreak() {
+        let mk = |key: &str, always: u64, ts: u64, sessions: u64| MachineProject {
+            key: key.to_string(),
+            always_tokens: always,
+            last_ts: ts,
+            sessions,
+        };
+        let base = vec![
+            mk("/a", 10, 300, 2),
+            mk("/b", 30, 100, 2),
+            mk("/c", 20, 200, 9),
+        ];
+        let mut v = base.clone();
+        sort_machine(&mut v, MachineSort::Weight);
+        assert_eq!(
+            v.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(),
+            ["/b", "/c", "/a"]
+        );
+        let mut v = base.clone();
+        sort_machine(&mut v, MachineSort::Sessions);
+        assert_eq!(
+            v.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(),
+            ["/c", "/a", "/b"]
+        );
+        let mut v = base;
+        sort_machine(&mut v, MachineSort::Recency);
+        assert_eq!(
+            v.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(),
+            ["/a", "/c", "/b"]
+        );
+    }
+
+    #[test]
+    fn sort_models_orders_each_key_and_parks_unpriced_last() {
+        use crate::usage::types::UsageTotals;
+        let mk = |model: &str, input: u64, output: u64, cost: Option<f64>| ModelRow {
+            model: model.to_string(),
+            totals: UsageTotals {
+                input_tokens: input,
+                output_tokens: output,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+            },
+            cost_usd: cost,
+        };
+        let base = vec![
+            mk("a", 10, 300, Some(1.0)),
+            mk("b", 30, 100, None),
+            mk("c", 20, 200, Some(9.0)),
+        ];
+        let mut v = base.clone();
+        sort_models(&mut v, ModelSort::Input);
+        assert_eq!(
+            v.iter().map(|r| r.model.as_str()).collect::<Vec<_>>(),
+            ["b", "c", "a"]
+        );
+        let mut v = base.clone();
+        sort_models(&mut v, ModelSort::Output);
+        assert_eq!(
+            v.iter().map(|r| r.model.as_str()).collect::<Vec<_>>(),
+            ["a", "c", "b"]
+        );
+        let mut v = base;
+        sort_models(&mut v, ModelSort::Cost);
+        assert_eq!(
+            v.iter().map(|r| r.model.as_str()).collect::<Vec<_>>(),
+            ["c", "a", "b"],
+            "unpriced models sort last"
+        );
+        // The cycles cover every variant and wrap.
+        assert_eq!(ModelSort::Input.next().next().next(), ModelSort::Input);
+        assert_eq!(
+            MachineSort::Weight.next().next().next(),
+            MachineSort::Weight
+        );
+    }
+
+    #[test]
+    fn heavy_file_rows_compute_percent_of_always() {
+        use crate::project::{HeavyFile, ProfileRollup, Profiles, ProjectReport, Totals};
+        let profiles = Profiles {
+            always: ProfileRollup {
+                tokens: 10_000,
+                files: vec![],
+            },
+            ..Default::default()
+        };
+        let report = ProjectReport {
+            root: "/p".to_string(),
+            profiles,
+            mcp_configs: vec![],
+            heaviest: vec![
+                HeavyFile {
+                    path: "CLAUDE.md".to_string(),
+                    tokens: 6_300,
+                    findings: 3,
+                    savings_min: 120,
+                    savings_max: 480,
+                },
+                HeavyFile {
+                    path: "docs/big.md".to_string(),
+                    tokens: 100,
+                    findings: 0,
+                    savings_min: 0,
+                    savings_max: 0,
+                },
+            ],
+            findings_by_rule: vec![],
+            secret_files: vec![],
+            totals: Totals {
+                files_scanned: 2,
+                context_files: 2,
+                context_tokens: 6_400,
+                savings_min: 0,
+                savings_max: 0,
+            },
+            warnings: vec![],
+        };
+        let rows = heavy_file_rows(&report);
+        assert_eq!(rows.len(), 2);
+        assert!((rows[0].pct_always - 63.0).abs() < 0.01);
+        assert!((rows[1].pct_always - 1.0).abs() < 0.01);
+        // The scan's per-file finding rollup rides along for the detail modal.
+        assert_eq!(rows[0].findings, 3);
+        assert_eq!((rows[0].savings_min, rows[0].savings_max), (120, 480));
+        assert_eq!(rows[1].findings, 0);
+    }
+
+    #[test]
+    fn project_history_orders_series_and_brackets_timestamps() {
+        let ledger = vec![
+            snap_record("/p", 3_000, 7_000),
+            snap_record("/p", 1_000, 10_000),
+            snap_record("/p", 2_000, 9_000),
+            // Other projects and non-project records never bleed in.
+            snap_record("/other", 1_500, 5_000),
+        ];
+        let h = project_history(&ledger, "/p").expect("history exists");
+        assert_eq!(h.series, vec![10_000, 9_000, 7_000]);
+        assert_eq!(h.first_ts, 1_000);
+        assert_eq!(h.last_ts, 3_000);
+        assert!(project_history(&ledger, "/missing").is_none());
+        assert!(project_history(&[], "/p").is_none());
+    }
+
+    #[test]
+    fn spend_day_details_split_and_prorate_costs() {
+        use crate::usage::types::{SessionUsage, UsageData, UsageSource, UsageTotals};
+
+        let mut by_day = BTreeMap::new();
+        // Two days with a 3:1 volume split (input side + output).
+        by_day.insert(
+            "2026-06-09".to_string(),
+            UsageTotals {
+                input_tokens: 500,
+                output_tokens: 100,
+                cache_read_tokens: 2_400,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+            },
+        );
+        by_day.insert(
+            "2026-06-10".to_string(),
+            UsageTotals {
+                input_tokens: 600,
+                output_tokens: 200,
+                cache_read_tokens: 200,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+            },
+        );
+        let mut by_model = BTreeMap::new();
+        by_model.insert(
+            "m1".to_string(),
+            UsageTotals {
+                input_tokens: 1_100,
+                output_tokens: 300,
+                cache_read_tokens: 2_600,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+            },
+        );
+        let session = SessionUsage {
+            source: UsageSource::ClaudeCode,
+            session_id: "s1".to_string(),
+            project_key: "/p".to_string(),
+            first_ts: 1_780_000_000,
+            last_ts: 1_780_086_400,
+            totals: UsageTotals {
+                input_tokens: 1_100,
+                output_tokens: 300,
+                cache_read_tokens: 2_600,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+            },
+            by_model,
+            by_day,
+            requests: vec![],
+        };
+        let snapshot = StatsSnapshot {
+            dir: std::path::PathBuf::new(),
+            config: None,
+            records: vec![],
+            skipped: 0,
+            project_key: "/p".to_string(),
+            ingestion_on: true,
+            usage_data: Some(UsageData {
+                sessions: vec![session],
+                ..UsageData::default()
+            }),
+            rate_model_id: "m1",
+            rate_model_display: "m1",
+            rate_usd_per_mtok_input: 3.0,
+            assumed_rate: 10.0,
+            now: 1_780_086_400,
+        };
+        let cost_fn =
+            |model: &str, _t: &UsageTotals| -> Option<f64> { (model == "m1").then_some(4.0) };
+        let details = spend_day_details(&snapshot, "2026-06-10", &cost_fn);
+        assert_eq!(details.len(), SPEND_DAYS_WINDOW);
+        let today = details.last().unwrap();
+        assert_eq!(today.day, "2026-06-10");
+        assert_eq!(today.input_side, 800);
+        assert_eq!(today.input_fresh, 600);
+        assert_eq!(today.cache_read, 200);
+        assert_eq!(today.output, 200);
+        // Volume split: day09 = 3000, day10 = 1000 of 4000 total.
+        assert!(
+            (today.cost_usd - 1.0).abs() < 1e-9,
+            "got {}",
+            today.cost_usd
+        );
+        let yesterday = &details[SPEND_DAYS_WINDOW - 2];
+        assert_eq!(yesterday.day, "2026-06-09");
+        assert!((yesterday.cost_usd - 3.0).abs() < 1e-9);
+        // Untouched days render as zeros, never holes.
+        assert_eq!(details[0].input_side, 0);
+        assert_eq!(details[0].cost_usd, 0.0);
     }
 }

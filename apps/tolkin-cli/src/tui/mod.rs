@@ -1,23 +1,22 @@
 //! Tolkin dashboard.
 //!
-//! Three tabs (Project default, Machine, Spend), synchronous event loop with
-//! crossterm, ratatui 0.29 widgets. Terminal setup and teardown is panic-safe:
-//! a panic hook restores the cooked terminal before re-raising, so a crash in
-//! a widget never leaves the user in raw-mode no-echo with a hidden cursor.
+//! Four tabs (Overview default, Project, Machine, Spend) on an Elm-shaped
+//! synchronous core: an input thread plus worker threads feed one mpsc
+//! channel, the main loop blocks on `recv_timeout` (33 ms while animating,
+//! 1 s idle), `app::update` mutates the model, `app::view` renders pure.
+//! Terminal setup and teardown is panic-safe: a panic hook restores the
+//! cooked terminal before re-raising, so a crash in a widget never leaves
+//! the user in raw-mode no-echo with a hidden cursor.
 
 use std::env;
-use std::io::{self, Stdout};
-use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::io::{self, Stdout, Write};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
-use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-    },
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -26,18 +25,33 @@ use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 
 use crate::commands::stats_data::StatsSnapshot;
-use crate::project::{self, ProjectOptions, ProjectReport};
 
 // Exception flagged in the I5 report-implementation plan: `commands::report`
 // reuses the 30-day spend bar merge from `tui::data` instead of duplicating
-// the calendar logic. The whole module stays pub for that reason; nothing else
-// reaches into it.
+// the calendar logic. The whole module stays pub for that reason; nothing
+// else reaches into it.
 pub mod data;
-mod ui;
 
-use ui::{DashboardView, ProjectScanState, Tab};
+mod anim;
+mod app;
+mod components;
+mod event;
+mod format;
+mod keymap;
+mod screens;
+mod theme;
 
-const TICK_MS: u64 = 1_000;
+use anim::Animator;
+use app::{Cmd, Model};
+use event::Msg;
+
+/// Frame cadence while a tween or spinner runs (about 30 fps).
+const ANIM_TICK_MS: u64 = 33;
+/// Setup-screen cadence while the border pulse breathes (section 5: the
+/// 4600 ms sine only needs a 100 ms sample rate).
+const PULSE_TICK_MS: u64 = 100;
+/// Idle cadence: one tick per second refreshes relative times.
+const IDLE_TICK_MS: u64 = 1_000;
 
 /// Open the dashboard. Assumes the caller has already verified a TTY.
 pub fn run() -> Result<()> {
@@ -48,111 +62,24 @@ pub fn run() -> Result<()> {
     outcome
 }
 
-/// Render a single static frame to a string. Used by `tolkin stats --compact`
-/// for screenshot/share artifacts. No raw mode, no alternate screen, no event
-/// loop; works under non-TTY stdio.
+/// Render a single static frame to a string. Used by `tolkin stats
+/// --compact` for screenshot/share artifacts. No raw mode, no alternate
+/// screen, no event loop; works under non-TTY stdio. Deterministic: the
+/// animator is disabled so every surface renders at rest.
 pub fn render_compact_frame() -> Result<String> {
-    let snapshot = match StatsSnapshot::load() {
-        Some(s) => s,
-        // No data dir at all: render the same setup card the dashboard uses.
-        None => return render_setup_only(),
-    };
-    let frame = render_static_frame(&snapshot, 100, 30)?;
-    Ok(frame)
+    render_static_frame(StatsSnapshot::load(), 100, 30)
 }
 
-fn render_setup_only() -> Result<String> {
-    let backend = TestBackend::new(100, 30);
-    let mut terminal: Terminal<TestBackend> = Terminal::new(backend)?;
-    terminal.draw(|frame| {
-        let view = DashboardView {
-            tab: Tab::Project,
-            project_key: "",
-            records: &[],
-            scan: &ProjectScanState::None,
-            project_report: &empty_report(),
-            global_report: &empty_report(),
-            global_projects: &[],
-            spend_days: &[],
-            spend_models: &[],
-            cache: None,
-            advisories: None,
-            ingestion_on: false,
-            setup_needed: true,
-            rate_model_display: "",
-            prices_observed: "",
-        };
-        ui::render(frame, &view);
-    })?;
-    Ok(buffer_to_string(terminal.backend().buffer()))
-}
-
-fn empty_report() -> crate::tiers::TierReport {
-    crate::tiers::TierReport {
-        identified: None,
-        realized: None,
-        measured: None,
-        notes: Vec::new(),
-    }
-}
-
-/// Render exactly one frame of the live dashboard into a TestBackend buffer,
-/// then return its textual flattening. This is the entry point for the
-/// compact frame artifact and the snapshot-style test.
-fn render_static_frame(snapshot: &StatsSnapshot, w: u16, h: u16) -> Result<String> {
-    let project_report = snapshot.compute_project();
-    let global_report = snapshot.compute_global();
-    let sessions = data::sessions_by_project(snapshot);
-    let machine = data::machine_projects(&snapshot.records, &sessions);
-    let today = data::day_string(snapshot.now);
-    let spend_days = data::spend_day_bars(snapshot, &today);
-    let spend_models = data::top_model_rows(&global_report);
-    // The Spend tab is global scope, so its cache health row is too.
-    let cache_report = snapshot.compute_cache(None);
-    let advisory_block = snapshot.compute_advisories(&global_report);
-
-    // Static frame: try the project scan inline (the compact frame is a
-    // one-shot snapshot, no background thread). If it fails for any reason we
-    // fall back to "no scan" rather than aborting the artifact.
-    let scan_state = inline_scan_or_none(&snapshot.project_key);
-
+/// One static frame at the given size through the same view code the live
+/// dashboard uses. `None` renders the setup card.
+fn render_static_frame(snapshot: Option<StatsSnapshot>, w: u16, h: u16) -> Result<String> {
+    let theme_env = theme::ThemeEnv::from_env();
+    let selected = theme::select(&theme_env, config_theme(snapshot.as_ref()).as_deref());
+    let model = Model::compact(snapshot.map(Box::new), selected);
     let backend = TestBackend::new(w, h);
     let mut terminal: Terminal<TestBackend> = Terminal::new(backend)?;
-    let setup_needed = snapshot.config.is_none() && snapshot.records.is_empty();
-    terminal.draw(|frame| {
-        let view = DashboardView {
-            tab: Tab::Project,
-            project_key: snapshot.project_key.as_str(),
-            records: &snapshot.records,
-            scan: &scan_state,
-            project_report: &project_report,
-            global_report: &global_report,
-            global_projects: &machine,
-            spend_days: &spend_days,
-            spend_models: &spend_models,
-            cache: cache_report.as_ref(),
-            advisories: advisory_block.as_ref(),
-            ingestion_on: snapshot.ingestion_on,
-            setup_needed,
-            rate_model_display: snapshot.rate_model_display,
-            prices_observed: tolkin_core::pricing::PRICES_OBSERVED,
-        };
-        ui::render(frame, &view);
-    })?;
+    terminal.draw(|frame| app::view(frame, &model))?;
     Ok(buffer_to_string(terminal.backend().buffer()))
-}
-
-fn inline_scan_or_none(project_key: &str) -> ProjectScanState {
-    let path = PathBuf::from(project_key);
-    if !path.is_dir() {
-        return ProjectScanState::None;
-    }
-    let opts = ProjectOptions {
-        experimental: false,
-        max_file_bytes: 2_000_000,
-        top: 16,
-    };
-    ProjectScanState::Ready(Box::new(project::analyze(&path, &opts)))
 }
 
 fn buffer_to_string(buf: &Buffer) -> String {
@@ -167,160 +94,122 @@ fn buffer_to_string(buf: &Buffer) -> String {
     out
 }
 
+/// The persisted dashboard theme from the snapshot's config, if any. Feeds
+/// `theme::select`'s middle precedence rung (env, config, default).
+fn config_theme(snapshot: Option<&StatsSnapshot>) -> Option<String> {
+    snapshot
+        .and_then(|s| s.config.as_ref())
+        .and_then(|c| c.ui_theme.clone())
+}
+
 fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    let mut snapshot = StatsSnapshot::load();
-    let mut tab = Tab::Project;
-    let mut scan_state = ProjectScanState::Scanning;
-    let mut scan_rx = spawn_scan(snapshot.as_ref());
+    let theme_env = theme::ThemeEnv::from_env();
+    let reduced_motion = env::var("TOLKIN_REDUCED_MOTION").is_ok_and(|v| v == "1");
+    let snapshot = StatsSnapshot::load();
+    let selected = theme::select(&theme_env, config_theme(snapshot.as_ref()).as_deref());
 
+    let (tx, rx) = mpsc::channel::<Msg>();
+    event::spawn_input(tx.clone());
+
+    let mut model = Model::new(
+        snapshot.map(Box::new),
+        selected,
+        theme_env,
+        Animator::system(!reduced_motion),
+        event::now_epoch(),
+    );
+    if let Ok(size) = terminal.size() {
+        model.viewport = (size.width, size.height);
+    }
+    if dispatch(terminal, &tx, model.start_initial_scan()) {
+        return Ok(());
+    }
+
+    // Direct clock read, by ruling: the loop's tick delta is scheduling
+    // (spinner cadence bookkeeping), not animation; tween time flows
+    // exclusively through the Animator's Clock.
+    let mut last_loop = Instant::now();
     loop {
-        // Drain any pending scan results before drawing.
-        if let Some(rx) = scan_rx.as_ref() {
-            match rx.try_recv() {
-                Ok(Ok(report)) => {
-                    scan_state = ProjectScanState::Ready(Box::new(report));
-                    scan_rx = None;
-                }
-                Ok(Err(msg)) => {
-                    scan_state = ProjectScanState::Failed(msg);
-                    scan_rx = None;
-                }
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {
-                    scan_state = ProjectScanState::Failed("scan worker disconnected".into());
-                    scan_rx = None;
-                }
+        terminal.draw(|frame| app::view(frame, &model))?;
+
+        // Reduced motion idles even while busy: the spinner is a static
+        // glyph there, so 30 fps would only burn battery. Worker completion
+        // messages wake the loop regardless of cadence.
+        let cadence = if (model.is_busy() && model.animator.enabled()) || model.animator.active() {
+            ANIM_TICK_MS
+        } else if model.derived.setup_needed && model.animator.enabled() {
+            PULSE_TICK_MS
+        } else {
+            IDLE_TICK_MS
+        };
+        let msg = match rx.recv_timeout(Duration::from_millis(cadence)) {
+            Ok(msg) => msg,
+            Err(RecvTimeoutError::Timeout) => Msg::Tick {
+                now_epoch: event::now_epoch(),
+                delta_ms: last_loop.elapsed().as_millis() as u64,
+            },
+            // Input thread gone: nothing can ever arrive again.
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+        };
+        last_loop = Instant::now();
+        if dispatch(terminal, &tx, app::update(&mut model, msg)) {
+            return Ok(());
+        }
+        // Drain whatever queued while rendering (resize bursts, fast keys).
+        while let Ok(extra) = rx.try_recv() {
+            if dispatch(terminal, &tx, app::update(&mut model, extra)) {
+                return Ok(());
             }
-        }
-
-        terminal.draw(|frame| {
-            draw_with_state(frame, snapshot.as_ref(), &scan_state, tab);
-        })?;
-
-        if event::poll(Duration::from_millis(TICK_MS))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                match (key.code, key.modifiers) {
-                    (KeyCode::Char('q') | KeyCode::Esc, _) => break,
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
-                    (KeyCode::Tab | KeyCode::Right, _) => tab = tab.next(),
-                    (KeyCode::BackTab | KeyCode::Left, _) => tab = tab.prev(),
-                    (KeyCode::Char('r'), _) => {
-                        snapshot = StatsSnapshot::load();
-                        scan_state = ProjectScanState::Scanning;
-                        scan_rx = spawn_scan(snapshot.as_ref());
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn draw_with_state(
-    frame: &mut ratatui::Frame,
-    snapshot: Option<&StatsSnapshot>,
-    scan_state: &ProjectScanState,
-    tab: Tab,
-) {
-    match snapshot {
-        Some(s) => {
-            let project_report = s.compute_project();
-            let global_report = s.compute_global();
-            let sessions = data::sessions_by_project(s);
-            let machine = data::machine_projects(&s.records, &sessions);
-            let today = data::day_string(s.now);
-            let spend_days = data::spend_day_bars(s, &today);
-            let spend_models = data::top_model_rows(&global_report);
-            // The Spend tab is global scope, so its cache health row is too.
-            let cache_report = s.compute_cache(None);
-            let advisory_block = s.compute_advisories(&global_report);
-            let setup_needed = s.config.is_none() && s.records.is_empty();
-            let view = DashboardView {
-                tab,
-                project_key: s.project_key.as_str(),
-                records: &s.records,
-                scan: scan_state,
-                project_report: &project_report,
-                global_report: &global_report,
-                global_projects: &machine,
-                spend_days: &spend_days,
-                spend_models: &spend_models,
-                cache: cache_report.as_ref(),
-                advisories: advisory_block.as_ref(),
-                ingestion_on: s.ingestion_on,
-                setup_needed,
-                rate_model_display: s.rate_model_display,
-                prices_observed: tolkin_core::pricing::PRICES_OBSERVED,
-            };
-            ui::render(frame, &view);
-        }
-        None => {
-            let view = DashboardView {
-                tab,
-                project_key: "",
-                records: &[],
-                scan: scan_state,
-                project_report: &empty_report(),
-                global_report: &empty_report(),
-                global_projects: &[],
-                spend_days: &[],
-                spend_models: &[],
-                cache: None,
-                advisories: None,
-                ingestion_on: false,
-                setup_needed: true,
-                rate_model_display: "",
-                prices_observed: "",
-            };
-            ui::render(frame, &view);
         }
     }
 }
 
-/// Spawn a background project scan. Returns None if the cwd is not a
-/// directory (the receiver-half is never created and the UI shows fallback
-/// state).
-fn spawn_scan(snapshot: Option<&StatsSnapshot>) -> Option<Receiver<Result<ProjectReport, String>>> {
-    let project_key = snapshot.map(|s| s.project_key.clone()).unwrap_or_default();
-    if project_key.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(&project_key);
-    if !path.is_dir() {
-        return None;
-    }
-    let (tx, rx) = mpsc::channel();
-    let cwd = env::current_dir().ok();
-    thread::spawn(move || {
-        let root = match cwd.and_then(|c| c.canonicalize().ok()) {
-            Some(p) => p,
-            None => {
-                let _ = tx.send(Err("cwd not resolvable".to_string()));
-                return;
+/// Run side effects. Returns true when the loop should quit. The terminal
+/// handle carries the OSC52 escape straight to the hosting emulator.
+fn dispatch(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    tx: &Sender<Msg>,
+    cmds: Vec<Cmd>,
+) -> bool {
+    for cmd in cmds {
+        match cmd {
+            Cmd::Quit => return true,
+            Cmd::SpawnScan(root) => event::spawn_scan(tx.clone(), root),
+            Cmd::ReloadSnapshot => event::spawn_reload(tx.clone()),
+            Cmd::RunAudit { root, path } => event::spawn_audit(tx.clone(), root, path),
+            Cmd::RunReport => event::spawn_report(tx.clone()),
+            Cmd::CopyOsc52(payload) => {
+                let backend = terminal.backend_mut();
+                let _ = write!(backend, "{}", format::osc52(&payload));
+                let _ = backend.flush();
             }
-        };
-        let opts = ProjectOptions {
-            experimental: false,
-            max_file_bytes: 2_000_000,
-            top: 16,
-        };
-        let report = project::analyze(&root, &opts);
-        let _ = tx.send(Ok(report));
-    });
-    Some(rx)
+            // A tiny TOML write; inline rather than a worker.
+            Cmd::PersistTheme(name) => event::persist_theme(&name),
+        }
+    }
+    false
 }
 
 fn enter_raw() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let terminal = Terminal::new(backend)?;
-    Ok(terminal)
+    // Anything failing after enable_raw_mode() succeeded must put the
+    // terminal back before erroring, or the shell is left in raw-mode
+    // no-echo with no event loop ever reaching restore_terminal().
+    let setup = || -> Result<Terminal<CrosstermBackend<Stdout>>> {
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        Ok(Terminal::new(CrosstermBackend::new(stdout))?)
+    };
+    match setup() {
+        Ok(terminal) => Ok(terminal),
+        Err(err) => {
+            let _ = disable_raw_mode();
+            // Best effort: the alternate screen may or may not have
+            // flipped before the failure; leaving it twice is harmless.
+            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            Err(err)
+        }
+    }
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
@@ -336,9 +225,14 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 
 type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static>;
 
-/// Install a panic hook that puts the terminal back into a usable state before
-/// delegating to the previously-installed hook. Idempotent: subsequent calls
-/// in the same process leave the prior hook chain in place.
+/// Install a panic hook that puts the terminal back into a usable state
+/// before delegating to the previously-installed hook. Idempotent:
+/// subsequent calls in the same process leave the prior hook chain in
+/// place. Only a MAIN-thread panic restores: it kills the event loop, so
+/// cooked is correct. Worker threads catch their own unwinds (event.rs)
+/// and report through the channel; the hook still fires before their
+/// catch_unwind lands, and restoring from under the live loop would leave
+/// the dashboard drawing into a cooked main-screen terminal.
 fn install_panic_hook() {
     static HOOK: OnceLock<()> = OnceLock::new();
     static PREV: Mutex<Option<PanicHook>> = Mutex::new(None);
@@ -346,8 +240,10 @@ fn install_panic_hook() {
         let prev = std::panic::take_hook();
         *PREV.lock().expect("panic hook mutex poisoned") = Some(prev);
         std::panic::set_hook(Box::new(|info| {
-            let _ = disable_raw_mode();
-            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            if std::thread::current().name() == Some("main") {
+                let _ = disable_raw_mode();
+                let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            }
             if let Some(prev) = PREV.lock().expect("panic hook mutex poisoned").as_ref() {
                 prev(info);
             }
@@ -361,6 +257,7 @@ mod tests {
     use crate::ledger::{self, Config};
     use serde_json::json;
     use std::fs;
+    use std::path::PathBuf;
 
     fn tmp_dir(name: &str) -> PathBuf {
         let dir =
@@ -445,38 +342,29 @@ mod tests {
             now: 1_749_513_600,
         });
 
-        let project_report = snapshot.compute_project();
-        let global_report = snapshot.compute_global();
+        // Seed the model with the computed block the way a snapshot
+        // recompute would: lines derive from the same advisory source.
+        let theme = theme::by_name("tolkin-dark", true).unwrap();
+        let mut model = Model::compact(Some(Box::new(snapshot)), theme);
+        model.derived.ingestion_on = true;
+        model.derived.advisory_lines = crate::advisories::tui_compact_lines(&adv_block);
+        model.derived.advisories = Some(adv_block);
+        model.tab = keymap::TabId::Spend;
+
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
         terminal
-            .draw(|frame| {
-                let view = DashboardView {
-                    tab: Tab::Spend,
-                    project_key: "/tmp/test",
-                    records: &snapshot.records,
-                    scan: &ProjectScanState::None,
-                    project_report: &project_report,
-                    global_report: &global_report,
-                    global_projects: &[],
-                    spend_days: &[],
-                    spend_models: &[],
-                    cache: None,
-                    advisories: Some(&adv_block),
-                    ingestion_on: true,
-                    setup_needed: false,
-                    rate_model_display: "claude-sonnet-4.6",
-                    prices_observed: "2026-06-10",
-                };
-                ui::render(frame, &view);
-            })
+            .draw(|frame| app::view(frame, &model))
             .expect("draw");
 
         let buf = buffer_to_string(terminal.backend().buffer());
-        // The output share line must appear in the Spend tab buffer.
+        // The FULL compact output-share line must appear in the Spend tab
+        // buffer: $3.00 of output against the $3.50 priced bill is 85.7%.
+        // (A bare "output" substring would be satisfied by the honesty
+        // footer alone and prove nothing about the advisory list.)
         assert!(
-            buf.contains("output share") || buf.contains("output"),
-            "output share line must appear in Spend tab buffer; buffer:\n{buf}"
+            buf.contains("output share  85.7% of bill (200,000 tokens, $3.0000)"),
+            "compact advisory line must appear in the Spend tab buffer; buffer:\n{buf}"
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -504,8 +392,9 @@ mod tests {
         )
         .expect("append");
         let snapshot = StatsSnapshot::load_in(&dir);
-        let frame = render_static_frame(&snapshot, 100, 40).expect("render");
+        let frame = render_static_frame(Some(snapshot), 100, 40).expect("render");
         assert!(frame.contains("tolkin"), "header missing: {frame}");
+        assert!(frame.contains("Overview"));
         assert!(frame.contains("Project"));
         assert!(frame.contains("Machine"));
         assert!(frame.contains("Spend"));
@@ -513,12 +402,62 @@ mod tests {
             frame.contains("input savings, output may vary"),
             "honesty line missing"
         );
-        // A tier label must reach the buffer (advisory estimate is the
-        // identified tier label and shows up on the Project tab summary line).
+        // A tier label must reach the buffer: the Overview reclaimable card
+        // carries the "advisory" tag for the seeded identified range.
         assert!(
             frame.contains("advisory"),
             "tier label missing from frame: {frame}"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_static_frame_without_data_dir_shows_setup_card() {
+        let frame = render_static_frame(None, 100, 30).expect("render");
+        assert!(frame.contains("tolkin init"), "setup card missing: {frame}");
+        assert!(frame.contains("q to quit"));
+    }
+
+    /// The compact frame is a shareable artifact: two renders of the same
+    /// data dir must be byte-identical (animator disabled, no selection
+    /// chrome, ages pinned to the snapshot's load time).
+    #[test]
+    fn static_frame_is_byte_deterministic_and_selection_free() {
+        let dir = tmp_dir("frame-determinism");
+        let cfg = Config::new(true, false);
+        ledger::save_config_to(&dir, &cfg).expect("save config");
+        ledger::append_in(
+            &dir,
+            "project",
+            &dir,
+            json!({
+                "always_tokens": 9_000,
+                "reclaimable_min": 200,
+                "reclaimable_max": 800,
+                "files_scanned": 120,
+            }),
+        )
+        .expect("append");
+        let first = render_static_frame(Some(StatsSnapshot::load_in(&dir)), 100, 30).unwrap();
+        let second = render_static_frame(Some(StatsSnapshot::load_in(&dir)), 100, 30).unwrap();
+        assert_eq!(first, second, "compact frame must render byte-stable");
+        // No selection artifacts: the rail glyph never reaches the buffer.
+        assert!(
+            !first.contains('▌'),
+            "selection rail leaked into the static frame:\n{first}"
+        );
+        // The Overview surfaces are all present in the artifact.
+        for needle in [
+            "today",
+            "30 days",
+            "cache hit",
+            "reclaimable",
+            "spend, last 30 days",
+            "this machine",
+            "advisory",
+        ] {
+            assert!(first.contains(needle), "{needle} missing:\n{first}");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }

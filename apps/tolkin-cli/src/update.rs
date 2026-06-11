@@ -236,15 +236,23 @@ pub fn passive_refresh_and_notice() -> Option<String> {
 /// when last_seen_latest is Some and semver-greater than current.
 /// `passive_refresh_and_notice` supplies the persisted last-seen value.
 pub fn passive_notice_line(current: &str, last_seen_latest: Option<&str>) -> Option<String> {
-    let latest = last_seen_latest?;
-    if cmp_semver(latest, current) == Ordering::Greater {
-        Some(format!(
+    known_newer_version(current, last_seen_latest).map(|latest| {
+        format!(
             "tolkin {} is available (you have {}). Run: tolkin update",
             latest, current
-        ))
-    } else {
-        None
-    }
+        )
+    })
+}
+
+/// The cached known-newer version, if any. Pure read over the persisted
+/// last-seen value: zero IO, zero network. The TUI header's update chip
+/// consumes this through the snapshot's config.
+pub fn known_newer_version<'a>(
+    current: &str,
+    last_seen_latest: Option<&'a str>,
+) -> Option<&'a str> {
+    let latest = last_seen_latest?;
+    (cmp_semver(latest, current) == Ordering::Greater).then_some(latest)
 }
 
 // ---- tests ------------------------------------------------------------------
@@ -421,6 +429,19 @@ mod tests {
     #[test]
     fn passive_notice_none_when_no_last_seen() {
         assert!(passive_notice_line("0.12.0", None).is_none());
+    }
+
+    // known_newer_version (the TUI update chip seam)
+
+    #[test]
+    fn known_newer_version_only_reports_strictly_newer_cached_values() {
+        assert_eq!(
+            known_newer_version("0.14.0", Some("0.15.0")),
+            Some("0.15.0")
+        );
+        assert_eq!(known_newer_version("0.14.0", Some("0.14.0")), None);
+        assert_eq!(known_newer_version("0.15.0", Some("0.14.0")), None);
+        assert_eq!(known_newer_version("0.14.0", None), None);
     }
 
     // should_refresh

@@ -79,6 +79,7 @@ fn stats_compact_renders_frame_and_exits_zero() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("tolkin"), "header missing: {stdout}");
+    assert!(stdout.contains("Overview"), "Overview tab title missing");
     assert!(stdout.contains("Project"), "Project tab title missing");
     assert!(stdout.contains("Machine"), "Machine tab title missing");
     assert!(stdout.contains("Spend"), "Spend tab title missing");
@@ -116,6 +117,94 @@ fn stats_compact_without_config_shows_setup_card() {
     let out = cmd(&dir).arg("stats").arg("--compact").output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("Setup") || stdout.contains("tolkin init"));
+    // Both strings are unique to the setup card: the onboarding command
+    // and the quit affordance. (A disjunction here once let any frame
+    // mentioning init pass.)
+    assert!(
+        stdout.contains("tolkin init"),
+        "setup card must name the onboarding command: {stdout}"
+    );
+    assert!(
+        stdout.contains("q to quit"),
+        "setup card must carry the quit affordance: {stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+fn seed_ledger_record(dir: &Path) {
+    // One project snapshot in the ledger's on-disk format (LedgerRecord):
+    // the compact frame then renders real numbers instead of empty states.
+    let mut f = fs::File::create(dir.join("ledger.jsonl")).unwrap();
+    writeln!(
+        f,
+        "{}",
+        concat!(
+            r#"{"v":1,"ts":1781100000,"command":"project","project_key":"/tmp/repo","#,
+            r#""headline":{"always_tokens":9000,"reclaimable_min":200,"reclaimable_max":800,"#,
+            r#""files_scanned":120},"tolkin_version":"0.14.0","prices_observed":"2026-06-10"}"#
+        )
+    )
+    .unwrap();
+}
+
+#[test]
+fn stats_compact_is_byte_deterministic_for_a_fixed_data_dir() {
+    // The compact frame is a shareable artifact: two runs over the same
+    // seeded dir must produce identical bytes (animator disabled, no
+    // selection chrome, ages pinned to the snapshot clock).
+    let dir = tmp("compact-deterministic");
+    seed_config(&dir, false);
+    seed_ledger_record(&dir);
+    let run = || {
+        let out = cmd(&dir).arg("stats").arg("--compact").output().unwrap();
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out.stdout
+    };
+    let first = run();
+    let second = run();
+    assert_eq!(
+        first, second,
+        "compact frames diverged across identical runs"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn reduced_motion_env_does_not_change_the_compact_contract() {
+    // TOLKIN_REDUCED_MOTION must be a no-op for the (already static)
+    // compact frame: same chrome, same honesty line, byte-equal output.
+    let dir = tmp("compact-reduced-motion");
+    seed_config(&dir, false);
+    seed_ledger_record(&dir);
+    let baseline = cmd(&dir).arg("stats").arg("--compact").output().unwrap();
+    let reduced = cmd(&dir)
+        .env("TOLKIN_REDUCED_MOTION", "1")
+        .arg("stats")
+        .arg("--compact")
+        .output()
+        .unwrap();
+    assert!(baseline.status.success() && reduced.status.success());
+    let text = String::from_utf8_lossy(&reduced.stdout);
+    for needle in [
+        "tolkin",
+        "Overview",
+        "Project",
+        "Machine",
+        "Spend",
+        "input savings, output may vary",
+    ] {
+        assert!(
+            text.contains(needle),
+            "{needle} missing under reduced motion"
+        );
+    }
+    assert_eq!(
+        baseline.stdout, reduced.stdout,
+        "reduced motion altered the static frame"
+    );
     let _ = fs::remove_dir_all(&dir);
 }

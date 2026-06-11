@@ -1,0 +1,251 @@
+//! Machine tab: totals cards plus the ranked, selectable project list with
+//! animated weight bars and relative "as of" timestamps.
+
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
+use ratatui::Frame;
+
+use crate::tui::anim::{self, AnimKey};
+use crate::tui::app::{reveal, FilterTarget, Model};
+use crate::tui::components::card::{render_stat_card, value_line, StatCard};
+use crate::tui::components::list::{render_select_list_window, visible_window};
+use crate::tui::format;
+
+use crate::tui::theme::Theme;
+
+use super::{muted_line, panel, panel_with_accessory};
+
+/// Vertical body split: totals cards, gap, project list. Shared by render
+/// and the mouse hit-testing helper below.
+fn rows(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Length(1),
+        Constraint::Min(5),
+    ])
+    .split(area)
+}
+
+/// Inner rect of the projects select-list for mouse hit-testing; mirrors
+/// render()'s layout exactly, including the filter line row.
+pub fn projects_list_inner(body: Rect, filter_active: bool, theme: &Theme) -> Rect {
+    let inner = panel("projects (j/k)".to_string(), true, theme).inner(rows(body)[2]);
+    if filter_active {
+        super::below_filter_line(inner)
+    } else {
+        inner
+    }
+}
+
+pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
+    let rows = rows(area);
+    render_cards(frame, rows[0], model);
+    render_projects(frame, rows[2], model);
+}
+
+fn render_cards(frame: &mut Frame, area: Rect, model: &Model) {
+    let theme = &model.theme;
+    let report = &model.derived.global_report;
+    let cols = Layout::horizontal([
+        Constraint::Percentage(30),
+        Constraint::Percentage(30),
+        Constraint::Percentage(20),
+        Constraint::Percentage(20),
+    ])
+    .spacing(1)
+    .split(area);
+
+    let identified = match report.identified.as_ref() {
+        Some(id) => StatCard {
+            title: "identified",
+            value: value_line(
+                format!(
+                    "~{} - {} tok",
+                    format::humanize_tokens(id.project_reclaimable_min.unwrap_or(0)),
+                    format::humanize_tokens(id.project_reclaimable_max.unwrap_or(0))
+                ),
+                theme,
+            ),
+            tier: "advisory",
+            hint: None,
+        },
+        None => StatCard {
+            title: "identified",
+            value: Line::default(),
+            tier: "",
+            hint: Some("run tolkin project"),
+        },
+    };
+    render_stat_card(frame, cols[0], &identified, theme);
+
+    let realized = match report.realized.as_ref() {
+        Some(r) => {
+            let sign = if r.tokens >= 0 { "" } else { "-" };
+            StatCard {
+                title: "realized",
+                value: value_line(
+                    format!(
+                        "{sign}{} tok",
+                        format::humanize_tokens(r.tokens.unsigned_abs())
+                    ),
+                    theme,
+                ),
+                tier: "measured structure",
+                hint: None,
+            }
+        }
+        None => StatCard {
+            title: "realized",
+            value: Line::default(),
+            tier: "",
+            hint: Some("needs two snapshots"),
+        },
+    };
+    render_stat_card(frame, cols[1], &realized, theme);
+
+    let projects = StatCard {
+        title: "projects",
+        value: value_line(model.derived.machine.len().to_string(), theme),
+        tier: "ledger",
+        hint: None,
+    };
+    render_stat_card(frame, cols[2], &projects, theme);
+
+    let sessions = match report.measured.as_ref() {
+        Some(m) => StatCard {
+            title: "sessions",
+            value: value_line(format::commas(m.sessions), theme),
+            tier: "measured",
+            hint: None,
+        },
+        None => StatCard {
+            title: "sessions",
+            value: Line::default(),
+            tier: "",
+            // Honest empty state: distinguish consent-off from no data.
+            // Both strings fit the narrowest card at 80 columns.
+            hint: Some(if model.derived.ingestion_on {
+                "none yet"
+            } else {
+                "tolkin init"
+            }),
+        },
+    };
+    render_stat_card(frame, cols[3], &sessions, theme);
+}
+
+const NAME_W: usize = 26;
+/// Right value cluster, sized from its real maximum format width:
+/// 11 (tokens) + 4 (" tok") + 1 + 10 (sessions) + 1 + 5 (relative time,
+/// "1234d" class) + 1 trailing = 33. Undersizing this clips the "as of"
+/// column's tail off the right edge.
+const VALUE_W: usize = 33;
+
+fn render_projects(frame: &mut Frame, area: Rect, model: &Model) {
+    let theme = &model.theme;
+    // The sort indicator lives in the title accessory; `,` cycles it.
+    let block = panel_with_accessory(
+        "projects (j/k)".to_string(),
+        format!("sort: {} (,)", model.machine_sort.label()),
+        true,
+        theme,
+    );
+    let mut inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if let Some((query, typing)) = model.filter_line(FilterTarget::Machine) {
+        frame.render_widget(
+            Paragraph::new(super::filter_line(query, typing, theme)),
+            Rect { height: 1, ..inner },
+        );
+        inner = super::below_filter_line(inner);
+    }
+
+    if model.derived.machine.is_empty() {
+        let lines = vec![
+            muted_line("no projects recorded yet", theme),
+            muted_line("run tolkin project inside a repo to add one", theme),
+        ];
+        frame.render_widget(Paragraph::new(lines), inner);
+        return;
+    }
+    let len = model.visible_machine_len();
+    if len == 0 {
+        frame.render_widget(
+            Paragraph::new(muted_line("no projects match the filter", theme)),
+            inner,
+        );
+        return;
+    }
+
+    let max = (0..len)
+        .filter_map(|i| model.visible_machine_row(i))
+        .map(|p| p.always_tokens)
+        .max()
+        .unwrap_or(0);
+    let bar_width = inner
+        .width
+        .saturating_sub((3 + NAME_W + 1 + VALUE_W) as u16);
+    // Style only the rows the list will blit: the window is about a screen
+    // tall while the ledger can hold hundreds of projects. Reveal and
+    // weight tweens key on project identity, so windowing never changes
+    // which rows animate.
+    let selected = model
+        .selection(model.sel_machine.idx)
+        .map(|s| s.min(len - 1));
+    let (start, end) = visible_window(selected.unwrap_or(0), len, inner.height as usize);
+    let rows: Vec<Line> = (start..end)
+        .filter_map(|i| model.visible_machine_row(i))
+        .map(|p| {
+            let target = if max > 0 {
+                p.always_tokens as f32 / max as f32
+            } else {
+                0.0
+            };
+            // Weight tweens key on the project identity, so filtering and
+            // sorting reorder rows without reassigning their animations;
+            // never-animated keys fall back to the data target.
+            let frac = model
+                .animator
+                .value(AnimKey::Weight(anim::ident(&p.key)), target);
+            let shown = format::truncate_left(&p.key, NAME_W);
+            let (dir, name) = format::split_path(&shown);
+            let pad = NAME_W.saturating_sub(shown.chars().count()) + 1;
+            let sessions = if model.derived.ingestion_on {
+                format!("{:>5} sess", p.sessions)
+            } else {
+                " ".repeat(10)
+            };
+            // The relative-time field is fixed-width so the column never
+            // grows past VALUE_W: "now" through "1234d" all fit in 5.
+            let value = format!(
+                "{:>11} tok {sessions} {:>5} ",
+                format::commas(p.always_tokens),
+                format::relative_time(model.now_epoch, p.last_ts)
+            );
+            let frac = frac.clamp(0.0, 1.0);
+            let filled = ((frac * bar_width as f32).round() as u16).min(bar_width);
+            let line = Line::from(vec![
+                Span::styled(dir.to_string(), Style::default().fg(theme.faint)),
+                Span::styled(name.to_string(), Style::default().fg(theme.text)),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(
+                    "█".repeat(filled as usize),
+                    Style::default().fg(theme.bar_fill),
+                ),
+                Span::styled(
+                    "░".repeat((bar_width - filled) as usize),
+                    Style::default().fg(theme.bar_empty),
+                ),
+                Span::styled(
+                    format!("{value:>VALUE_W$}"),
+                    Style::default().fg(theme.muted),
+                ),
+            ]);
+            super::reveal_row(model, reveal::MACHINE, &p.key, line, theme)
+        })
+        .collect();
+    render_select_list_window(frame, inner, &rows, start, len, selected, true, theme);
+}
