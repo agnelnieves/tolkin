@@ -6,8 +6,8 @@
 # a template. The zeroed sha256 values will not pass `brew install`; that
 # is intentional for a staged template.
 #
-# livecheck is commented out until the first public release of
-# agnelnieves/tolkin exists on GitHub Releases. Enable it then.
+# livecheck enabled 2026-06-11: the first public release (v0.12.0)
+# exists on GitHub Releases, so Homebrew can track new versions.
 
 class Tolkin < Formula
   desc "Privacy-first AI token analyzer for agent workflows"
@@ -47,11 +47,8 @@ class Tolkin < Formula
     assert_match version.to_s, shell_output("#{bin}/tolkin --version")
   end
 
-  # livecheck do
-  #   url :stable
-  #   strategy :github_latest
-  # end
-  # Enable the livecheck block above after the first release exists at
-  # https://github.com/agnelnieves/tolkin/releases so Homebrew can track
-  # new versions automatically.
+  livecheck do
+    url :stable
+    strategy :github_latest
+  end
 end

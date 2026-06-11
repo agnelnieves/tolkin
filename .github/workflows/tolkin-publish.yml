@@ -287,16 +287,12 @@ jobs:
     needs: [gate, publish]
     if: needs.gate.outputs.skip == 'false'
     runs-on: ubuntu-24.04
-    # SOFT JOB: stays continue-on-error until the owner completes the
-    # first-publish checklist below. Flip to strict (remove this line)
-    # after confirming:
-    #   1. agnelnieves/tolkin created (the public binary release host)
-    #   2. agnelnieves/homebrew-tolkin created (the Homebrew tap repo)
-    #   3. Fine-grained PAT with contents read/write on both repos stored
-    #      as HOMEBREW_TAP_TOKEN secret on the private monorepo
-    # Until those repos and the secret exist every step that uses
-    # HOMEBREW_TAP_TOKEN will log a clear message and skip gracefully.
-    continue-on-error: true
+    # STRICT since 2026-06-11: both public repos exist (agnelnieves/tolkin
+    # hosts releases, agnelnieves/homebrew-tolkin is the tap), the
+    # HOMEBREW_TAP_TOKEN fine-grained PAT secret is configured, and the
+    # v0.12.0 release plus the seeded tap were proven with a live
+    # `brew install agnelnieves/tolkin/tolkin`. A failure here fails the
+    # run; the npm publish is a separate job and is unaffected.
     steps:
       - uses: actions/checkout@v6
 

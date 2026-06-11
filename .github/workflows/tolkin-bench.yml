@@ -7,6 +7,15 @@ name: tolkin bench
 
 on:
   workflow_dispatch:
+    inputs:
+      score:
+        description: >-
+          Run the BYOK extraction-QA quality scoring (passes the repo's
+          ANTHROPIC_API_KEY to the harness with --score-quality). The owner
+          keys the run; results carry scored=true with the grader model
+          recorded. Off by default.
+        type: boolean
+        default: false
 
 # Node 20 action runtimes are deprecated; opt into the Node 24 default
 # ahead of the 2026-06-16 flip so incompatibilities surface in CI now.
@@ -57,7 +66,14 @@ jobs:
         run: cargo build --release --manifest-path apps/tolkin-cli/Cargo.toml
 
       - name: Run bench harness
+        if: ${{ !inputs.score }}
         run: bun apps/tolkin-cli/benchmarks/run.ts
+
+      - name: Run bench harness with BYOK quality scoring
+        if: ${{ inputs.score }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: bun apps/tolkin-cli/benchmarks/run.ts --score-quality
 
       - name: Upload results.json and RESULTS.md
         uses: actions/upload-artifact@v7
