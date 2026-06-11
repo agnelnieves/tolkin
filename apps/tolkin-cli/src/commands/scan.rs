@@ -207,6 +207,33 @@ fn render(r: &ScanReport, home: &Path, provider: TokProvider, deep: bool) -> Str
     }
     let _ = writeln!(out);
 
+    // Workflow LLM prompts: per-CI-run, reported in a separate bucket.
+    if !r.workflows_llm.is_empty() {
+        let total_prompt_tokens: u64 = r.workflows_llm.iter().map(|w| w.prompt_tokens).sum();
+        let _ = writeln!(
+            out,
+            "Workflow LLM prompts ({} file(s), ~{} tokens of prompt-bearing fields)",
+            r.workflows_llm.len(),
+            commas(total_prompt_tokens)
+        );
+        for w in &r.workflows_llm {
+            let _ = writeln!(
+                out,
+                "  {}  ~{} prompt tokens",
+                scan::display_path(&w.path, home),
+                commas(w.prompt_tokens)
+            );
+            for f in &w.prompt_fields {
+                let _ = writeln!(out, "    {}: ~{} tokens", f.field, commas(f.tokens));
+            }
+        }
+        let _ = writeln!(
+            out,
+            "  note: workflow prompts load per-CI-run, not per-agent-session; these tokens are not in the always-loaded total above"
+        );
+        let _ = writeln!(out);
+    }
+
     if r.environment.is_empty() {
         let _ = writeln!(out, "Environment: no relevant binaries detected on PATH");
     } else {
@@ -281,10 +308,27 @@ fn to_json(r: &ScanReport, provider: TokProvider) -> Value {
         .map(|s| json!({ "path": s.path, "secret_count": s.secret_count, "kinds": s.kinds }))
         .collect();
 
+    let workflows_llm: Vec<Value> = r
+        .workflows_llm
+        .iter()
+        .map(|w| {
+            json!({
+                "path": w.path,
+                "prompt_tokens": w.prompt_tokens,
+                "prompt_fields": w.prompt_fields.iter().map(|f| json!({
+                    "field": f.field,
+                    "tokens": f.tokens,
+                })).collect::<Vec<_>>(),
+                "note": "Workflow prompts load per-CI-run, not per-agent-session. These tokens are not included in always-loaded totals.",
+            })
+        })
+        .collect();
+
     json!({
         "mcp": mcp,
         "instruction_files": instruction_files,
         "shell": shell,
+        "workflows_llm": workflows_llm,
         "environment": r.environment,
         "warnings": r.warnings,
         "totals": {
@@ -295,6 +339,8 @@ fn to_json(r: &ScanReport, provider: TokProvider) -> Value {
             "instruction_files": r.instruction_files.len(),
             "instruction_tokens": r.instruction_files.iter().map(|f| f.tokens).sum::<u64>(),
             "shell_secret_count": r.shell.iter().map(|s| s.secret_count).sum::<usize>(),
+            "workflows_llm_files": r.workflows_llm.len(),
+            "workflows_llm_prompt_tokens": r.workflows_llm.iter().map(|w| w.prompt_tokens).sum::<u64>(),
             "provider": provider.slug(),
         },
     })
@@ -338,6 +384,7 @@ mod tests {
             mcp: vec![],
             instruction_files: vec![],
             shell: vec![],
+            workflows_llm: vec![],
             environment: vec![],
             warnings: vec![],
         }
@@ -373,6 +420,7 @@ mod tests {
                 secret_count: 2,
                 kinds: vec!["openai-key".to_string(), "high-entropy".to_string()],
             }],
+            workflows_llm: vec![],
             environment: vec!["node".to_string(), "gh".to_string()],
             warnings: vec![],
         }

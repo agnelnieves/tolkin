@@ -422,6 +422,7 @@ pub fn analyze_tool_inventory(
     rows.sort_by(|a, b| b.tokens.cmp(&a.tokens).then(a.name.cmp(&b.name)));
 
     let mut smells = Vec::new();
+    lint_duplicate_names(tools, &mut smells);
     lint_leading_verb(tools, &mut smells);
     lint_output_shape(tools, &mut smells);
     lint_over_long(tools, &mut smells);
@@ -478,6 +479,36 @@ fn is_purpose_verb(word: &str) -> bool {
         }
     }
     false
+}
+
+/// Flag tool manifests where two or more tools share the same name. The MCP
+/// spec requires tool names to be unique within a server; a duplicate makes
+/// the second tool unreachable (clients deduplicate by name, so the later
+/// entry shadows the earlier). This smell is `duplicate-tool-name`.
+fn lint_duplicate_names(tools: &[ToolTokenCount], smells: &mut Vec<ToolSmell>) {
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for t in tools {
+        *counts.entry(t.name.as_str()).or_insert(0) += 1;
+    }
+    let duplicates: Vec<String> = counts
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(name, _)| name.to_string())
+        .collect();
+    if duplicates.is_empty() {
+        return;
+    }
+    smells.push(ToolSmell {
+        rule: "duplicate-tool-name".to_string(),
+        tools: duplicates.clone(),
+        detail: format!(
+            "{} tool name(s) appear more than once in this manifest: {}. The MCP spec requires unique names; a duplicate makes the repeated tool unreachable because clients deduplicate by name.",
+            duplicates.len(),
+            duplicates.join(", ")
+        ),
+        recommendation: "Rename or remove the duplicate tools so every name in the manifest is unique.".to_string(),
+    });
 }
 
 fn lint_leading_verb(tools: &[ToolTokenCount], smells: &mut Vec<ToolSmell>) {
@@ -992,5 +1023,70 @@ mod tests {
         ] {
             assert!(json.contains(key), "missing {key}");
         }
+    }
+
+    #[test]
+    fn lint_duplicate_tool_name_fires_and_names_duplicates() {
+        let inv = analyze_tool_inventory(
+            &[
+                tool("search", "Search for items. Returns a list.", 60, 8),
+                tool("list_files", "List files. Returns an array.", 55, 7),
+                tool("search", "Search the repository. Returns matches.", 65, 8),
+            ],
+            "o200k_base",
+        )
+        .unwrap();
+        let smell = inv
+            .smells
+            .iter()
+            .find(|s| s.rule == "duplicate-tool-name")
+            .expect("duplicate-tool-name smell must fire");
+        assert_eq!(smell.tools, vec!["search".to_string()]);
+        assert!(
+            smell.detail.contains("search"),
+            "detail must name the duplicate: {}",
+            smell.detail
+        );
+        assert!(
+            smell.detail.contains("unreachable"),
+            "detail must explain the impact: {}",
+            smell.detail
+        );
+    }
+
+    #[test]
+    fn lint_duplicate_tool_name_silent_when_all_unique() {
+        let inv = analyze_tool_inventory(
+            &[
+                tool("search", "Search for items. Returns a list.", 60, 8),
+                tool("list", "List files. Returns an array.", 55, 7),
+                tool("create", "Create an item. Returns the new item.", 60, 8),
+            ],
+            "o200k_base",
+        )
+        .unwrap();
+        assert!(
+            !inv.smells.iter().any(|s| s.rule == "duplicate-tool-name"),
+            "should not fire when names are unique"
+        );
+    }
+
+    #[test]
+    fn lint_duplicate_tool_name_catches_triple_duplicate() {
+        let inv = analyze_tool_inventory(
+            &[
+                tool("fetch", "Fetch resource. Returns content.", 55, 8),
+                tool("fetch", "Fetch data. Returns JSON.", 55, 8),
+                tool("fetch", "Fetch result. Returns text.", 55, 8),
+            ],
+            "o200k_base",
+        )
+        .unwrap();
+        let smell = inv
+            .smells
+            .iter()
+            .find(|s| s.rule == "duplicate-tool-name")
+            .expect("duplicate-tool-name must fire for triple duplicate");
+        assert_eq!(smell.tools, vec!["fetch".to_string()]);
     }
 }

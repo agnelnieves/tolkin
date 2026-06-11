@@ -711,7 +711,10 @@ fn render_cache_and_cost(frame: &mut Frame, view: &DashboardView, area: Rect) {
                 "\u{2591}".repeat(empty as usize),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(format!(" {hit:>5.1}%"), Style::default().fg(Color::White)),
+            Span::styled(
+                format!(" {hit:>5.1}% of input"),
+                Style::default().fg(Color::White),
+            ),
         ]));
         if let Some(cache_report) = view.cache {
             lines.push(cache_health_line(cache_report));

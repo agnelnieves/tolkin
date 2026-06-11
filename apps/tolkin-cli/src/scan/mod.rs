@@ -289,10 +289,19 @@ pub static MCP_CATALOG: &[McpSource] = &[
 ];
 
 const INSTRUCTION_HOME: &[&str] = &[".claude/CLAUDE.md", ".codex/AGENTS.md"];
+// Per-file (or per-directory) instruction surfaces loaded into agent context.
+//
+// EXCLUDED DELIBERATELY:
+//   - promptfoo.yaml: configures eval harnesses, not loaded into agent context.
+//   - litellm.yaml: configures an LLM proxy, not loaded into agent context.
+// Counting those files would mislead users about what tokens their agent sees.
+// The workflows detector (item c) handles .github/workflows prompts separately
+// because workflow prompts load per-CI-run, not per-agent-session.
 const INSTRUCTION_CWD: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",
     ".cursorrules",
+    ".clinerules",
     ".github/copilot-instructions.md",
     "GEMINI.md",
 ];
@@ -343,11 +352,37 @@ pub struct ShellFinding {
     pub kinds: Vec<String>,
 }
 
+/// One workflow file containing LLM-invoking steps (uses: anthropics/claude-code-action
+/// variants, or prompt-bearing fields like prompt:, system_prompt:, claude_args:).
+/// Token counts cover ONLY the prompt-bearing string values, never the whole
+/// workflow file. Workflow prompts load per-CI-run, not per-agent-session, so
+/// these numbers are reported separately and NEVER folded into always-loaded totals.
+#[derive(Debug)]
+pub struct WorkflowLlmFinding {
+    pub path: PathBuf,
+    /// Prompt-bearing field values found in this workflow, with the field name.
+    pub prompt_fields: Vec<WorkflowPromptField>,
+    /// Sum of o200k token counts for all prompt-bearing field values.
+    pub prompt_tokens: u64,
+}
+
+/// One prompt-bearing field value extracted from a workflow step.
+#[derive(Debug)]
+pub struct WorkflowPromptField {
+    /// The YAML field name, e.g. "prompt", "system_prompt", "claude_args".
+    pub field: String,
+    /// Token count of the field value.
+    pub tokens: u64,
+}
+
 #[derive(Debug)]
 pub struct ScanReport {
     pub mcp: Vec<McpFinding>,
     pub instruction_files: Vec<InstructionFile>,
     pub shell: Vec<ShellFinding>,
+    /// LLM-invoking workflow steps. Prompt tokens are per-CI-run, not
+    /// per-agent-session, and are NEVER included in always-loaded totals.
+    pub workflows_llm: Vec<WorkflowLlmFinding>,
     pub environment: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -361,11 +396,13 @@ pub fn scan(roots: &ScanRoots, path_var: &str, provider: CoreProvider, deep: boo
     let mcp = collect_mcp(roots, path_var, provider, &mut warnings);
     let instruction_files = collect_instructions(roots, deep, &mut warnings);
     let shell = collect_shell(&roots.home, &mut warnings);
+    let workflows_llm = collect_workflows_llm(&roots.cwd, &mut warnings);
     let environment = collect_environment(&roots.cwd, path_var);
     ScanReport {
         mcp,
         instruction_files,
         shell,
+        workflows_llm,
         environment,
         warnings,
     }
@@ -395,7 +432,7 @@ pub fn existing_mcp_sources(roots: &ScanRoots) -> Vec<(&'static str, PathBuf)> {
 }
 
 /// Presence-only: returns paths for every instruction file (home + cwd,
-/// including .cursor/rules/*) that exists on disk.
+/// including .cursor/rules/* and .windsurf/rules/*) that exists on disk.
 /// Called by the onboarding preflight (W4); not yet wired in this phase.
 #[allow(dead_code)]
 pub fn existing_instruction_files(roots: &ScanRoots) -> Vec<PathBuf> {
@@ -406,7 +443,20 @@ pub fn existing_instruction_files(roots: &ScanRoots) -> Vec<PathBuf> {
     for rel in INSTRUCTION_CWD {
         paths.push(roots.cwd.join(rel));
     }
+    // .cursor/rules/ directory: each file is a separate rule loaded into context.
     if let Ok(entries) = fs::read_dir(roots.cwd.join(".cursor/rules")) {
+        let mut rules: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        rules.sort();
+        paths.extend(rules);
+    }
+    // .windsurf/rules/ directory: each file is a separate Windsurf rule loaded
+    // into context (distinct from ~/.codeium/windsurf/mcp_config.json which
+    // is an MCP config, not an instruction surface).
+    if let Ok(entries) = fs::read_dir(roots.cwd.join(".windsurf/rules")) {
         let mut rules: Vec<PathBuf> = entries
             .flatten()
             .map(|e| e.path())
@@ -649,7 +699,19 @@ fn collect_instructions(
     for rel in INSTRUCTION_CWD {
         paths.push(roots.cwd.join(rel));
     }
+    // .cursor/rules/ directory: each file is a separate rule loaded into context.
     if let Ok(entries) = fs::read_dir(roots.cwd.join(".cursor/rules")) {
+        let mut rules: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        rules.sort();
+        paths.extend(rules);
+    }
+    // .windsurf/rules/ directory: each file is a separate Windsurf rule loaded
+    // into context. Distinct from ~/.codeium/windsurf/mcp_config.json (MCP).
+    if let Ok(entries) = fs::read_dir(roots.cwd.join(".windsurf/rules")) {
         let mut rules: Vec<PathBuf> = entries
             .flatten()
             .map(|e| e.path())
@@ -734,6 +796,296 @@ fn collect_shell(home: &Path, warnings: &mut Vec<String>) -> Vec<ShellFinding> {
         });
     }
     out
+}
+
+/// Action prefixes / names that indicate an LLM-invoking step.
+/// Matched case-insensitively against the `uses:` value.
+const LLM_ACTION_MATCHERS: &[&str] = &["anthropics/claude-code-action", "anthropics/claude-action"];
+
+/// Prompt-bearing YAML field names checked under each step.
+const PROMPT_FIELDS: &[&str] = &["prompt", "system_prompt", "claude_args"];
+
+/// Scan `.github/workflows/` for files containing LLM-invoking steps and
+/// count the tokens of prompt-bearing field values only. Returns one entry
+/// per file that has at least one LLM step with a non-empty prompt field.
+///
+/// Uses a line-by-line YAML heuristic rather than a full YAML parse to keep
+/// the dependency footprint minimal and match the scan module's posture of
+/// no external spawns. The heuristic is conservative: it looks for `uses:`
+/// lines containing known action prefixes and, once inside such a step, for
+/// `prompt:`, `system_prompt:`, or `claude_args:` fields on the same
+/// indentation level.
+fn collect_workflows_llm(cwd: &Path, warnings: &mut Vec<String>) -> Vec<WorkflowLlmFinding> {
+    let dir = cwd.join(".github").join("workflows");
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e == "yml" || e == "yaml")
+        })
+        .collect();
+    files.sort();
+
+    for path in files {
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                warnings.push(format!("could not read {}: {e}", path.display()));
+                continue;
+            }
+        };
+        let finding = scan_workflow_llm_steps(&path, &text, warnings);
+        if let Some(f) = finding {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// Parse one workflow file and return a finding if it contains LLM-invoking
+/// steps with prompt-bearing fields.
+///
+/// Uses a two-pass heuristic:
+///
+/// Pass 1: check whether the file contains any LLM action at all (quick
+/// substring scan so non-LLM workflows exit fast).
+///
+/// Pass 2: extract prompt-bearing field values. The YAML structure for a
+/// GitHub Actions `with:` block looks like:
+///
+/// ```yaml
+///   - uses: anthropics/claude-code-action@v1
+///     with:
+///       prompt: Some prompt text.
+///       system_prompt: |
+///         Multi-line
+///         value here.
+/// ```
+///
+/// The heuristic looks for the `uses:` line (or `- uses:` list item) that
+/// contains an LLM action name, then collects any `prompt:`,
+/// `system_prompt:`, or `claude_args:` key that appears at a deeper
+/// indentation level within the same step. The step boundary is detected
+/// by a line that starts a new list item (`- `) at the same or shallower
+/// indentation as the `uses:` line.
+fn scan_workflow_llm_steps(
+    path: &Path,
+    text: &str,
+    _warnings: &mut Vec<String>,
+) -> Option<WorkflowLlmFinding> {
+    // Quick gate: skip files with no LLM action reference at all.
+    let lower = text.to_ascii_lowercase();
+    let has_llm_action = LLM_ACTION_MATCHERS.iter().any(|m| lower.contains(m));
+    if !has_llm_action {
+        return None;
+    }
+
+    let mut prompt_fields: Vec<WorkflowPromptField> = Vec::new();
+
+    #[derive(PartialEq)]
+    enum State {
+        Scanning,
+        /// We found a `uses:` line with an LLM action; now collect prompt
+        /// fields that appear at a deeper indent than `step_indent`. The
+        /// step ends when we see a new list item at or below `step_indent`.
+        InLlmStep {
+            step_indent: usize,
+        },
+        /// Inside a block-scalar value for a prompt field.
+        InBlockScalar {
+            field: String,
+            value: String,
+            /// Indent level of the field key line (block content is deeper).
+            field_indent: usize,
+            step_indent: usize,
+        },
+    }
+
+    let mut state = State::Scanning;
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        let trimmed = trimmed.trim_end();
+
+        match &state {
+            State::Scanning => {
+                // Match both `uses: <action>` and `- uses: <action>`.
+                let uses_value = if let Some(rest) = trimmed.strip_prefix("- uses:") {
+                    Some(rest)
+                } else {
+                    trimmed.strip_prefix("uses:")
+                };
+                if let Some(rest) = uses_value {
+                    let action = rest.trim().trim_matches('\'').trim_matches('"');
+                    let action_lower = action.to_ascii_lowercase();
+                    if LLM_ACTION_MATCHERS.iter().any(|m| action_lower.contains(m)) {
+                        // The step indent is the indent of the `- uses:` or
+                        // `uses:` line.
+                        state = State::InLlmStep {
+                            step_indent: indent,
+                        };
+                    }
+                }
+            }
+            State::InLlmStep { step_indent } => {
+                let step_indent = *step_indent;
+                // A new list item at or shallower than step_indent ends this step.
+                if !trimmed.is_empty() && indent <= step_indent && trimmed.starts_with("- ") {
+                    // New step. Check if this new step is also an LLM step.
+                    let uses_value = trimmed.strip_prefix("- uses:");
+                    if let Some(rest) = uses_value {
+                        let action = rest.trim().trim_matches('\'').trim_matches('"');
+                        let action_lower = action.to_ascii_lowercase();
+                        if LLM_ACTION_MATCHERS.iter().any(|m| action_lower.contains(m)) {
+                            state = State::InLlmStep {
+                                step_indent: indent,
+                            };
+                        } else {
+                            state = State::Scanning;
+                        }
+                    } else {
+                        state = State::Scanning;
+                    }
+                    continue;
+                }
+                // Check for prompt-bearing fields at deeper indent.
+                if indent > step_indent {
+                    for &field in PROMPT_FIELDS {
+                        let prefix = format!("{field}:");
+                        if trimmed.starts_with(&prefix) {
+                            let value_part = trimmed.strip_prefix(&prefix).unwrap_or("").trim();
+                            if value_part == "|" || value_part == "|-" || value_part == "|+" {
+                                state = State::InBlockScalar {
+                                    field: field.to_string(),
+                                    value: String::new(),
+                                    field_indent: indent,
+                                    step_indent,
+                                };
+                            } else if !value_part.is_empty() {
+                                let v = value_part.trim_matches('\'').trim_matches('"').to_string();
+                                let tokens =
+                                    tokenize::count(TokProvider::OpenAi, &v).unwrap_or(0) as u64;
+                                if tokens > 0 {
+                                    prompt_fields.push(WorkflowPromptField {
+                                        field: field.to_string(),
+                                        tokens,
+                                    });
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            State::InBlockScalar {
+                field,
+                value,
+                field_indent,
+                step_indent,
+            } => {
+                // Block scalar ends when a non-empty line returns to or below
+                // field_indent.
+                if !trimmed.is_empty() && indent <= *field_indent {
+                    let v = value.clone();
+                    let tokens = tokenize::count(TokProvider::OpenAi, &v).unwrap_or(0) as u64;
+                    if tokens > 0 {
+                        prompt_fields.push(WorkflowPromptField {
+                            field: field.clone(),
+                            tokens,
+                        });
+                    }
+                    // Re-enter InLlmStep to keep scanning (or exit to Scanning).
+                    let si = *step_indent;
+                    let fi = *field_indent;
+                    if !trimmed.is_empty() && indent <= si && trimmed.starts_with("- ") {
+                        // New step.
+                        let uses_value = trimmed.strip_prefix("- uses:");
+                        if let Some(rest) = uses_value {
+                            let action = rest.trim().trim_matches('\'').trim_matches('"');
+                            let action_lower = action.to_ascii_lowercase();
+                            if LLM_ACTION_MATCHERS.iter().any(|m| action_lower.contains(m)) {
+                                state = State::InLlmStep {
+                                    step_indent: indent,
+                                };
+                            } else {
+                                state = State::Scanning;
+                            }
+                        } else {
+                            state = State::Scanning;
+                        }
+                    } else if indent > si {
+                        // Still inside the step; check for more prompt fields.
+                        state = State::InLlmStep { step_indent: si };
+                        // Process this line as InLlmStep.
+                        for &f2 in PROMPT_FIELDS {
+                            let prefix = format!("{f2}:");
+                            if trimmed.starts_with(&prefix) {
+                                let value_part = trimmed.strip_prefix(&prefix).unwrap_or("").trim();
+                                if value_part == "|" || value_part == "|-" || value_part == "|+" {
+                                    state = State::InBlockScalar {
+                                        field: f2.to_string(),
+                                        value: String::new(),
+                                        field_indent: fi,
+                                        step_indent: si,
+                                    };
+                                } else if !value_part.is_empty() {
+                                    let v =
+                                        value_part.trim_matches('\'').trim_matches('"').to_string();
+                                    let t = tokenize::count(TokProvider::OpenAi, &v).unwrap_or(0)
+                                        as u64;
+                                    if t > 0 {
+                                        prompt_fields.push(WorkflowPromptField {
+                                            field: f2.to_string(),
+                                            tokens: t,
+                                        });
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    } else {
+                        state = State::Scanning;
+                    }
+                } else if !trimmed.is_empty() {
+                    // Still inside the block scalar.
+                    let v = value.clone() + if value.is_empty() { "" } else { "\n" } + trimmed;
+                    if let State::InBlockScalar { value, .. } = &mut state {
+                        *value = v;
+                    }
+                }
+            }
+        }
+    }
+
+    // Flush any in-progress block scalar at EOF.
+    if let State::InBlockScalar { field, value, .. } = &state {
+        let tokens = tokenize::count(TokProvider::OpenAi, value).unwrap_or(0) as u64;
+        if tokens > 0 {
+            prompt_fields.push(WorkflowPromptField {
+                field: field.clone(),
+                tokens,
+            });
+        }
+    }
+
+    if prompt_fields.is_empty() {
+        return None;
+    }
+    let prompt_tokens: u64 = prompt_fields.iter().map(|f| f.tokens).sum();
+    Some(WorkflowLlmFinding {
+        path: path.to_path_buf(),
+        prompt_fields,
+        prompt_tokens,
+    })
 }
 
 fn collect_environment(cwd: &Path, path_var: &str) -> Vec<String> {
@@ -1184,5 +1536,278 @@ GITHUB_TOKEN = "placeholder"
         // No duplicates.
         let unique: HashSet<&PathBuf> = files.iter().collect();
         assert_eq!(files.len(), unique.len(), "duplicate paths in result");
+    }
+
+    #[test]
+    fn windsurf_rules_dir_is_discovered() {
+        let home = tmp("ws-rules-home");
+        let cwd = tmp("ws-rules-cwd");
+        let config = tmp("ws-rules-config");
+
+        let windsurf_rules = cwd.join(".windsurf").join("rules");
+        fs::create_dir_all(&windsurf_rules).unwrap();
+        fs::write(windsurf_rules.join("coding.md"), "write tests\n").unwrap();
+        fs::write(windsurf_rules.join("style.md"), "use snake_case\n").unwrap();
+
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let files = existing_instruction_files(&roots);
+
+        // Both windsurf rule files appear.
+        let names: Vec<String> = files
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.contains(&"coding.md".to_string()),
+            "coding.md missing: {names:?}"
+        );
+        assert!(
+            names.contains(&"style.md".to_string()),
+            "style.md missing: {names:?}"
+        );
+
+        // All paths are absolute and exist.
+        for path in &files {
+            assert!(path.is_absolute(), "not absolute: {path:?}");
+            assert!(path.is_file(), "not a file: {path:?}");
+        }
+    }
+
+    #[test]
+    fn windsurf_rules_dir_discovered_on_linux() {
+        let home = tmp("ws-linux-home");
+        let cwd = tmp("ws-linux-cwd");
+        let config = tmp("ws-linux-config");
+
+        let windsurf_rules = cwd.join(".windsurf").join("rules");
+        fs::create_dir_all(&windsurf_rules).unwrap();
+        fs::write(windsurf_rules.join("rules.md"), "be concise\n").unwrap();
+
+        // Linux roots, same path resolution.
+        let roots = make_roots(home, cwd, config, ScanOs::Linux);
+        let files = existing_instruction_files(&roots);
+
+        let names: Vec<String> = files
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.contains(&"rules.md".to_string()),
+            "rules.md missing: {names:?}"
+        );
+    }
+
+    #[test]
+    fn windsurf_rules_dir_discovered_on_windows() {
+        let home = tmp("ws-win-home");
+        let cwd = tmp("ws-win-cwd");
+        let config = tmp("ws-win-config");
+
+        let windsurf_rules = cwd.join(".windsurf").join("rules");
+        fs::create_dir_all(&windsurf_rules).unwrap();
+        fs::write(windsurf_rules.join("win-rule.md"), "windows rule\n").unwrap();
+
+        let roots = make_roots(home, cwd, config, ScanOs::Windows);
+        let files = existing_instruction_files(&roots);
+
+        let names: Vec<String> = files
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.contains(&"win-rule.md".to_string()),
+            "win-rule.md missing: {names:?}"
+        );
+    }
+
+    #[test]
+    fn clinerules_file_is_discovered() {
+        let home = tmp("cline-home");
+        let cwd = tmp("cline-cwd");
+        let config = tmp("cline-config");
+
+        fs::write(cwd.join(".clinerules"), "use structured output\n").unwrap();
+
+        let roots = make_roots(home, cwd, config, ScanOs::MacOs);
+        let files = existing_instruction_files(&roots);
+
+        let names: Vec<String> = files
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.contains(&".clinerules".to_string()),
+            ".clinerules missing: {names:?}"
+        );
+    }
+
+    #[test]
+    fn clinerules_discovered_on_all_platforms() {
+        for os in [ScanOs::MacOs, ScanOs::Linux, ScanOs::Windows] {
+            let label = format!("{os:?}");
+            let home = tmp(&format!("cline-plat-home-{label}"));
+            let cwd = tmp(&format!("cline-plat-cwd-{label}"));
+            let config = tmp(&format!("cline-plat-config-{label}"));
+
+            fs::write(cwd.join(".clinerules"), "platform rule\n").unwrap();
+
+            let roots = make_roots(home, cwd, config, os);
+            let files = existing_instruction_files(&roots);
+
+            let names: Vec<String> = files
+                .iter()
+                .filter_map(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .collect();
+            assert!(
+                names.contains(&".clinerules".to_string()),
+                ".clinerules missing on {label}: {names:?}"
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Workflow LLM detector tests
+    // ---------------------------------------------------------------------------
+
+    fn make_workflow_dir(cwd: &Path) -> PathBuf {
+        let dir = cwd.join(".github").join("workflows");
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn workflow_with_claude_action_and_inline_prompt_is_detected() {
+        let cwd = tmp("wf-inline");
+        let dir = make_workflow_dir(&cwd);
+        fs::write(
+            dir.join("review.yml"),
+            r#"
+on: [pull_request]
+jobs:
+  review:
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: Review this pull request for correctness.
+"#,
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        let findings = collect_workflows_llm(&cwd, &mut warnings);
+        assert_eq!(findings.len(), 1, "expected 1 workflow finding");
+        assert!(
+            findings[0].prompt_tokens > 0,
+            "expected non-zero prompt tokens"
+        );
+        let fields: Vec<&str> = findings[0]
+            .prompt_fields
+            .iter()
+            .map(|f| f.field.as_str())
+            .collect();
+        assert!(
+            fields.contains(&"prompt"),
+            "expected 'prompt' field: {fields:?}"
+        );
+    }
+
+    #[test]
+    fn workflow_with_system_prompt_field_is_detected() {
+        let cwd = tmp("wf-sysprompt");
+        let dir = make_workflow_dir(&cwd);
+        fs::write(
+            dir.join("agent.yml"),
+            r#"
+on: [push]
+jobs:
+  agent:
+    steps:
+      - uses: anthropics/claude-code-action@v2
+        with:
+          system_prompt: You are a helpful code reviewer.
+          prompt: Summarize the changes.
+"#,
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        let findings = collect_workflows_llm(&cwd, &mut warnings);
+        assert_eq!(findings.len(), 1);
+        let fields: Vec<&str> = findings[0]
+            .prompt_fields
+            .iter()
+            .map(|f| f.field.as_str())
+            .collect();
+        assert!(
+            fields.contains(&"system_prompt"),
+            "system_prompt missing: {fields:?}"
+        );
+        assert!(fields.contains(&"prompt"), "prompt missing: {fields:?}");
+    }
+
+    #[test]
+    fn workflow_without_llm_action_is_not_detected() {
+        let cwd = tmp("wf-no-llm");
+        let dir = make_workflow_dir(&cwd);
+        fs::write(
+            dir.join("ci.yml"),
+            r#"
+on: [push]
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test
+"#,
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        let findings = collect_workflows_llm(&cwd, &mut warnings);
+        assert!(
+            findings.is_empty(),
+            "expected no findings for non-LLM workflow"
+        );
+    }
+
+    #[test]
+    fn workflow_without_github_dir_returns_empty() {
+        let cwd = tmp("wf-no-dir");
+        // No .github/workflows/ directory.
+        let mut warnings = Vec::new();
+        let findings = collect_workflows_llm(&cwd, &mut warnings);
+        assert!(findings.is_empty(), "expected empty when no workflows dir");
+    }
+
+    #[test]
+    fn workflow_prompt_tokens_not_zero_for_real_text() {
+        let cwd = tmp("wf-tokens");
+        let dir = make_workflow_dir(&cwd);
+        fs::write(
+            dir.join("prompt.yml"),
+            r#"
+on: [pull_request]
+jobs:
+  pr_review:
+    steps:
+      - uses: anthropics/claude-code-action@beta
+        with:
+          prompt: Please review this pull request carefully and check for any correctness bugs, style issues, and missing tests.
+"#,
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        let findings = collect_workflows_llm(&cwd, &mut warnings);
+        assert_eq!(findings.len(), 1);
+        assert!(
+            findings[0].prompt_tokens >= 10,
+            "expected at least 10 tokens for the prompt text"
+        );
     }
 }

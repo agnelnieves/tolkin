@@ -93,6 +93,14 @@ pub const SOURCE_NOTE: &str =
 /// prefix); this note keeps it from being misread as a defect score.
 pub const CHURN_NOTE: &str = "Write churn counts every cache write after a session's first write as a changed prefix. Claude Code appends to its conversation prefix on most turns, so growth-driven suffix writes dominate this share by construction; read it comparatively across sessions, not as a defect score.";
 
+/// Per-model 1h-TTL availability footnote. The TTL counterfactual assumes
+/// the model offers the 1h TTL; availability varies by model and platform.
+/// AWS Bedrock documents some current Anthropic models as 5m-only while
+/// the 4.5 family carries both TTLs, and first-party API availability can
+/// differ. Observed 2026-06:
+/// https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+pub const TTL_1H_AVAILABILITY_NOTE: &str = "The 1h TTL strategy assumes the model offers the 1h TTL; availability varies by model and platform (https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html, observed 2026-06).";
+
 /// How many churn offenders to name.
 const WORST_SESSIONS_CAP: usize = 5;
 
@@ -302,6 +310,7 @@ pub fn analyze(inputs: &CacheInputs) -> CacheReport {
         SOURCE_NOTE.to_string(),
         CHURN_NOTE.to_string(),
         "All savings are input-token bounded; output may vary.".to_string(),
+        TTL_1H_AVAILABILITY_NOTE.to_string(),
     ];
 
     CacheReport {
@@ -591,7 +600,7 @@ fn compute_ttl_counterfactual(
         label: LABEL_IDENTIFIED,
         inputs_label: LABEL_MEASURED,
         tier_note: format!(
-            "Gap data and observed write volumes are {LABEL_MEASURED}; every counterfactual number (simulated events, simulated tokens, dollars) is an {LABEL_IDENTIFIED} computed from those ground-truth inputs.",
+            "Gap data and observed write volumes are {LABEL_MEASURED}; every counterfactual number (simulated events, simulated tokens, dollars) is an {LABEL_IDENTIFIED} computed from those ground-truth inputs. {TTL_1H_AVAILABILITY_NOTE}",
         ),
         observed_write_tokens_5m: observed_5m,
         observed_write_tokens_1h: observed_1h,

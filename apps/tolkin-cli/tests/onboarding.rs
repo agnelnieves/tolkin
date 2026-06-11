@@ -179,3 +179,86 @@ fn ci_env_suppresses_all_writes() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// Item (d): stats --json and cache --json always emit valid JSON
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stats_json_emits_valid_json_on_fresh_machine_no_data_dir() {
+    // No data dir: TOLKIN_DATA_DIR points at a non-existent directory.
+    // --json must still print valid JSON with a hints array.
+    let dir = tmp("stats-fresh-nodir");
+    let non_existent = dir.join("does-not-exist");
+
+    let out = {
+        let mut c = Command::new(BIN);
+        c.env_remove("CI")
+            .env_remove("TOLKIN_NO_LEDGER")
+            .env("TOLKIN_DATA_DIR", &non_existent)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        c.arg("stats").arg("--json").output().unwrap()
+    };
+    assert!(
+        out.status.success(),
+        "fresh-machine stats --json must exit 0"
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must be valid JSON");
+    assert!(v["hints"].is_array(), "hints array missing: {v}");
+    assert_eq!(v["ledger"]["records"], 0, "records must be 0: {v}");
+    assert!(v["tiers"].is_null(), "tiers must be null: {v}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stats_json_emits_valid_json_with_empty_ledger() {
+    // Data dir exists, config exists (init ran), but ledger is empty.
+    let dir = tmp("stats-empty-ledger");
+    assert!(cmd(&dir)
+        .arg("init")
+        .arg("--yes")
+        .output()
+        .unwrap()
+        .status
+        .success());
+    // Do NOT run any audit/project; ledger stays empty.
+    let out = cmd(&dir).arg("stats").arg("--json").output().unwrap();
+    assert!(
+        out.status.success(),
+        "empty-ledger stats --json must exit 0"
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must be valid JSON");
+    assert!(v["hints"].is_array(), "hints array missing: {v}");
+    assert_eq!(v["ledger"]["records"], 0, "records must be 0: {v}");
+    assert!(v["tiers"].is_null(), "tiers must be null when empty: {v}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cache_json_emits_valid_json_on_fresh_machine_no_data_dir() {
+    let dir = tmp("cache-fresh-nodir");
+    let non_existent = dir.join("does-not-exist");
+    let out = {
+        let mut c = Command::new(BIN);
+        c.env_remove("CI")
+            .env_remove("TOLKIN_NO_LEDGER")
+            .env("TOLKIN_DATA_DIR", &non_existent)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        c.arg("cache").arg("--json").output().unwrap()
+    };
+    assert!(
+        out.status.success(),
+        "fresh-machine cache --json must exit 0"
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must be valid JSON");
+    assert!(v["hints"].is_array(), "hints array missing: {v}");
+    assert!(v["cache"].is_null(), "cache must be null: {v}");
+    let _ = fs::remove_dir_all(&dir);
+}

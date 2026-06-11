@@ -143,6 +143,16 @@ struct CatalogEntry {
 // Shared sentence for servers verified to have no native tool filtering.
 const NO_FILTER_NOTE: &str = " No native tool filtering exists for this server; slim it client-side with MCP tool search or defer_loading.";
 
+/// When the curated catalog entries were last verified against each server's
+/// public documentation (YYYY-MM). Surfaced in the mcp analysis notes so a
+/// stale catalog is visible instead of silently wrong. Bump after any
+/// catalog refresh that re-verifies tool counts, cold-token estimates, slim
+/// mechanisms, and no-filtering flags against current server docs.
+///
+/// Current value: slim mechanisms and no-filtering flags were verified
+/// against each server's docs in 2026-06.
+pub const MCP_CATALOG_OBSERVED: &str = "2026-06";
+
 // Curated catalog (mid-2026, refreshable). Ordered so specific matchers win:
 // github/gitlab are listed before the generic git server. Slim mechanisms and
 // the no-filtering flags were verified against each server's docs in 2026-06.
@@ -909,7 +919,7 @@ fn assemble(client: String, provider: Provider, reports: Vec<ServerReport>) -> M
     let mut notes = Vec::new();
     if any_catalog_priced {
         notes.push(
-            "Cold-cache token costs for catalog-matched servers are representative estimates. Supply a server's tools/list (CLI: --tools-list <path>, or pass the manifest file directly) for exact tokenized counts.".to_string(),
+            format!("Cold-cache token costs for catalog-matched servers are representative estimates (catalog entries observed {MCP_CATALOG_OBSERVED}). Supply a server's tools/list (CLI: --tools-list <path>, or pass the manifest file directly) for exact tokenized counts."),
         );
     }
     if measured > 0 {
@@ -918,7 +928,7 @@ fn assemble(client: String, provider: Provider, reports: Vec<ServerReport>) -> M
         );
     }
     notes.push(
-        "Tool Search (defer-loading) collapses tool definitions to a roughly 500-token stub plus a few tools loaded on demand.".to_string(),
+        "Tool Search (defer-loading) collapses tool definitions to a roughly 500-token stub plus a few tools loaded on demand. The token figure above is unaffected by retrieval success; caveat: in a 4,027-tool corpus study, the regex-based Tool Search variant retrieved the correct tool for 56% of tasks (14 of 25; BM25 reached 64%) -- a tool that retrieval misses cannot be called (Arcade.dev, https://arcade.dev/blog/anthropic-tool-search-4000-tools-test, observed 2026-06-10).".to_string(),
     );
     notes.push(
         "Savings are input-token-bounded: swapping an MCP server for its CLI frees the tool-definition budget, but the agent must already know the CLI.".to_string(),
