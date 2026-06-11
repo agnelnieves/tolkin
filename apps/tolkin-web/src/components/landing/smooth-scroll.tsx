@@ -2,9 +2,14 @@
 
 import Lenis from "lenis";
 import { useEffect } from "react";
+import { gsap, ScrollTrigger } from "./motion";
 
-// Lenis smooth scrolling for the landing page only. Bails out entirely when
-// the user prefers reduced motion: native scrolling is left untouched.
+// Lenis smooth scrolling for the landing page, wired to ScrollTrigger the
+// canonical way: Lenis publishes scroll updates to ScrollTrigger, and the
+// GSAP ticker is the single rAF driving Lenis (no second rAF loop, no
+// double-smoothing, accurate trigger positions). Bails out entirely when the
+// user prefers reduced motion: native scrolling is left untouched and
+// ScrollTrigger reads the native scroll position directly.
 // `anchors: true` keeps in-page #links working through Lenis.
 export function SmoothScroll() {
   useEffect(() => {
@@ -13,16 +18,16 @@ export function SmoothScroll() {
     }
 
     const lenis = new Lenis({ anchors: true });
-    let frame = 0;
+    lenis.on("scroll", ScrollTrigger.update);
 
     const raf = (time: number) => {
-      lenis.raf(time);
-      frame = requestAnimationFrame(raf);
+      lenis.raf(time * 1000);
     };
-    frame = requestAnimationFrame(raf);
+    gsap.ticker.add(raf);
+    gsap.ticker.lagSmoothing(0);
 
     return () => {
-      cancelAnimationFrame(frame);
+      gsap.ticker.remove(raf);
       lenis.destroy();
     };
   }, []);

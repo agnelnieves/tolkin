@@ -1,3 +1,4 @@
+import { RevealText } from "./reveal-text";
 import { SectionHeading } from "./section-heading";
 
 const TIERS = [
@@ -32,7 +33,13 @@ export function Tiers() {
           {TIERS.map((tier, i) => (
             <div key={tier.name} className="flex flex-col gap-4 bg-background p-8">
               <span className="font-mono text-xs text-muted-foreground tabular-nums">0{i + 1}</span>
-              <h3 className="font-display text-2xl font-semibold tracking-tight">{tier.name}</h3>
+              <RevealText
+                as="h3"
+                delay={i * 0.08}
+                className="font-display text-2xl font-semibold tracking-tight"
+              >
+                {tier.name}
+              </RevealText>
               <p className="font-mono text-xs text-lime-300">&quot;{tier.basis}&quot;</p>
               <p className="text-sm leading-relaxed text-muted-foreground">{tier.body}</p>
             </div>

@@ -7,6 +7,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { CopyButton } from "./copy-button";
+import { RevealText } from "./reveal-text";
 import { Terminal } from "./terminal";
 
 const INTRO_KEY = "tolkin-hero-intro";
@@ -51,12 +52,12 @@ export function Hero() {
           Privacy-first token analyzer for AI agent setups
         </p>
 
-        <h1
-          data-hero-stagger
+        <RevealText
+          as="h1"
           className="mt-6 max-w-[14ch] font-display text-[clamp(2.75rem,8vw,7rem)] leading-[0.98] font-bold tracking-tight text-balance"
         >
           Know exactly what your agents are eating.
-        </h1>
+        </RevealText>
 
         <div className="mt-12 grid gap-12 lg:grid-cols-2 lg:gap-16">
           <div className="flex flex-col gap-8">
