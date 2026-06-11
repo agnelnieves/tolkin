@@ -4,7 +4,12 @@ description: >
   (load-profile totals, top heavy files, findings count, identified savings
   with tier labels and the input-token honesty footer), then upserts a sticky
   PR comment on pull_request events or writes to the step summary otherwise.
-  Optional fail-on gate exits 2 when findings at or above a severity exist.
+  On pull_request events the action also runs tolkin at the merge base and
+  renders a delta table (base, head, delta, percent of base) for always-loaded
+  tokens, total context tokens, and MCP cold tokens. Optional fail-on gate
+  exits 2 when findings at or above a severity exist. Optional delta gates
+  exit non-zero when the PR adds too many always-loaded tokens or grows the
+  total context past a percent budget.
 
 inputs:
   fail-on:
@@ -30,6 +35,22 @@ inputs:
     description: tolkin-cli version to install via npx. Pin to a known-good release.
     required: false
     default: "0.9.0"
+  max-always-delta-tokens:
+    description: >
+      Fail the job (exit 3) when always-loaded context grew by more than N
+      tokens versus the PR base. Empty (default) disables the gate. Only
+      evaluated on pull_request events with a resolvable merge base; the
+      gate never fires on push events or when the baseline is unavailable.
+    required: false
+    default: ""
+  max-context-delta-pct:
+    description: >
+      Fail the job (exit 3) when total context tokens grew by more than X
+      percent of the base versus the PR base. Empty (default) disables the
+      gate. Only evaluated on pull_request events with a resolvable merge
+      base.
+    required: false
+    default: ""
 
 # Required caller permissions for PR comment mode:
 #
@@ -39,6 +60,12 @@ inputs:
 #
 # If comment-mode is "off" or you only need the step summary, "contents: read"
 # is sufficient.
+#
+# Baseline comparison needs the PR base SHA reachable in the local clone.
+# The composite tries `git fetch origin <base-sha> --depth=1` first; if your
+# workflow runs with fetch-depth: 0 the fetch is a no-op. Shallow checkouts
+# without the base SHA still work: the delta table renders blank with a
+# "no baseline" note and the action does not fail.
 
 runs:
   using: composite
@@ -48,7 +75,7 @@ runs:
       with:
         node-version: "24"
 
-    - name: Run tolkin and build report
+    - name: Run tolkin against HEAD
       id: tolkin
       shell: bash
       working-directory: ${{ inputs.working-directory }}
@@ -67,22 +94,117 @@ runs:
         fi
 
         REPORT_JSON="$(mktemp)"
-        REPORT_MD="$(mktemp)"
 
         $TOLKIN project . --json > "$REPORT_JSON"
 
+        echo "report_json=$REPORT_JSON" >> "$GITHUB_OUTPUT"
+        echo "tolkin_cmd=$TOLKIN" >> "$GITHUB_OUTPUT"
+
+    - name: Run tolkin against the PR merge base
+      id: baseline
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        TOLKIN_VERSION: ${{ inputs.version }}
+        TOLKIN_NO_LEDGER: "1"
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        TOLKIN_CMD: ${{ steps.tolkin.outputs.tolkin_cmd }}
+        WORKDIR: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${BASE_SHA:-}" ]; then
+          echo "no base sha on the pull_request payload; skipping baseline"
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Make sure the base sha is in the local object store. Shallow
+        # checkouts often miss it; --depth=1 keeps the fetch cheap.
+        if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+          echo "fetching base sha ${BASE_SHA} (depth 1)"
+          if ! git fetch --no-tags --depth=1 origin "${BASE_SHA}" 2>/dev/null; then
+            echo "could not fetch base sha; rendering without baseline"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+        fi
+
+        # Materialize the base tree in a temp dir so the head checkout stays
+        # untouched. `git worktree add --detach` works on shallow clones too.
+        BASE_WT="$(mktemp -d)"
+        if ! git worktree add --detach "$BASE_WT" "$BASE_SHA" >/dev/null 2>&1; then
+          echo "git worktree add failed for ${BASE_SHA}; rendering without baseline"
+          rm -rf "$BASE_WT"
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Resolve the working-directory the same way the head step did so the
+        # baseline analyzes the same subtree. Anchored relative to the worktree.
+        SUBPATH="${WORKDIR:-.}"
+        case "$SUBPATH" in
+          /*) ;;
+          .|./) SUBPATH="" ;;
+          *) ;;
+        esac
+        BASE_ROOT="$BASE_WT"
+        if [ -n "$SUBPATH" ] && [ "$SUBPATH" != "." ]; then
+          BASE_ROOT="$BASE_WT/$SUBPATH"
+        fi
+
+        if [ ! -d "$BASE_ROOT" ]; then
+          echo "base working-directory ${BASE_ROOT} does not exist at ${BASE_SHA}; rendering without baseline"
+          git worktree remove --force "$BASE_WT" >/dev/null 2>&1 || rm -rf "$BASE_WT"
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        BASE_JSON="$(mktemp)"
+        # Run the same tolkin binary against the base tree. Failures here are
+        # non-fatal: the head report still ships, the gate just stays quiet.
+        if ! ( cd "$BASE_ROOT" && $TOLKIN_CMD project . --json > "$BASE_JSON" ); then
+          echo "tolkin failed against base tree; rendering without baseline"
+          git worktree remove --force "$BASE_WT" >/dev/null 2>&1 || rm -rf "$BASE_WT"
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "base_json=$BASE_JSON" >> "$GITHUB_OUTPUT"
+        echo "base_worktree=$BASE_WT" >> "$GITHUB_OUTPUT"
+        echo "available=true" >> "$GITHUB_OUTPUT"
+
+    - name: Build markdown report
+      id: report
+      shell: bash
+      env:
+        TOLKIN_MAX_ALWAYS_DELTA_TOKENS: ${{ inputs.max-always-delta-tokens }}
+        TOLKIN_MAX_CONTEXT_DELTA_PCT: ${{ inputs.max-context-delta-pct }}
+      run: |
+        set -euo pipefail
+        REPORT_MD="$(mktemp)"
+        BASE_ARG=""
+        if [ -n "${{ steps.baseline.outputs.base_json }}" ] && [ -f "${{ steps.baseline.outputs.base_json }}" ]; then
+          BASE_ARG="${{ steps.baseline.outputs.base_json }}"
+        fi
+
+        # build-report.mjs exits 3 only when a delta gate trips. Capture the
+        # status here so we can publish the comment and step summary first,
+        # then fail the job at the end.
+        GATE_RC=0
         node "${{ github.action_path }}/build-report.mjs" \
-          "$REPORT_JSON" "$REPORT_MD"
+          "${{ steps.tolkin.outputs.report_json }}" "$REPORT_MD" $BASE_ARG \
+          || GATE_RC=$?
 
         echo "report_md=$REPORT_MD" >> "$GITHUB_OUTPUT"
-        echo "report_json=$REPORT_JSON" >> "$GITHUB_OUTPUT"
+        echo "gate_rc=$GATE_RC" >> "$GITHUB_OUTPUT"
 
         echo "--- Tolkin report preview ---"
-        head -20 "$REPORT_MD"
+        head -30 "$REPORT_MD"
 
     - name: Write step summary
       shell: bash
-      run: cat "${{ steps.tolkin.outputs.report_md }}" >> "$GITHUB_STEP_SUMMARY"
+      run: cat "${{ steps.report.outputs.report_md }}" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upsert sticky PR comment
       if: >-
@@ -96,7 +218,7 @@ runs:
         set -euo pipefail
         REPO="${{ github.repository }}"
         PR="${{ github.event.pull_request.number }}"
-        REPORT_MD="${{ steps.tolkin.outputs.report_md }}"
+        REPORT_MD="${{ steps.report.outputs.report_md }}"
         MARKER='<!-- tolkin-report -->'
 
         if [ "$COMMENT_MODE" = "sticky" ]; then
@@ -116,6 +238,22 @@ runs:
           gh api -X POST "repos/$REPO/issues/$PR/comments" \
             -F body=@"$REPORT_MD" > /dev/null
         fi
+
+    - name: Clean up base worktree
+      if: always() && steps.baseline.outputs.base_worktree != ''
+      shell: bash
+      run: |
+        BASE_WT="${{ steps.baseline.outputs.base_worktree }}"
+        if [ -n "$BASE_WT" ] && [ -d "$BASE_WT" ]; then
+          git worktree remove --force "$BASE_WT" >/dev/null 2>&1 || rm -rf "$BASE_WT"
+        fi
+
+    - name: Delta gate
+      if: steps.report.outputs.gate_rc != '0'
+      shell: bash
+      run: |
+        echo "tolkin delta gate failed; see the report above and the step logs." 1>&2
+        exit "${{ steps.report.outputs.gate_rc }}"
 
     - name: Severity gate
       if: inputs.fail-on != 'none'

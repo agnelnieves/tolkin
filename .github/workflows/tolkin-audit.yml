@@ -9,6 +9,8 @@ on:
   pull_request:
     branches: [main]
 
+# One top-level env block only. A duplicate mapping parse-killed this file
+# once; if you add a knob, add it here, not in a second block.
 env:
   # Node 20 action runtimes are deprecated; opt into the Node 24 default
   # ahead of the 2026-06-16 flip so incompatibilities surface in CI now.
@@ -18,6 +20,17 @@ env:
   # `tolkin project . --fail-on <severity>`, which exits 2 when any
   # finding at or above that severity exists anywhere in the repo.
   TOLKIN_FAIL_ON: ""
+  # Delta gates against the PR merge base. Both default to empty (off);
+  # set them to integers to opt in. Evaluated AFTER the comment is written,
+  # then the job exits 3 with a one-line reason if the budget is exceeded.
+  # Never fires when the baseline is unavailable (it just renders the table
+  # with n/a placeholders and a "no baseline" note).
+  #   TOLKIN_MAX_ALWAYS_DELTA_TOKENS  fail when always-loaded context grew
+  #                                    by more than N tokens vs base
+  #   TOLKIN_MAX_CONTEXT_DELTA_PCT    fail when total context tokens grew
+  #                                    by more than X percent of the base
+  TOLKIN_MAX_ALWAYS_DELTA_TOKENS: ""
+  TOLKIN_MAX_CONTEXT_DELTA_PCT: ""
 
 concurrency:
   group: tolkin-audit-${{ github.ref }}
@@ -90,10 +103,81 @@ jobs:
             echo "no agent-context changes"
           fi
 
-      - name: Run tolkin and assemble the comment
+      - name: Run tolkin against HEAD and the merge base
+        if: steps.changed.outputs.any == 'true'
+        id: scan
+        run: |
+          set -euo pipefail
+          tolkin project . --json > /tmp/project.json
+
+          # Baseline: fetch-depth: 0 above puts the base sha within reach,
+          # so a detached worktree at the base lets us run the same binary
+          # against the unchanged tree. Failures fall back to absolute-only.
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          BASE_AVAILABLE=false
+          BASE_JSON=""
+          BASE_WT=""
+          if [ -n "$BASE_SHA" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            BASE_WT="$(mktemp -d)"
+            if git worktree add --detach "$BASE_WT" "$BASE_SHA" >/dev/null 2>&1; then
+              BASE_JSON="$(mktemp)"
+              if ( cd "$BASE_WT" && tolkin project . --json > "$BASE_JSON" ); then
+                BASE_AVAILABLE=true
+              else
+                echo "tolkin failed against base tree; falling back to no baseline"
+                BASE_JSON=""
+              fi
+            else
+              echo "git worktree add failed for ${BASE_SHA}; falling back to no baseline"
+            fi
+          else
+            echo "base sha ${BASE_SHA} not reachable in local clone; falling back to no baseline"
+          fi
+
+          echo "base_available=${BASE_AVAILABLE}" >> "$GITHUB_OUTPUT"
+          echo "base_json=${BASE_JSON}" >> "$GITHUB_OUTPUT"
+          echo "base_worktree=${BASE_WT}" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble the PR comment
         if: steps.changed.outputs.any == 'true'
         run: |
-          tolkin project . --json > /tmp/project.json
+          set -euo pipefail
+
+          BASE_AVAILABLE="${{ steps.scan.outputs.base_available }}"
+          BASE_JSON="${{ steps.scan.outputs.base_json }}"
+
+          # Helpers: extract the three deltable numbers from a project.json
+          # via jq; default to 0 when a key is missing.
+          head_always=$(jq -r '(.profiles.always.tokens // 0)' /tmp/project.json)
+          head_ctx=$(jq -r '(.totals.context_tokens // 0)' /tmp/project.json)
+
+          base_always=0
+          base_ctx=0
+          if [ "$BASE_AVAILABLE" = "true" ] && [ -n "$BASE_JSON" ] && [ -f "$BASE_JSON" ]; then
+            base_always=$(jq -r '(.profiles.always.tokens // 0)' "$BASE_JSON")
+            base_ctx=$(jq -r '(.totals.context_tokens // 0)' "$BASE_JSON")
+          fi
+
+          d_always=$(( head_always - base_always ))
+          d_ctx=$(( head_ctx - base_ctx ))
+
+          sign() {
+            # Pretty-print a signed delta with thousands separators.
+            local v="$1"
+            if [ "$v" -gt 0 ]; then printf "+%'d" "$v"
+            elif [ "$v" -lt 0 ]; then printf "%'d" "$v"
+            else printf "0"
+            fi
+          }
+          pct_of() {
+            # Signed percent of the base, one decimal. n/a when base is 0.
+            local d="$1" b="$2"
+            if [ "$b" -eq 0 ]; then printf "n/a"; return; fi
+            awk -v d="$d" -v b="$b" 'BEGIN{
+              p = (d / b) * 100;
+              if (p > 0) { printf "+%.1f%%", p } else if (p < 0) { printf "%.1f%%", p } else { printf "0.0%%" }
+            }'
+          }
 
           {
             echo '<!-- tolkin-audit -->'
@@ -128,6 +212,24 @@ jobs:
               "| Docs | \(.profiles.docs.tokens) |"
             ' /tmp/project.json
             echo ''
+            echo '### Change vs base'
+            echo ''
+            echo '| Metric | Base | Head | Delta | Percent of base |'
+            echo '| --- | ---: | ---: | ---: | ---: |'
+            if [ "$BASE_AVAILABLE" = "true" ]; then
+              printf '| Always loaded | %s | %s | %s | %s |\n' \
+                "$(printf "%'d" "$base_always")" "$(printf "%'d" "$head_always")" \
+                "$(sign "$d_always")" "$(pct_of "$d_always" "$base_always")"
+              printf '| Total context | %s | %s | %s | %s |\n' \
+                "$(printf "%'d" "$base_ctx")" "$(printf "%'d" "$head_ctx")" \
+                "$(sign "$d_ctx")" "$(pct_of "$d_ctx" "$base_ctx")"
+            else
+              printf '| Always loaded | n/a | %s | n/a | n/a |\n' "$(printf "%'d" "$head_always")"
+              printf '| Total context | n/a | %s | n/a | n/a |\n' "$(printf "%'d" "$head_ctx")"
+              echo ''
+              echo '_No baseline available; comparison columns are blank. Absolute totals stay above._'
+            fi
+            echo ''
             jq -r '
               "Totals: \(.totals.context_files) context files, \(.totals.context_tokens) tokens in agent context, \(.totals.savings_min) to \(.totals.savings_max) tokens reclaimable."
             ' /tmp/project.json
@@ -137,6 +239,12 @@ jobs:
 
           echo "Comment preview:"
           cat /tmp/comment.md
+
+          # Stash the deltas for the gate step below.
+          echo "d_always=${d_always}" >> "$GITHUB_ENV"
+          echo "d_ctx=${d_ctx}" >> "$GITHUB_ENV"
+          echo "base_ctx=${base_ctx}" >> "$GITHUB_ENV"
+          echo "base_available=${BASE_AVAILABLE}" >> "$GITHUB_ENV"
 
       - name: Upsert the PR comment
         if: steps.changed.outputs.any == 'true'
@@ -155,6 +263,43 @@ jobs:
             echo "Creating a new comment"
             gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@/tmp/comment.md > /dev/null
           fi
+
+      - name: Clean up base worktree
+        if: always() && steps.scan.outputs.base_worktree != ''
+        run: |
+          BASE_WT="${{ steps.scan.outputs.base_worktree }}"
+          if [ -n "$BASE_WT" ] && [ -d "$BASE_WT" ]; then
+            git worktree remove --force "$BASE_WT" >/dev/null 2>&1 || rm -rf "$BASE_WT"
+          fi
+
+      - name: Delta gate (off unless thresholds are set and baseline exists)
+        if: >-
+          steps.changed.outputs.any == 'true' &&
+          (env.TOLKIN_MAX_ALWAYS_DELTA_TOKENS != '' || env.TOLKIN_MAX_CONTEXT_DELTA_PCT != '')
+        run: |
+          set -euo pipefail
+          if [ "${base_available:-false}" != "true" ]; then
+            echo "delta gate skipped: no baseline available"
+            exit 0
+          fi
+          rc=0
+          if [ -n "${TOLKIN_MAX_ALWAYS_DELTA_TOKENS}" ]; then
+            limit="${TOLKIN_MAX_ALWAYS_DELTA_TOKENS}"
+            if [ "${d_always}" -gt "${limit}" ]; then
+              echo "tolkin delta gate: always-loaded context grew by +${d_always} tokens vs base, exceeding TOLKIN_MAX_ALWAYS_DELTA_TOKENS=${limit}" 1>&2
+              rc=3
+            fi
+          fi
+          if [ -n "${TOLKIN_MAX_CONTEXT_DELTA_PCT}" ] && [ "${base_ctx}" -gt 0 ]; then
+            limit="${TOLKIN_MAX_CONTEXT_DELTA_PCT}"
+            tripped=$(awk -v d="${d_ctx}" -v b="${base_ctx}" -v l="${limit}" 'BEGIN{ if ((d/b)*100 > l) print "y"; else print "n" }')
+            if [ "${tripped}" = "y" ]; then
+              pct=$(awk -v d="${d_ctx}" -v b="${base_ctx}" 'BEGIN{ printf "%.1f", (d/b)*100 }')
+              echo "tolkin delta gate: total context grew by ${pct}% vs base, exceeding TOLKIN_MAX_CONTEXT_DELTA_PCT=${limit}" 1>&2
+              rc=3
+            fi
+          fi
+          exit "${rc}"
 
       - name: Severity gate (off unless TOLKIN_FAIL_ON is set)
         if: env.TOLKIN_FAIL_ON != ''
