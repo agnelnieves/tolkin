@@ -955,3 +955,16 @@ Attacks survived without change: exactness end to end, canonical serialization e
 | Reconciliation | reviewer-reproduced exact match at 482 sessions / 16,099 requests |
 
 Bumped 0.10.0 -> 0.11.0 (minor: new mcp ingestion mode, advisories, subagent ingestion).
+
+### 2026-06-11: 0.11.0 shipped; the delta gate proven on a real PR; two pipeline truths fixed
+
+All six packages are live at 0.11.0. The publish run itself concluded red on a FALSE negative: the win32 leg published successfully ("+ tolkin-win32-x64@0.11.0" in its own log) and the strict verify step queried the registry four seconds later, inside npm's replication lag, getting a 404. The verify step retried only the wrapper's visibility; it now retries every required package before failing. Separately, tolkin-ci's core job failed on clippy 1.96 (CI's stable is newer than local): clippy::question_mark on the locate_tools if-let chain in mcp_tools.rs; rewritten with the ? operator. Both fixes merged; CI green (main 4d7f638).
+
+The A8 dogfood proof landed on PR 27 (a branch deliberately appending filler to CLAUDE.md, never merged): the rebuilt audit comment rendered the new table exactly as designed:
+
+| Metric | Base | Head | Delta | Percent of base |
+| --- | ---: | ---: | ---: | ---: |
+| Always loaded | 7453 | 11545 | +4092 | +54.9% |
+| Total context | 41273 | 45365 | +4092 | +9.9% |
+
+That is the researches' "this PR adds +N tokens" moment, live in this repo; PR 27 closed and deleted. The extended action dry-run (run 27318554314) went green on all three jobs: the 18-check build-report self-test, the delta path against HEAD~1, and the no-baseline fallback. Wave 2 fully closed. Wave 3 (Homebrew staging, the hygiene batch, bench verification expansion, then the cache skill and PRIVACY.md) dispatched.
