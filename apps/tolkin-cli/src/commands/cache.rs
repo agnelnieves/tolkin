@@ -114,8 +114,13 @@ fn print_plain(report: &CacheReport, scope_project: Option<&str>) {
 
     let churn = &report.write_churn;
     println!("Write churn ({})", churn.label);
+    // Headline copy is deliberately a description of what the share counts
+    // (writes after the first within a session), not a flat claim that the
+    // prefix changed. The CHURN_NOTE below explains why a high share on a
+    // Claude Code transcript reflects conversation growth as well as
+    // instability, so the headline must not foreclose that reading.
     println!(
-        "  {:.1}% of cache-write tokens were written after a session's first write ({} of {}); a write after the first means the prefix changed mid-session",
+        "  {:.1}% of cache-write tokens were written after a session's first write ({} of {})",
         churn.share * 100.0,
         commas(churn.writes_after_first_tokens),
         commas(churn.total_write_tokens)

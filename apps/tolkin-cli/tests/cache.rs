@@ -187,6 +187,50 @@ fn cache_global_json_reports_hand_computed_numbers() {
     assert!(!stdout.contains('\u{2013}'));
 }
 
+/// Adversarial pin (A7 review, priority 2): the churn headline number is
+/// a measured truth but its named risk ("prefix instability caught in the
+/// act") only fits a workload where the prefix is meant to be stable. On
+/// Claude Code transcripts the conversation grows on most turns, so the
+/// suffix written each turn is what `writes_after_first_tokens` counts.
+/// The CHURN_NOTE discloses this; the surface headlines must not assert
+/// "the prefix changed mid-session" as a flat fact in the same breath as
+/// the percentage, because a hostile reader will read 94 percent as 94
+/// percent instability rather than 94 percent growth.
+#[test]
+fn cache_plain_churn_headline_survives_the_hostile_reader_test() {
+    let data = tmp("hostile-data");
+    let home = tmp("hostile-home");
+    seed_config(&data, true);
+    seed_home(&home);
+
+    let out = cmd(&data, &home)
+        .args(["cache", "--global"])
+        .output()
+        .expect("binary runs");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // The disambiguating note must appear, verbatim.
+    assert!(
+        stdout.contains("growth-driven suffix writes dominate this share by construction"),
+        "CHURN_NOTE must render (current text): {stdout}"
+    );
+    // The headline next to the percentage must not assert a flat
+    // "prefix changed" claim. The metric measures growth OR
+    // change; the headline should not collapse to either case.
+    assert!(
+        !stdout.contains("means the prefix changed mid-session"),
+        "headline must not flatten the metric to a 'prefix changed' claim that the CHURN_NOTE then has to walk back: {stdout}"
+    );
+    // The headline phrasing must still tie the share to the metric's
+    // intent: writes after the first within a session, which is what the
+    // metric counts.
+    assert!(
+        stdout.contains("written after a session's first write"),
+        "headline must still describe what the metric measures: {stdout}"
+    );
+}
+
 #[test]
 fn cache_plain_output_carries_tier_labels_and_scope_line() {
     let data = tmp("plain-data");

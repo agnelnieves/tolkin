@@ -879,6 +879,113 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Adversarial pin (A7 review): the same (message_id, request_id) appears
+    /// in two files with DIFFERENT cache usage numbers. The winner rule
+    /// (later ts, then larger output, then lex-first file) decides which
+    /// record survives; per-request retention must take the WINNER's cache
+    /// tuple, not the loser's. A naive aggregator that picked the first
+    /// record it saw would carry the wrong tuple downstream into churn,
+    /// gap, and dollar math.
+    #[test]
+    fn cross_file_retention_keeps_winners_cache_tuple_not_losers() {
+        fn write_cache_record(
+            path: &Path,
+            message_id: &str,
+            request_id: &str,
+            ts: &str,
+            output: u64,
+            read: u64,
+            w5: u64,
+            w1: u64,
+        ) {
+            let line = format!(
+                concat!(
+                    r#"{{"message":{{"model":"claude-sonnet-4-6","id":"{message_id}","usage":"#,
+                    r#"{{"input_tokens":1,"output_tokens":{output},"cache_read_input_tokens":{read},"#,
+                    r#""cache_creation_input_tokens":{creation},"cache_creation":"#,
+                    r#"{{"ephemeral_5m_input_tokens":{w5},"ephemeral_1h_input_tokens":{w1}}}}}}},"#,
+                    r#""requestId":"{request_id}","cwd":"/work/x","timestamp":"{ts}"}}"#,
+                ),
+                message_id = message_id,
+                request_id = request_id,
+                ts = ts,
+                output = output,
+                read = read,
+                creation = w5 + w1,
+                w5 = w5,
+                w1 = w1,
+            );
+            let mut existing = fs::read_to_string(path).unwrap_or_default();
+            if !existing.is_empty() && !existing.ends_with('\n') {
+                existing.push('\n');
+            }
+            existing.push_str(&line);
+            existing.push('\n');
+            fs::write(path, existing).unwrap();
+        }
+
+        let root = tmp_tree("xfile-diff-cache");
+        let a = root.join("proj-x").join("a-loser.jsonl");
+        let b = root.join("proj-x").join("b-winner.jsonl");
+        // Same (m1, r1) appears in both files with the SAME ts; b has more
+        // output, so b wins on the second tier of the winner rule. The
+        // cache numbers also differ: a says read=1000, w1=2000; b says
+        // read=3000, w1=7000. The winner is b, so retention must be 3000
+        // and 7000, not 1000 and 2000.
+        write_cache_record(
+            &a,
+            "m1",
+            "r1",
+            "2026-06-10T12:00:00Z",
+            50,
+            1000,
+            0,
+            2000,
+        );
+        write_cache_record(
+            &b,
+            "m1",
+            "r1",
+            "2026-06-10T12:00:00Z",
+            500,
+            3000,
+            0,
+            7000,
+        );
+        let data = read(&root);
+        let retained_w1: u64 = data
+            .sessions
+            .iter()
+            .flat_map(|s| s.requests.iter())
+            .map(|r| r.cache_write_1h_tokens)
+            .sum();
+        let retained_reads: u64 = data
+            .sessions
+            .iter()
+            .flat_map(|s| s.requests.iter())
+            .map(|r| r.cache_read_tokens)
+            .sum();
+        let retained_count: usize = data.sessions.iter().map(|s| s.requests.len()).sum();
+        assert_eq!(retained_count, 1, "one logical record after dedup");
+        assert_eq!(
+            retained_w1, 7000,
+            "winner's cache_write_1h must be retained, not loser's"
+        );
+        assert_eq!(
+            retained_reads, 3000,
+            "winner's cache_read must be retained, not loser's"
+        );
+        // The winning session is b-winner; the totals also match the winner.
+        let winner_session = data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "b-winner")
+            .expect("b-winner survives the merge");
+        assert_eq!(winner_session.totals.cache_read_tokens, 3000);
+        assert_eq!(winner_session.totals.cache_write_1h_tokens, 7000);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// Smoke run against the developer's actual local logs. Ignored by default
     /// because the paths only exist on a workstation; invoke with
     /// `cargo test --bin tolkin --release smoke -- --ignored --nocapture`.

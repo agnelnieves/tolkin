@@ -433,12 +433,34 @@ fn compute_write_churn(
 /// requests STRICTLY exceeds the TTL (a gap equal to the TTL is still a
 /// hit). The first request always writes.
 ///
-/// Refresh-semantics citation (placeholder for the adversarial reviewer to
-/// pin against the current docs): Anthropic prompt caching documentation,
-/// https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching,
-/// which states the cache's lifetime is refreshed each time the cached
-/// content is used, for both the 5-minute and 1-hour TTLs (wording as
-/// checked 2026-06).
+/// Refresh-semantics citation (pinned 2026-06-10 by the A7 review):
+///
+/// 1. Anthropic Platform prompt caching docs
+///    (https://platform.claude.com/docs/en/build-with-claude/prompt-caching;
+///    formerly docs.anthropic.com, 301-redirected to platform.claude.com on
+///    fetch). The "How prompt caching works" section states verbatim: "By
+///    default, the cache has a 5-minute lifetime. The cache is refreshed
+///    for no additional cost each time the cached content is used." The
+///    1-hour TTL is documented as the same mechanism with a longer
+///    lifetime ("If you find that 5 minutes is too short, Anthropic also
+///    offers a 1-hour cache duration at additional cost"), and the
+///    multi-turn section uses the phrase "cache refresh" for hits within
+///    the live window.
+/// 2. AWS Bedrock prompt caching docs make the dual-TTL claim explicit
+///    where the Anthropic page is general
+///    (https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html):
+///    "The cache has a Time To Live (TTL), which resets with each
+///    successful cache hit. During this period, the context in the cache
+///    is preserved. If no cache hits occur within the TTL window, your
+///    cache expires." This sentence sits above the table that lists the
+///    same models as supporting "5 minutes, 1 hour", so it covers both
+///    TTLs on the same models tolkin's pricing table prices.
+///
+/// Caveat captured in the surfaces: the Anthropic doc does not single out
+/// the 1-hour TTL with its own refresh sentence, so the dual-TTL claim
+/// leans on the general statement plus the Bedrock corroboration. If
+/// Anthropic ever publishes 1h-specific refresh wording that differs from
+/// 5m, this function and the verdict text must change together.
 fn simulated_write_events_reads_refresh_ttl(sorted_ts: &[u64], ttl_secs: u64) -> u64 {
     if sorted_ts.is_empty() {
         return 0;
