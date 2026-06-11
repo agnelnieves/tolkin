@@ -89,3 +89,7 @@ Append a new entry per incident. Format: ISO date + one-line summary, then a `Wh
 - "Run the local gate suite once before every phase" caught more issues than any review pass. The cost of a clean baseline is one minute; the cost of a regression untraceable to a commit is hours.
 - Trust-but-verify on parallel agents: always read what landed before believing the summary. Files do not lie; summaries sometimes round.
 - Privacy posture is a feature, not friction. Saying out loud "nothing leaves your browser" forced every downstream decision (no localStorage default, redaction first, hybrid opt-in only, ledger consented) and the codebase is simpler for it.
+
+## Sub-agent output discipline (2026-06-11)
+
+A flagship-feature agent ran 29 minutes, wrote nothing to disk, and died emitting one final message over the output token cap. The relaunch fixed it with four process rules: write files incrementally with tools (never one giant message), split big modules into submodule files, checkpoint-commit at each compiling milestone, and cap the final report at a couple hundred words. Lesson: for any long implementation run, the deliverable is commits on disk, not the report; instruct agents to make the report disposable and the commits early.
