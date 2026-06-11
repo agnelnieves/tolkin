@@ -18,6 +18,10 @@ Or install in a single command without a prior tap:
 brew install agnelnieves/tolkin/tolkin
 ```
 
+Recent Homebrew versions gate third-party taps behind a one-time trust
+decision: interactive shells prompt for it during install; scripts and CI
+must run `brew trust agnelnieves/tolkin` once before `brew install`.
+
 ## Support matrix
 
 | Platform | Architecture | Status |

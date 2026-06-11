@@ -77,6 +77,10 @@ Or install in a single command without a prior tap:
 brew install agnelnieves/tolkin/tolkin
 ```
 
+Recent Homebrew versions gate third-party taps behind a one-time trust
+decision: interactive shells prompt for it during install; scripts and CI
+must run `brew trust agnelnieves/tolkin` once before `brew install`.
+
 The tap is at `agnelnieves/homebrew-tolkin`. Homebrew covers macOS arm64
 (Apple Silicon), macOS x64 (Intel), Linux x64, and Linux arm64. Windows
 users should use `npx tolkin-cli` instead. Bottles and source builds from
