@@ -15,17 +15,36 @@ use crate::tui::components::list::render_select_list;
 use crate::tui::data::REALIZED_SPARK_POINTS;
 use crate::tui::format;
 
+use crate::tui::theme::Theme;
+
 use super::{muted_line, panel};
 
-pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
-    let rows = Layout::vertical([
+/// Vertical body split: load profile, gap, heavy files, gap, savings.
+/// Shared by render and the mouse hit-testing helper below.
+fn rows(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([
         Constraint::Length(8),
         Constraint::Length(1),
         Constraint::Min(5),
         Constraint::Length(1),
         Constraint::Length(7),
     ])
-    .split(area);
+    .split(area)
+}
+
+/// Inner rect of the heavy-files select-list for mouse hit-testing;
+/// mirrors render()'s layout exactly.
+pub fn heavy_list_inner(body: Rect, theme: &Theme) -> Rect {
+    panel(
+        "heaviest agent-context files (j/k)".to_string(),
+        true,
+        theme,
+    )
+    .inner(rows(body)[2])
+}
+
+pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
+    let rows = rows(area);
 
     render_load_profile(frame, rows[0], model);
     render_heavy_files(frame, rows[2], model);

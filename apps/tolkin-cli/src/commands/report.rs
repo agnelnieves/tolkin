@@ -16,7 +16,7 @@
 //! log ingestion, mirroring how `stats` behaves.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use clap::Args;
@@ -30,7 +30,9 @@ use crate::tui::data;
 
 use super::stats_data::StatsSnapshot;
 
-const DEFAULT_OUTPUT: &str = "tolkin-report.html";
+/// Default artifact name, written into the current directory. Public: the
+/// TUI report worker writes the same artifact the CLI command does.
+pub const DEFAULT_OUTPUT: &str = "tolkin-report.html";
 
 #[derive(Args, Debug)]
 pub struct ReportArgs {
@@ -49,21 +51,28 @@ pub struct ReportArgs {
 }
 
 pub fn run(args: ReportArgs) -> Result<()> {
+    let output = args.output.unwrap_or_else(|| PathBuf::from(DEFAULT_OUTPUT));
+    let abs = write_report(&output, args.global)?;
+    println!("{}", abs.display());
+    Ok(())
+}
+
+/// Render and write the report artifact, returning the canonical output
+/// path. The CLI command prints it; the TUI report worker toasts it.
+pub fn write_report(output: &Path, global: bool) -> Result<PathBuf> {
     let dir = ledger::data_dir()
         .ok_or_else(|| anyhow!("no data directory available; run `tolkin init` first"))?;
     let snapshot = StatsSnapshot::load_in(&dir);
-
-    let output = args.output.unwrap_or_else(|| PathBuf::from(DEFAULT_OUTPUT));
-    let html = render_html(&snapshot, args.global);
+    let html = render_html(&snapshot, global);
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
         }
     }
-    fs::write(&output, html)?;
-    let abs = output.canonicalize().unwrap_or(output);
-    println!("{}", abs.display());
-    Ok(())
+    fs::write(output, html)?;
+    Ok(output
+        .canonicalize()
+        .unwrap_or_else(|_| output.to_path_buf()))
 }
 
 // ---------------------------------------------------------------------------

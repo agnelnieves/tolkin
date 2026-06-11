@@ -9,7 +9,7 @@
 //! the user in raw-mode no-echo with a hidden cursor.
 
 use std::env;
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -107,7 +107,10 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         Animator::system(!reduced_motion),
         event::now_epoch(),
     );
-    if dispatch(&tx, model.start_initial_scan()) {
+    if let Ok(size) = terminal.size() {
+        model.viewport = (size.width, size.height);
+    }
+    if dispatch(terminal, &tx, model.start_initial_scan()) {
         return Ok(());
     }
 
@@ -130,26 +133,37 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
             Err(RecvTimeoutError::Disconnected) => return Ok(()),
         };
         last_loop = Instant::now();
-        if dispatch(&tx, app::update(&mut model, msg)) {
+        if dispatch(terminal, &tx, app::update(&mut model, msg)) {
             return Ok(());
         }
         // Drain whatever queued while rendering (resize bursts, fast keys).
         while let Ok(extra) = rx.try_recv() {
-            if dispatch(&tx, app::update(&mut model, extra)) {
+            if dispatch(terminal, &tx, app::update(&mut model, extra)) {
                 return Ok(());
             }
         }
     }
 }
 
-/// Run side effects. Returns true when the loop should quit.
-fn dispatch(tx: &Sender<Msg>, cmds: Vec<Cmd>) -> bool {
+/// Run side effects. Returns true when the loop should quit. The terminal
+/// handle carries the OSC52 escape straight to the hosting emulator.
+fn dispatch(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    tx: &Sender<Msg>,
+    cmds: Vec<Cmd>,
+) -> bool {
     for cmd in cmds {
         match cmd {
             Cmd::Quit => return true,
             Cmd::SpawnScan(root) => event::spawn_scan(tx.clone(), root),
             Cmd::ReloadSnapshot => event::spawn_reload(tx.clone()),
             Cmd::RunAudit { root, path } => event::spawn_audit(tx.clone(), root, path),
+            Cmd::RunReport => event::spawn_report(tx.clone()),
+            Cmd::CopyOsc52(payload) => {
+                let backend = terminal.backend_mut();
+                let _ = write!(backend, "{}", format::osc52(&payload));
+                let _ = backend.flush();
+            }
         }
     }
     false

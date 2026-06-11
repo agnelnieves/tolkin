@@ -21,6 +21,28 @@ use crate::tui::theme::Theme;
 
 use super::{muted_line, panel, panel_with_accessory};
 
+/// Vertical body split: day strip, models, cache, advisories (with gaps).
+/// Shared by render and the mouse hit-testing helper below.
+fn rows(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Length(1),
+        Constraint::Length(9),
+        Constraint::Length(1),
+        Constraint::Length(5),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(area)
+}
+
+/// Inner rect of the advisories select-list for mouse hit-testing; only
+/// meaningful while ingestion is on (the caller guards). Mirrors
+/// render()'s layout exactly.
+pub fn advisory_list_inner(body: Rect, theme: &Theme) -> Rect {
+    panel("advisories (j/k, [ ] focus)".to_string(), true, theme).inner(rows(body)[6])
+}
+
 pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     let theme = &model.theme;
     if !model.derived.ingestion_on {
@@ -31,16 +53,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         return;
     }
 
-    let rows = Layout::vertical([
-        Constraint::Length(4),
-        Constraint::Length(1),
-        Constraint::Length(9),
-        Constraint::Length(1),
-        Constraint::Length(5),
-        Constraint::Length(1),
-        Constraint::Min(0),
-    ])
-    .split(area);
+    let rows = rows(area);
 
     render_day_strip(frame, rows[0], model);
     render_models(frame, rows[2], model);

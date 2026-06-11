@@ -156,10 +156,15 @@ pub fn wrap_text(s: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// RFC 4648 standard base64 with padding. Used by the OSC52 clipboard
-/// escape (wired with the copy path later in this wave); tiny on purpose
-/// so the zero-dependency contract holds.
-#[allow(dead_code)]
+/// The OSC52 clipboard escape for `payload`: ESC ] 52 ; c ; base64 BEL.
+/// Written straight through the terminal handle so the hosting emulator
+/// (including most terminals over SSH) places the text on the clipboard.
+pub fn osc52(payload: &str) -> String {
+    format!("\x1b]52;c;{}\x07", base64_encode(payload.as_bytes()))
+}
+
+/// RFC 4648 standard base64 with padding. Feeds the OSC52 escape; tiny on
+/// purpose so the zero-dependency contract holds.
 pub fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
@@ -275,5 +280,18 @@ mod tests {
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn osc52_frames_the_payload_exactly() {
+        assert_eq!(osc52("hi"), "\x1b]52;c;aGk=\x07");
+        let seq = osc52("/repo/CLAUDE.md");
+        assert!(seq.starts_with("\x1b]52;c;"));
+        assert!(seq.ends_with('\x07'));
+        // The payload between the framing is pure base64.
+        let inner = &seq[7..seq.len() - 1];
+        assert!(inner
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='));
     }
 }

@@ -15,29 +15,50 @@ use crate::tui::components::gauge;
 use crate::tui::components::list::render_select_list;
 use crate::tui::format;
 
+use crate::tui::theme::Theme;
+
 use super::{kv_line, muted_line, panel, panel_with_accessory};
 
 const CONSENT_HINT: &str = "consent to ingestion: tolkin init";
 
-pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
-    let rows = Layout::vertical([
+/// Vertical body split: cards, gap, spark, gap, bottom row. Shared by
+/// render and the mouse hit-testing helper below.
+fn rows(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([
         Constraint::Length(4),
         Constraint::Length(1),
         Constraint::Length(4),
         Constraint::Length(1),
         Constraint::Min(6),
     ])
-    .split(area);
+    .split(area)
+}
 
-    render_cards(frame, rows[0], model);
-    render_spark(frame, rows[2], model);
-
-    let bottom = Layout::horizontal([
+/// Bottom row split: advisories left, gap, machine summary right.
+fn bottom_cols(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::horizontal([
         Constraint::Percentage(55),
         Constraint::Length(1),
         Constraint::Min(28),
     ])
-    .split(rows[4]);
+    .split(area)
+}
+
+/// Inner rect of the selectable advisories list for mouse hit-testing;
+/// mirrors render()'s layout exactly (same splits, same panel geometry).
+pub fn advisory_list_inner(body: Rect, theme: &Theme) -> Rect {
+    let rows = rows(body);
+    let bottom = bottom_cols(rows[4]);
+    panel("advisories (j/k)".to_string(), true, theme).inner(bottom[0])
+}
+
+pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
+    let rows = rows(area);
+
+    render_cards(frame, rows[0], model);
+    render_spark(frame, rows[2], model);
+
+    let bottom = bottom_cols(rows[4]);
     render_advisories(frame, bottom[0], model);
     render_machine_summary(frame, bottom[2], model);
 }

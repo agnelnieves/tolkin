@@ -45,6 +45,8 @@ pub enum Msg {
         path: String,
         result: Result<Box<AuditReport>, String>,
     },
+    /// HTML report worker finished; `Ok` carries the artifact path.
+    ReportDone(Result<PathBuf, String>),
 }
 
 /// Current unix epoch seconds. Clock reads live here and in workers, never
@@ -114,5 +116,16 @@ pub fn spawn_audit(tx: Sender<Msg>, root: PathBuf, path: String) {
             .map(Box::new)
             .map_err(|e| e.to_string());
         let _ = tx.send(Msg::AuditDone { path, result });
+    });
+}
+
+/// HTML report worker: writes the default project-scope artifact into the
+/// current directory, exactly like `tolkin report --html`.
+pub fn spawn_report(tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let output = PathBuf::from(crate::commands::report::DEFAULT_OUTPUT);
+        let result =
+            crate::commands::report::write_report(&output, false).map_err(|e| e.to_string());
+        let _ = tx.send(Msg::ReportDone(result));
     });
 }

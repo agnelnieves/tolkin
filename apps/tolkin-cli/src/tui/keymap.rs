@@ -383,6 +383,15 @@ pub static BINDINGS: &[Binding] = &[
         hint: "audit",
         group: Group::Act,
     },
+    // Inside a detail modal, `y` copies the dialog's subject.
+    Binding {
+        keys: &[(KeyCode::Char('y'), NONE)],
+        action: Action::CopySelection,
+        context: Context::Modal,
+        keys_label: "y",
+        hint: "copy",
+        group: Group::Act,
+    },
 ];
 
 /// True for contexts where the user is typing free text: printable keys

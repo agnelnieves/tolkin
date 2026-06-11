@@ -9,8 +9,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Block;
@@ -33,6 +35,7 @@ use super::components::list::Selection;
 use super::components::modal::{self, ModalWidth};
 use super::components::palette::{self, PaletteState};
 use super::components::spinner;
+use super::components::toast::{self, ToastKind, ToastStack};
 use super::data::{self, DayDetail, HeavyRow, MachineProject, ModelRow};
 use super::event::Msg;
 use super::format;
@@ -45,7 +48,14 @@ use super::theme::{self, Theme, ThemeEnv};
 pub enum Cmd {
     SpawnScan(PathBuf),
     ReloadSnapshot,
-    RunAudit { root: PathBuf, path: String },
+    RunAudit {
+        root: PathBuf,
+        path: String,
+    },
+    RunReport,
+    /// Emit the OSC52 clipboard escape for this payload through the
+    /// terminal handle.
+    CopyOsc52(String),
     Quit,
 }
 
@@ -296,10 +306,15 @@ pub struct Model {
     pub spend_focus: SpendFocus,
     pub day_cursor: usize,
     pub refreshing: bool,
+    /// True while the report worker runs (one artifact at a time).
+    pub reporting: bool,
     /// Accumulated busy milliseconds, drives the spinner frame.
     pub busy_ms: u64,
     pub now_epoch: u64,
     pub last_scan: Option<ScanMeta>,
+    pub toasts: ToastStack,
+    /// Last known terminal size, kept for mouse hit-testing.
+    pub viewport: (u16, u16),
     pub version: &'static str,
     pub prices_observed: &'static str,
 }
@@ -330,9 +345,12 @@ impl Model {
             spend_focus: SpendFocus::Days,
             day_cursor,
             refreshing: false,
+            reporting: false,
             busy_ms: 0,
             now_epoch,
             last_scan: None,
+            toasts: ToastStack::default(),
+            viewport: (0, 0),
             version: env!("CARGO_PKG_VERSION"),
             prices_observed: tolkin_core::pricing::PRICES_OBSERVED,
         };
@@ -358,7 +376,7 @@ impl Model {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.refreshing || matches!(self.scan, ScanState::Scanning)
+        self.refreshing || self.reporting || matches!(self.scan, ScanState::Scanning)
     }
 
     /// Kick the startup scan if the cwd is scannable.
@@ -592,13 +610,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 model.busy_ms = model.busy_ms.saturating_add(delta_ms);
             }
             model.animator.prune();
+            model.toasts.prune(model.animator.now());
             Vec::new()
         }
-        // Relayout happens naturally per frame; the viewport payload feeds
-        // mouse hit-testing once the mouse wiring lands later in this wave.
-        Msg::Resize(_, _) => Vec::new(),
-        // Mouse wiring lands later in this wave; capture is on already.
-        Msg::Mouse(_) => Vec::new(),
+        Msg::Resize(w, h) => {
+            model.viewport = (w, h);
+            Vec::new()
+        }
+        Msg::Mouse(mouse) => handle_mouse(model, &mouse),
         Msg::ScanDone {
             result,
             at_epoch,
@@ -606,27 +625,71 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         } => {
             match result {
                 Ok(report) => {
+                    let files = report.totals.files_scanned;
+                    let warnings = report.warnings.len();
                     model.scan = ScanState::Ready(report);
                     model.last_scan = Some(ScanMeta {
                         at_epoch,
                         elapsed_ms,
                     });
+                    let (kind, text) = if warnings == 0 {
+                        (
+                            ToastKind::Ok,
+                            format!(
+                                "scanned {} files in {}",
+                                format::commas(files),
+                                format::duration_short(elapsed_ms)
+                            ),
+                        )
+                    } else {
+                        (
+                            ToastKind::Warn,
+                            format!(
+                                "scanned {} files in {}, {warnings} warning(s)",
+                                format::commas(files),
+                                format::duration_short(elapsed_ms)
+                            ),
+                        )
+                    };
+                    model.toasts.push(kind, text, model.animator.now());
                 }
-                Err(msg) => model.scan = ScanState::Failed(msg),
+                Err(msg) => {
+                    model.toasts.push(
+                        ToastKind::Err,
+                        format!("error scan failed: {msg}"),
+                        model.animator.now(),
+                    );
+                    model.scan = ScanState::Failed(msg);
+                }
             }
             model.recompute_derived();
             Vec::new()
         }
         Msg::SnapshotLoaded(snapshot) => {
+            let was_refreshing = model.refreshing;
             model.snapshot = (*snapshot).map(Box::new);
             model.refreshing = false;
             model.recompute_derived();
+            if was_refreshing {
+                model.toasts.push(
+                    ToastKind::Ok,
+                    "refreshed ledger and usage reloaded".to_string(),
+                    model.animator.now(),
+                );
+            }
             Vec::new()
         }
         Msg::AuditDone { path, result } => {
             let state = match result {
                 Ok(report) => AuditState::Done(report),
-                Err(msg) => AuditState::Failed(msg),
+                Err(msg) => {
+                    model.toasts.push(
+                        ToastKind::Err,
+                        format!("error audit failed: {msg}"),
+                        model.animator.now(),
+                    );
+                    AuditState::Failed(msg)
+                }
             };
             // Land the result in the matching file-detail overlay; a closed
             // modal simply drops the result (the worker stays detached).
@@ -635,6 +698,22 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 _ => None,
             }) {
                 f.audit = state;
+            }
+            Vec::new()
+        }
+        Msg::ReportDone(result) => {
+            model.reporting = false;
+            match result {
+                Ok(path) => model.toasts.push(
+                    ToastKind::Ok,
+                    format!("report written to {}", path.display()),
+                    model.animator.now(),
+                ),
+                Err(msg) => model.toasts.push(
+                    ToastKind::Err,
+                    format!("error report failed: {msg}"),
+                    model.animator.now(),
+                ),
             }
             Vec::new()
         }
@@ -713,6 +792,11 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
         Action::Rescan => return model.begin_scan(),
         Action::CycleTheme => {
             model.theme = theme::cycle(model.theme.name, &model.theme_env);
+            model.toasts.push(
+                ToastKind::Info,
+                format!("theme {} active", model.theme.name),
+                model.animator.now(),
+            );
         }
         Action::OpenDetail => return open_detail(model),
         Action::AuditSelected => return audit_selected(model),
@@ -729,13 +813,74 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
                 .overlays
                 .push(Overlay::Palette(PaletteState::new(suggested)));
         }
-        // Wired later in this wave: report, copy, filter, sort. The
-        // bindings exist so help and the palette stay complete; pressing
-        // them is a deliberate no-op until then.
-        Action::GenerateReport | Action::CopySelection | Action::FilterList | Action::CycleSort => {
+        Action::GenerateReport => {
+            if !model.reporting {
+                model.reporting = true;
+                model.busy_ms = 0;
+                return vec![Cmd::RunReport];
+            }
         }
+        Action::CopySelection => return copy_selection(model),
+        // Wired later in this wave: filter and sort. The bindings exist so
+        // help and the palette stay complete; pressing them is a
+        // deliberate no-op until then.
+        Action::FilterList | Action::CycleSort => {}
     }
     Vec::new()
+}
+
+/// `y`: copy the selection's subject over OSC52. Files and projects copy
+/// their path; advisory lines copy their text. A toast confirms.
+fn copy_selection(model: &mut Model) -> Vec<Cmd> {
+    let payload = match model.overlays.last() {
+        Some(Overlay::File(f)) => {
+            Some((absolute_path(&model.derived.project_key, &f.path), "path"))
+        }
+        Some(Overlay::Project(p)) => Some((p.key.clone(), "path")),
+        Some(Overlay::Advisory(a)) => Some((a.paragraphs.join("\n"), "advisory")),
+        Some(_) => None,
+        None => match model.tab {
+            TabId::Project => model
+                .derived
+                .heavy
+                .get(model.sel_heavy.idx)
+                .map(|r| (absolute_path(&model.derived.project_key, &r.path), "path")),
+            TabId::Machine => model
+                .derived
+                .machine
+                .get(model.sel_machine.idx)
+                .map(|p| (p.key.clone(), "path")),
+            TabId::Overview => model
+                .derived
+                .advisory_lines
+                .get(model.sel_overview.idx)
+                .map(|l| (l.clone(), "advisory")),
+            TabId::Spend if model.spend_focus == SpendFocus::Advisories => model
+                .derived
+                .advisory_lines
+                .get(model.sel_spend.idx)
+                .map(|l| (l.clone(), "advisory")),
+            TabId::Spend => None,
+        },
+    };
+    let Some((payload, label)) = payload else {
+        return Vec::new();
+    };
+    model.toasts.push(
+        ToastKind::Ok,
+        format!("copied {label} to clipboard"),
+        model.animator.now(),
+    );
+    vec![Cmd::CopyOsc52(payload)]
+}
+
+/// Join a project-relative path onto the project root for copying; paths
+/// that are already absolute (or a missing root) pass through.
+fn absolute_path(root: &str, path: &str) -> String {
+    if root.is_empty() || path.starts_with('/') {
+        return path.to_string();
+    }
+    format!("{}/{}", root.trim_end_matches('/'), path)
 }
 
 /// Palette typing rules, applied before keymap resolution while a palette
@@ -776,6 +921,131 @@ fn handle_palette_key(model: &mut Model, key: &KeyEvent) -> Option<Vec<Cmd>> {
         }
         _ => None,
     }
+}
+
+/// Wheel lines per scroll notch.
+const WHEEL_LINES: usize = 3;
+
+/// Mouse wiring: wheel scrolls the focused list, click selects a row or
+/// switches tabs, click outside a dialog closes it. Hit-testing recomputes
+/// the same layout math the screens render with.
+fn handle_mouse(model: &mut Model, mouse: &MouseEvent) -> Vec<Cmd> {
+    match mouse.kind {
+        MouseEventKind::ScrollDown if model.overlays.is_empty() => {
+            if let Some((sel, len)) = model.active_list() {
+                for _ in 0..WHEEL_LINES {
+                    sel.down(len);
+                }
+            }
+        }
+        MouseEventKind::ScrollUp if model.overlays.is_empty() => {
+            if let Some((sel, _)) = model.active_list() {
+                for _ in 0..WHEEL_LINES {
+                    sel.up();
+                }
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            return handle_click(model, mouse.column, mouse.row)
+        }
+        _ => {}
+    }
+    Vec::new()
+}
+
+fn handle_click(model: &mut Model, x: u16, y: u16) -> Vec<Cmd> {
+    let (w, h) = model.viewport;
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
+    let area = Rect::new(0, 0, w, h);
+    let pos = Position { x, y };
+
+    // Overlay open: a click outside the topmost dialog closes it; clicks
+    // inside stay with the dialog.
+    if !model.overlays.is_empty() {
+        if !top_overlay_rect(model, area).contains(pos) {
+            model.overlays.pop();
+        }
+        return Vec::new();
+    }
+
+    // Header tab strip (row 0 carries the labels).
+    if y == area.y {
+        if let Some(tab) = chrome::tab_at(x) {
+            model.set_tab(tab);
+        }
+        return Vec::new();
+    }
+
+    // Below the minimum size the body renders the too-small card.
+    if area.width < 80 || area.height < 24 || model.derived.setup_needed {
+        return Vec::new();
+    }
+    let body = inset(chrome_rows(area)[1]);
+    match model.tab {
+        TabId::Overview => {
+            let inner = screens::overview::advisory_list_inner(body, &model.theme);
+            click_list(
+                pos,
+                inner,
+                &mut model.sel_overview,
+                model.derived.advisory_lines.len(),
+            );
+        }
+        TabId::Project => {
+            let inner = screens::project::heavy_list_inner(body, &model.theme);
+            click_list(pos, inner, &mut model.sel_heavy, model.derived.heavy.len());
+        }
+        TabId::Machine => {
+            let inner = screens::machine::projects_list_inner(body, &model.theme);
+            click_list(
+                pos,
+                inner,
+                &mut model.sel_machine,
+                model.derived.machine.len(),
+            );
+        }
+        TabId::Spend if model.derived.ingestion_on => {
+            let inner = screens::spend::advisory_list_inner(body, &model.theme);
+            if inner.contains(pos) {
+                model.spend_focus = SpendFocus::Advisories;
+                click_list(
+                    pos,
+                    inner,
+                    &mut model.sel_spend,
+                    model.derived.advisory_lines.len(),
+                );
+            }
+        }
+        TabId::Spend => {}
+    }
+    Vec::new()
+}
+
+/// Move a list selection to the clicked row, honoring the same scroll
+/// window the renderer used.
+fn click_list(pos: Position, inner: Rect, sel: &mut Selection, len: usize) {
+    if len == 0 || !inner.contains(pos) {
+        return;
+    }
+    let (start, _) = super::components::list::visible_window(sel.idx, len, inner.height as usize);
+    let row = start + (pos.y - inner.y) as usize;
+    if row < len {
+        sel.idx = row;
+    }
+}
+
+/// The topmost overlay's dialog rectangle, recomputed with the exact
+/// geometry the render path uses.
+fn top_overlay_rect(model: &Model, area: Rect) -> Rect {
+    let overlay = model.overlays.last().expect("caller checks non-empty");
+    if let Overlay::Palette(state) = overlay {
+        return palette::palette_rect(area, state.matches.len());
+    }
+    let (_, width) = overlay_chrome(overlay);
+    let body = overlay_body(overlay, area, model.now_epoch, &model.theme);
+    modal::dialog_rect(area, width, body.len() as u16)
 }
 
 /// Enter: with a dialog open it confirms (dismisses) it; otherwise it opens
@@ -885,12 +1155,7 @@ pub fn view(frame: &mut Frame, model: &Model) {
         empty::render_too_small(frame, area, &model.theme);
         return;
     }
-    let rows = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(0),
-        Constraint::Length(2),
-    ])
-    .split(area);
+    let rows = chrome_rows(area);
 
     let data_age = model
         .derived
@@ -900,6 +1165,8 @@ pub fn view(frame: &mut Frame, model: &Model) {
         Some("reloading")
     } else if matches!(model.scan, ScanState::Scanning) {
         Some("scanning repo")
+    } else if model.reporting {
+        Some("rendering report")
     } else {
         None
     };
@@ -939,6 +1206,22 @@ pub fn view(frame: &mut Frame, model: &Model) {
         let body = overlay_body(overlay, area, model.now_epoch, &model.theme);
         modal::render_modal(frame, &title, &body, width, &model.theme);
     }
+
+    // Toasts stack above everything, including dialog scrims.
+    if !model.toasts.is_empty() {
+        toast::render_toasts(frame, &model.toasts, &model.theme);
+    }
+}
+
+/// The header/body/footer vertical split, shared by view and the mouse
+/// hit-testing path so a click can never disagree with the layout.
+fn chrome_rows(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(0),
+        Constraint::Length(2),
+    ])
+    .split(area)
 }
 
 /// Title and dialog width per overlay kind. Shared by render and (later)
@@ -1368,10 +1651,11 @@ mod tests {
     #[test]
     fn actions_without_data_are_safe_no_ops() {
         let (mut model, _clock) = test_model();
+        // Enter, audit, and copy need a selection; filter and sort are
+        // wired later in this wave. None of them may panic or dialog.
         for code in [
             KeyCode::Enter,
             KeyCode::Char('a'),
-            KeyCode::Char('o'),
             KeyCode::Char('y'),
             KeyCode::Char('/'),
             KeyCode::Char(','),
@@ -1685,6 +1969,178 @@ mod tests {
             text.contains("select next row"),
             "suggested action missing:\n{text}"
         );
+    }
+
+    fn click(x: u16, y: u16) -> Msg {
+        Msg::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn wheel(down: bool) -> Msg {
+        Msg::Mouse(MouseEvent {
+            kind: if down {
+                MouseEventKind::ScrollDown
+            } else {
+                MouseEventKind::ScrollUp
+            },
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn refresh_and_scan_completion_push_toasts_that_expire() {
+        let (mut model, clock) = test_model();
+        update(&mut model, key(KeyCode::Char('r')));
+        update(&mut model, Msg::SnapshotLoaded(Box::new(None)));
+        assert_eq!(model.toasts.iter().count(), 1, "refresh done toast");
+        update(
+            &mut model,
+            Msg::ScanDone {
+                result: Err("boom".to_string()),
+                at_epoch: 1,
+                elapsed_ms: 10,
+            },
+        );
+        assert_eq!(model.toasts.iter().count(), 2, "scan error toast joins");
+        // The 5000 ms ttl runs on the animator clock.
+        clock.advance(Duration::from_millis(5_001));
+        update(
+            &mut model,
+            Msg::Tick {
+                now_epoch: 2,
+                delta_ms: 5_001,
+            },
+        );
+        assert!(model.toasts.is_empty(), "toasts pruned after the ttl");
+    }
+
+    #[test]
+    fn copy_emits_osc52_for_paths_and_advisory_values() {
+        let (mut model, _clock) = test_model();
+        model.tab = TabId::Project;
+        model.derived.project_key = "/repo".to_string();
+        model.derived.heavy = vec![seeded_heavy_row()];
+        let cmds = update(&mut model, key(KeyCode::Char('y')));
+        assert_eq!(
+            cmds,
+            vec![Cmd::CopyOsc52("/repo/.claude/rules.md".to_string())]
+        );
+        assert_eq!(model.toasts.iter().count(), 1, "copied toast");
+
+        // Machine rows copy the project key.
+        model.tab = TabId::Machine;
+        model.derived.machine = vec![MachineProject {
+            key: "/repo".to_string(),
+            always_tokens: 1,
+            last_ts: 0,
+            sessions: 2,
+        }];
+        let cmds = update(&mut model, key(KeyCode::Char('y')));
+        assert_eq!(cmds, vec![Cmd::CopyOsc52("/repo".to_string())]);
+
+        // Advisory lines copy their text.
+        model.tab = TabId::Overview;
+        model.derived.advisory_lines = vec!["output share  15.0% of bill".to_string()];
+        let cmds = update(&mut model, key(KeyCode::Char('y')));
+        assert_eq!(
+            cmds,
+            vec![Cmd::CopyOsc52("output share  15.0% of bill".to_string())]
+        );
+
+        // Inside the file detail modal, y copies the dialog's path.
+        model.tab = TabId::Project;
+        update(&mut model, key(KeyCode::Enter));
+        let cmds = update(&mut model, key(KeyCode::Char('y')));
+        assert_eq!(
+            cmds,
+            vec![Cmd::CopyOsc52("/repo/.claude/rules.md".to_string())]
+        );
+    }
+
+    #[test]
+    fn report_runs_once_and_toasts_the_artifact_path() {
+        let (mut model, _clock) = test_model();
+        let cmds = update(&mut model, key(KeyCode::Char('o')));
+        assert_eq!(cmds, vec![Cmd::RunReport]);
+        assert!(model.reporting && model.is_busy());
+        // A second o while the worker runs stays quiet.
+        assert!(update(&mut model, key(KeyCode::Char('o'))).is_empty());
+        update(
+            &mut model,
+            Msg::ReportDone(Ok(PathBuf::from("/tmp/tolkin-report.html"))),
+        );
+        assert!(!model.reporting);
+        assert_eq!(model.toasts.iter().count(), 1);
+        let text: Vec<&str> = model.toasts.iter().map(|t| t.text.as_str()).collect();
+        assert!(text[0].contains("tolkin-report.html"), "{text:?}");
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_the_focused_list_three_lines() {
+        let (mut model, _clock) = test_model();
+        model.derived.advisory_lines = (0..8).map(|i| format!("adv {i}")).collect();
+        update(&mut model, wheel(true));
+        assert_eq!(model.sel_overview.idx, 3);
+        update(&mut model, wheel(true));
+        assert_eq!(model.sel_overview.idx, 6);
+        update(&mut model, wheel(false));
+        assert_eq!(model.sel_overview.idx, 3);
+    }
+
+    #[test]
+    fn mouse_click_switches_tabs_and_selects_rows() {
+        let (mut model, _clock) = test_model();
+        model.viewport = (110, 30);
+        model.derived.setup_needed = false;
+        // Tab strip: click the Machine label.
+        let (x, _) = chrome::tab_segments()[2];
+        update(&mut model, click(x + 1, 0));
+        assert_eq!(model.tab, TabId::Machine);
+
+        // Project heavy list: click the third visible row.
+        model.tab = TabId::Project;
+        model.derived.heavy = (0..8)
+            .map(|i| HeavyRow {
+                path: format!("file{i}.md"),
+                tokens: 100,
+                pct_always: 1.0,
+                findings: 0,
+                savings_min: 0,
+                savings_max: 0,
+            })
+            .collect();
+        let area = Rect::new(0, 0, 110, 30);
+        let body = inset(chrome_rows(area)[1]);
+        let inner = screens::project::heavy_list_inner(body, &model.theme);
+        update(&mut model, click(inner.x + 3, inner.y + 2));
+        assert_eq!(model.sel_heavy.idx, 2, "row under the cursor selected");
+        // A click outside any list leaves the selection alone.
+        update(&mut model, click(inner.x + 3, area.height - 1));
+        assert_eq!(model.sel_heavy.idx, 2);
+    }
+
+    #[test]
+    fn mouse_click_outside_a_modal_closes_it_and_inside_keeps_it() {
+        let (mut model, _clock) = test_model();
+        model.viewport = (110, 30);
+        model.tab = TabId::Project;
+        model.derived.heavy = vec![seeded_heavy_row()];
+        update(&mut model, key(KeyCode::Enter));
+        assert_eq!(model.overlays.len(), 1);
+        let area = Rect::new(0, 0, 110, 30);
+        let rect = top_overlay_rect(&model, area);
+        // Click inside the dialog: stays open.
+        update(&mut model, click(rect.x + 1, rect.y + 1));
+        assert_eq!(model.overlays.len(), 1);
+        // Click outside: closes.
+        update(&mut model, click(0, area.height - 1));
+        assert!(model.overlays.is_empty());
     }
 
     #[test]

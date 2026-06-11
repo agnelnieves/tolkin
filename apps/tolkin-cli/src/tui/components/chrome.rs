@@ -25,6 +25,32 @@ pub struct HeaderProps<'a> {
     pub busy: Option<(&'a str, &'a str)>,
 }
 
+/// The logo block text; tab segments anchor after it.
+const LOGO: &str = " tolkin ";
+
+/// (x, width) of each tab label in the header row. Deterministic (the logo
+/// and titles are fixed), shared by the underline rail and mouse
+/// hit-testing so a click can never miss the drawn label.
+pub fn tab_segments() -> [(u16, u16); 4] {
+    let mut out = [(0u16, 0u16); 4];
+    let mut cursor = (LOGO.len() + 2) as u16;
+    for (i, tab) in TabId::ALL.iter().enumerate() {
+        let w = (tab.title().len() + 2) as u16;
+        out[i] = (cursor, w);
+        cursor += w + 1;
+    }
+    out
+}
+
+/// The tab under column `x` of the header label row, if any.
+pub fn tab_at(x: u16) -> Option<TabId> {
+    tab_segments()
+        .iter()
+        .zip(TabId::ALL)
+        .find(|((sx, w), _)| x >= *sx && x < sx + w)
+        .map(|(_, tab)| tab)
+}
+
 /// Header occupies 2 rows: tabs plus the underline rail.
 pub fn render_header(frame: &mut Frame, area: Rect, props: &HeaderProps, theme: &Theme) {
     if area.height < 2 {
@@ -37,24 +63,19 @@ pub fn render_header(frame: &mut Frame, area: Rect, props: &HeaderProps, theme: 
         ..area
     };
 
-    // Left: logo block plus tab strip. Track each tab's (x, width) for the
-    // underline rail.
+    // Left: logo block plus tab strip, on the shared segment geometry.
     let mut spans: Vec<Span> = Vec::new();
-    let logo = " tolkin ";
     spans.push(Span::styled(
-        logo,
+        LOGO,
         Style::default()
             .fg(theme.bg)
             .bg(theme.accent)
             .add_modifier(Modifier::BOLD),
     ));
     spans.push(Span::raw("  "));
-    let mut cursor = (logo.len() + 2) as u16;
-    let mut segments: Vec<(u16, u16)> = Vec::with_capacity(TabId::ALL.len());
+    let segments = tab_segments();
     for tab in TabId::ALL {
         let label = format!(" {} ", tab.title());
-        let w = label.len() as u16;
-        segments.push((cursor, w));
         let style = if tab == props.active {
             Style::default().fg(theme.text).add_modifier(Modifier::BOLD)
         } else {
@@ -62,7 +83,6 @@ pub fn render_header(frame: &mut Frame, area: Rect, props: &HeaderProps, theme: 
         };
         spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
-        cursor += w + 1;
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), row0);
 
@@ -277,6 +297,20 @@ mod tests {
         assert!(text.contains("enter detail"), "detail hint: {text}");
         assert!(text.contains("ctrl+k commands"), "palette hint: {text}");
         assert!(text.contains("prices 2026-06-10"));
+    }
+
+    #[test]
+    fn tab_at_maps_clicks_onto_the_drawn_labels() {
+        let segments = tab_segments();
+        for (i, tab) in TabId::ALL.iter().enumerate() {
+            let (x, w) = segments[i];
+            assert_eq!(tab_at(x), Some(*tab), "left edge of {tab:?}");
+            assert_eq!(tab_at(x + w - 1), Some(*tab), "right edge of {tab:?}");
+        }
+        // The logo block and the gaps between labels miss.
+        assert_eq!(tab_at(0), None);
+        let (x1, _) = segments[1];
+        assert_eq!(tab_at(x1 - 1), None, "gap between tabs");
     }
 
     #[test]

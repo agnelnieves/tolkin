@@ -154,6 +154,12 @@ impl Animator {
         self.enabled
     }
 
+    /// The animator's clock, exposed for non-tween time needs (toast TTLs).
+    /// Keeps the no-direct-Instant rule intact: tests inject ManualClock.
+    pub fn now(&self) -> Instant {
+        self.clock.now()
+    }
+
     /// Start (or retarget) the tween for `key`. Retargeting an active tween
     /// starts from its CURRENT sampled value, so interruptions stay smooth.
     /// A key never animated before starts from its settled value, falling

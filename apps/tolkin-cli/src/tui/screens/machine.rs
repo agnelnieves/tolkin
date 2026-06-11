@@ -13,15 +13,34 @@ use crate::tui::components::card::{render_stat_card, value_line, StatCard};
 use crate::tui::components::list::render_select_list;
 use crate::tui::format;
 
+use crate::tui::theme::Theme;
+
 use super::{muted_line, panel};
 
-pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
-    let rows = Layout::vertical([
+/// Vertical body split: totals cards, gap, project list. Shared by render
+/// and the mouse hit-testing helper below.
+fn rows(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([
         Constraint::Length(4),
         Constraint::Length(1),
         Constraint::Min(5),
     ])
-    .split(area);
+    .split(area)
+}
+
+/// Inner rect of the projects select-list for mouse hit-testing; mirrors
+/// render()'s layout exactly.
+pub fn projects_list_inner(body: Rect, theme: &Theme) -> Rect {
+    panel(
+        "projects by always-loaded weight (j/k)".to_string(),
+        true,
+        theme,
+    )
+    .inner(rows(body)[2])
+}
+
+pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
+    let rows = rows(area);
     render_cards(frame, rows[0], model);
     render_projects(frame, rows[2], model);
 }

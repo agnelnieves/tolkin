@@ -11,3 +11,4 @@ pub mod list;
 pub mod modal;
 pub mod palette;
 pub mod spinner;
+pub mod toast;
