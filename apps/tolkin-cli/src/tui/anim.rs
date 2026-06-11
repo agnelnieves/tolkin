@@ -6,8 +6,10 @@
 //! [`ManualClock`] and the compact frame renders deterministically with the
 //! animator disabled (every `go` snaps to its target instantly).
 
+#[cfg(test)]
 use std::cell::Cell;
 use std::collections::HashMap;
+#[cfg(test)]
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -27,11 +29,13 @@ impl Clock for SystemClock {
 
 /// Hand-stepped clock for unit tests. Clones share the same underlying
 /// instant, so the test holds one clone and the animator the other.
+#[cfg(test)]
 #[derive(Clone)]
 pub struct ManualClock {
     now: Rc<Cell<Instant>>,
 }
 
+#[cfg(test)]
 impl ManualClock {
     pub fn new() -> ManualClock {
         ManualClock {
@@ -44,6 +48,7 @@ impl ManualClock {
     }
 }
 
+#[cfg(test)]
 impl Clock for ManualClock {
     fn now(&self) -> Instant {
         self.now.get()
@@ -54,6 +59,9 @@ impl Clock for ManualClock {
 pub enum Ease {
     Linear,
     OutCubic,
+    /// Part of the fixed animation inventory; first consumer arrives with
+    /// the motion wave.
+    #[allow(dead_code)]
     InOutCubic,
 }
 
@@ -86,8 +94,6 @@ pub enum AnimKey {
     Bar { panel: u8, row: u8 },
     /// Slim percent gauge fill, by gauge index.
     Gauge(u8),
-    /// Busy spinner phase accumulator.
-    Spinner,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -154,8 +160,9 @@ impl Animator {
     /// back to 0.0 (bars grow in from empty on first data).
     pub fn go(&mut self, key: AnimKey, to: f32, dur: Duration, ease: Ease) {
         if !self.enabled {
-            self.tweens.remove(&key);
-            self.settled.insert(key, to);
+            // Reduced motion: nothing to store. `value` returns the caller's
+            // fallback (the model's current target), so disabled rendering
+            // always reflects the data, never a stale snap.
             return;
         }
         let now = self.clock.now();
@@ -177,8 +184,12 @@ impl Animator {
 
     /// Sample the current value for `key`. Keys without an active tween
     /// return their settled value, then `fallback` (callers pass the model's
-    /// target so a pruned tween renders at rest).
+    /// target so a pruned tween renders at rest). A disabled animator
+    /// always returns the fallback: render exactly what the model says.
     pub fn value(&self, key: AnimKey, fallback: f32) -> f32 {
+        if !self.enabled {
+            return fallback;
+        }
         match self.tweens.get(&key) {
             Some(tween) => tween.sample(self.clock.now()),
             None => self.settled.get(&key).copied().unwrap_or(fallback),
@@ -310,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn reduced_motion_snaps_and_never_reports_active() {
+    fn reduced_motion_renders_model_truth_and_never_reports_active() {
         let clock = ManualClock::new();
         let mut a = Animator::new(Box::new(clock.clone()), false);
         a.go(
@@ -319,17 +330,20 @@ mod tests {
             Duration::from_secs(1),
             Ease::OutCubic,
         );
-        assert_eq!(a.value(AnimKey::Card(0), 0.0), 10.0);
+        // Disabled sampling ignores tweens entirely: the fallback (the
+        // model's current target) is the rendered value, instantly.
+        assert_eq!(a.value(AnimKey::Card(0), 10.0), 10.0);
         assert!(!a.active());
         clock.advance(Duration::from_millis(10));
-        assert_eq!(a.value(AnimKey::Card(0), 0.0), 10.0);
+        // A data change shows up immediately even without a new go().
+        assert_eq!(a.value(AnimKey::Card(0), 12.5), 12.5);
     }
 
     #[test]
     fn zero_duration_snaps() {
         let (mut a, _clock) = manual_animator();
-        a.go(AnimKey::Spinner, 3.0, Duration::ZERO, Ease::Linear);
-        assert_eq!(a.value(AnimKey::Spinner, 0.0), 3.0);
+        a.go(AnimKey::Card(9), 3.0, Duration::ZERO, Ease::Linear);
+        assert_eq!(a.value(AnimKey::Card(9), 0.0), 3.0);
         assert!(!a.active());
     }
 }

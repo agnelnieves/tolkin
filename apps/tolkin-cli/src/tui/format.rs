@@ -116,7 +116,9 @@ pub fn split_path(path: &str) -> (&str, &str) {
 }
 
 /// RFC 4648 standard base64 with padding. Used by the OSC52 clipboard
-/// escape; tiny on purpose so the zero-dependency contract holds.
+/// escape (wired next wave); tiny on purpose so the zero-dependency
+/// contract holds.
+#[allow(dead_code)]
 pub fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);

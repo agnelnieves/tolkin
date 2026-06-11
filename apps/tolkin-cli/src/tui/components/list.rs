@@ -97,7 +97,9 @@ pub fn render_select_list(
         let is_selected = sel == Some(row_idx);
         let rail_x = area.x;
         let text_x = area.x + 2;
-        let text_width = area.width.saturating_sub(2 + u16::from(overflow));
+        // The last column is always a gutter (scrollbar when overflowing),
+        // so right-aligned values never shift between states.
+        let text_width = area.width.saturating_sub(3);
 
         if is_selected {
             // Repaint the row surface first so the selection reads as one
@@ -105,7 +107,7 @@ pub fn render_select_list(
             let row_style = Style::default()
                 .fg(theme.selection_fg)
                 .bg(theme.selection_bg);
-            for x in area.x..area.x + area.width.saturating_sub(u16::from(overflow)) {
+            for x in area.x..area.x + area.width.saturating_sub(1) {
                 buf[(x, y)].set_style(row_style);
                 buf[(x, y)].set_symbol(" ");
             }

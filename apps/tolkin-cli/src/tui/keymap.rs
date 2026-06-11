@@ -93,7 +93,12 @@ pub enum Context {
     List,
     DayStrip,
     Modal,
+    /// Constructed when the palette ships (next wave); resolve already
+    /// implements its typing rules.
+    #[allow(dead_code)]
     PaletteInput,
+    /// Constructed when the list filter ships (next wave).
+    #[allow(dead_code)]
     FilterInput,
 }
 
@@ -114,6 +119,8 @@ pub struct Binding {
     pub keys_label: &'static str,
     /// Short hint verb, e.g. "navigate".
     pub hint: &'static str,
+    /// Help overlay grouping; read when the help overlay ships.
+    #[allow(dead_code)]
     pub group: Group,
 }
 

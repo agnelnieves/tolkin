@@ -10,7 +10,10 @@ use ratatui::Frame;
 
 use crate::tui::theme::{self, Theme};
 
-/// The three dialog widths from the design contract.
+/// The three dialog widths from the design contract. Production code
+/// constructs these when detail modals ship (next wave); the shell and
+/// its tests exercise all three today.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModalWidth {
     Medium,

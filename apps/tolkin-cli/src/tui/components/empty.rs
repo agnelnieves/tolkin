@@ -26,7 +26,7 @@ pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
 /// screen that will ever carry an idle animation (the border pulse lands
 /// in a later wave); content is the brand moment already.
 pub fn render_setup(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let card = centered(area, 64.min(area.width), 14);
+    let card = centered(area, 64.min(area.width), 12);
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
