@@ -281,3 +281,148 @@ jobs:
           else
             echo "::warning::tolkin-linux-arm64@$V is not on the registry (arm runner unavailable this run, or its publish failed)."
           fi
+
+  homebrew-release:
+    name: Publish binary release and update Homebrew tap
+    needs: [gate, publish]
+    if: needs.gate.outputs.skip == 'false'
+    runs-on: ubuntu-24.04
+    # SOFT JOB: stays continue-on-error until the owner completes the
+    # first-publish checklist below. Flip to strict (remove this line)
+    # after confirming:
+    #   1. agnelnieves/tolkin created (the public binary release host)
+    #   2. agnelnieves/homebrew-tolkin created (the Homebrew tap repo)
+    #   3. Fine-grained PAT with contents read/write on both repos stored
+    #      as HOMEBREW_TAP_TOKEN secret on the private monorepo
+    # Until those repos and the secret exist every step that uses
+    # HOMEBREW_TAP_TOKEN will log a clear message and skip gracefully.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      # Download the four non-Windows binary artifacts produced by the
+      # build job. The Windows binary is npm-only; Homebrew covers
+      # macOS arm64/x64 and Linux x64/arm64.
+      - uses: actions/download-artifact@v8
+        with:
+          name: aarch64-apple-darwin
+          path: artifacts/aarch64-apple-darwin
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: x86_64-apple-darwin
+          path: artifacts/x86_64-apple-darwin
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: x86_64-unknown-linux-gnu
+          path: artifacts/x86_64-unknown-linux-gnu
+
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: aarch64-unknown-linux-gnu
+          path: artifacts/aarch64-unknown-linux-gnu
+
+      - name: Package binaries into per-platform tarballs
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          mkdir -p release
+
+          package() {
+            ARTIFACT="artifacts/$1/tolkin"
+            TARBALL="release/tolkin-v${V}-$2.tar.gz"
+            if [ ! -f "$ARTIFACT" ]; then
+              echo "artifact for $2 absent; skipping tarball."
+              return
+            fi
+            chmod 0755 "$ARTIFACT"
+            # -C so the archive root holds exactly the executable with no
+            # directory prefix. This is what the Homebrew formula expects.
+            tar -czf "$TARBALL" -C "artifacts/$1" tolkin
+            echo "packaged $2: $TARBALL"
+          }
+
+          package aarch64-apple-darwin darwin-arm64
+          package x86_64-apple-darwin darwin-x64
+          package x86_64-unknown-linux-gnu linux-x64
+          package aarch64-unknown-linux-gnu linux-arm64
+
+      - name: Write SHA256SUMS
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          cd release
+          # sha256sum over every tarball that was actually produced
+          sha256sum tolkin-v${V}-*.tar.gz > SHA256SUMS
+          echo "SHA256SUMS:"
+          cat SHA256SUMS
+
+      - name: Create GitHub release on agnelnieves/tolkin
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          if [ -z "${{ secrets.HOMEBREW_TAP_TOKEN }}" ]; then
+            echo "HOMEBREW_TAP_TOKEN secret is not set; skipping GitHub release creation."
+            echo "Owner action required: create agnelnieves/tolkin and store the PAT as HOMEBREW_TAP_TOKEN."
+            exit 0
+          fi
+          NOTES="tolkin v${V}: see https://github.com/agnelnieves/tolkin#readme and /bench for benchmark results."
+          gh release create "v${V}" \
+            release/tolkin-v${V}-darwin-arm64.tar.gz \
+            release/tolkin-v${V}-darwin-x64.tar.gz \
+            release/tolkin-v${V}-linux-x64.tar.gz \
+            $(ls release/tolkin-v${V}-linux-arm64.tar.gz 2>/dev/null || true) \
+            release/SHA256SUMS \
+            --repo agnelnieves/tolkin \
+            --title "tolkin v${V}" \
+            --notes "$NOTES"
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update Homebrew tap formula
+        run: |
+          V="${{ needs.gate.outputs.local }}"
+          if [ -z "${{ secrets.HOMEBREW_TAP_TOKEN }}" ]; then
+            echo "HOMEBREW_TAP_TOKEN secret is not set; skipping tap update."
+            echo "Owner action required: create agnelnieves/homebrew-tolkin and store the PAT as HOMEBREW_TAP_TOKEN."
+            exit 0
+          fi
+
+          # Extract sha256 values from the SHA256SUMS file
+          sha_for() {
+            grep "$1" release/SHA256SUMS | awk '{print $1}'
+          }
+
+          SHA_DARWIN_ARM64=$(sha_for "darwin-arm64")
+          SHA_DARWIN_X64=$(sha_for "darwin-x64")
+          SHA_LINUX_X64=$(sha_for "linux-x64")
+          SHA_LINUX_ARM64=$(sha_for "linux-arm64")
+
+          # Clone the tap repo using the PAT
+          git clone "https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/agnelnieves/homebrew-tolkin.git" tap-repo
+          cd tap-repo
+
+          mkdir -p Formula
+          # Copy the staged template from this repo
+          cp "$GITHUB_WORKSPACE/distribution/homebrew/Formula/tolkin.rb" Formula/tolkin.rb
+
+          # Substitute the version string (four occurrences: the class-level
+          # version field and the four download URL paths)
+          perl -i -pe "s/0\\.11\\.0/${V}/g" Formula/tolkin.rb
+
+          # Substitute the placeholder sha256 values in order of appearance.
+          # The template has four identical zero-filled placeholders; each
+          # platform block gets its own real checksum via indexed replacement.
+          perl -i -0pe "
+            my \$i = 0;
+            my @shas = ('${SHA_DARWIN_ARM64}', '${SHA_DARWIN_X64}', '${SHA_LINUX_ARM64}', '${SHA_LINUX_X64}');
+            s/0{64}/\$shas[\$i++]/ge
+          " Formula/tolkin.rb
+
+          git config user.email "ci@github.com"
+          git config user.name "tolkin-publish CI"
+          git add Formula/tolkin.rb
+          git diff --cached --quiet && echo "Formula already up to date." && exit 0
+          git commit -m "tolkin ${V}"
+          git push
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
