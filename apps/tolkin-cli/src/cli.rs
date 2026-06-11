@@ -68,7 +68,7 @@ pub fn dispatch(cmd: Commands, yes: bool) -> Result<()> {
         Commands::Count(args) => commands::count::run(args),
         Commands::Viz(args) => commands::viz::run(args),
         Commands::Audit(args) => commands::audit::run(args),
-        Commands::Mcp(args) => commands::mcp::run(args),
+        Commands::Mcp(args) => commands::mcp::run(args, yes),
         Commands::Cost(args) => commands::cost::run(args),
         Commands::Redact(args) => commands::redact::run(args),
         Commands::Scan(args) => commands::scan::run(args),

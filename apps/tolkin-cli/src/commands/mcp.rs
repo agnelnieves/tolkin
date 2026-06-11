@@ -1,15 +1,18 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
-use serde_json::json;
+use serde_json::{json, Value};
 use tolkin_core::mcp::{self, McpAnalysis, Recommendation};
 use tolkin_core::mcp_tools::{self, ToolInventory, ToolTokenCount};
 use tolkin_core::Provider as CoreProvider;
 
 use crate::input;
 use crate::ledger;
+use crate::mcp_manifests::{self, Manifest};
+use crate::mcp_probe::{self, HttpTarget, ProbeResult, StdioTarget};
 use crate::tokenize::{self, Provider as TokProvider};
 
 #[derive(Args, Debug)]
@@ -41,9 +44,23 @@ pub struct McpArgs {
     /// Emit JSON instead of a table.
     #[arg(long)]
     pub json: bool,
+
+    /// Probe a configured MCP server live to capture an exact tools/list and
+    /// cache it under .tolkin/mcp-manifests/. Repeatable. Requires a config
+    /// file. Refused under CI (set committed manifests instead).
+    #[arg(long, value_name = "SERVER")]
+    pub probe: Vec<String>,
+
+    /// Probe every server in the config. Mutually inclusive with --probe.
+    #[arg(long, conflicts_with = "probe")]
+    pub probe_all: bool,
+
+    /// Per-server probe deadline in seconds (initialize + tools/list pages).
+    #[arg(long, value_name = "SECS", default_value_t = mcp_probe::default_timeout_secs())]
+    pub probe_timeout: u64,
 }
 
-pub fn run(args: McpArgs) -> Result<()> {
+pub fn run(args: McpArgs, yes: bool) -> Result<()> {
     let target = args
         .file
         .as_ref()
@@ -54,6 +71,42 @@ pub fn run(args: McpArgs) -> Result<()> {
     // --provider also picks that provider's tokenizer; the basis label names
     // whichever ran, and the Anthropic proxy stays labeled an estimate.
     let tok_provider = args.provider.unwrap_or(TokProvider::OpenAi);
+
+    // Project root for the committable manifest cache. cwd matches the rest
+    // of the CLI's "this repo" surfaces (project, scan).
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // Probe pipeline: runs before any analysis so the cache is up to date
+    // when the analyzer goes to resolve inventories. CI refusal happens
+    // before any user-facing confirmation.
+    let probe_requested = args.probe_all || !args.probe.is_empty();
+    if probe_requested {
+        if ledger::disabled_by_env() && is_ci_set() {
+            bail!(
+                "tolkin mcp --probe is refused under CI. CI is set in this environment; commit a manifest under .tolkin/mcp-manifests/ instead so teammates and CI get exact counts from the cache alone."
+            );
+        }
+        let Some(config_path) = args.file.as_deref() else {
+            bail!(
+                "--probe needs a config file; tolkin mcp --probe reads servers from your own MCP config and would never spawn an unconfigured process"
+            );
+        };
+        if config_path.as_os_str() == "-" {
+            bail!(
+                "--probe needs a config file (not stdin); the probe runs the exact command lines from your MCP config, which has to exist on disk for the confirmation to mean anything"
+            );
+        }
+        let config_text = std::fs::read_to_string(config_path)
+            .with_context(|| format!("read MCP config {}", config_path.display()))?;
+        run_probe_pipeline(
+            &config_text,
+            &args.probe,
+            args.probe_all,
+            args.probe_timeout,
+            &project_root,
+            yes,
+        )?;
+    }
 
     let analysis = match &args.tools_list {
         Some(manifest_path) => {
@@ -88,7 +141,15 @@ pub fn run(args: McpArgs) -> Result<()> {
                             names.join(", ")
                         ),
                     };
-                    let mut inventories = BTreeMap::new();
+                    // The explicit --tools-list flag wins over the cache for
+                    // the targeted server (basis resolution rule 1). Cached
+                    // manifests for every OTHER server still apply, so a
+                    // single targeted manifest does not blow away the cache.
+                    let mut inventories = load_cached_inventories(
+                        &project_root,
+                        &names,
+                        tok_provider,
+                    );
                     inventories.insert(target_server, inventory);
                     mcp::analyze_with_inventories(&config_text, cache_provider, &inventories)
                         .map_err(|e| anyhow!(e))?
@@ -108,7 +169,16 @@ pub fn run(args: McpArgs) -> Result<()> {
                 let inventory = tokenize_inventory(&text, tok_provider)?;
                 mcp::analysis_from_inventory(&name, cache_provider, inventory)
             } else {
-                mcp::analyze(&text, cache_provider).map_err(|e| anyhow!(e))?
+                // Config path with no --tools-list: cached manifests for
+                // any server in the config supersede the catalog estimate.
+                let names = mcp::server_names(&text).map_err(|e| anyhow!(e))?;
+                let inventories = load_cached_inventories(&project_root, &names, tok_provider);
+                if inventories.is_empty() {
+                    mcp::analyze(&text, cache_provider).map_err(|e| anyhow!(e))?
+                } else {
+                    mcp::analyze_with_inventories(&text, cache_provider, &inventories)
+                        .map_err(|e| anyhow!(e))?
+                }
             }
         }
     };
@@ -394,5 +464,397 @@ fn usd(v: f64) -> String {
         format!("${v:.4}")
     } else {
         format!("${v:.2}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Probe pipeline
+// ---------------------------------------------------------------------------
+
+/// True when CI is set to anything truthy. Tracks the same convention as
+/// `ledger::disabled_by_env` so the probe refusal aligns with the rest of
+/// the CLI's CI-aware paths.
+fn is_ci_set() -> bool {
+    match std::env::var("CI") {
+        Ok(v) => {
+            let v = v.trim();
+            !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+        }
+        Err(_) => false,
+    }
+}
+
+/// One probe target resolved from the raw MCP config. `Stdio` and `Http`
+/// carry the real command / env / headers values; this struct never leaves
+/// the CLI process (the cached manifest stores zero of these fields).
+enum ProbeTarget {
+    Stdio(StdioTarget),
+    Http(HttpTarget),
+}
+
+/// Resolve probe targets from raw config JSON. Returns a map of server name
+/// to target for every server the user asked to probe.
+fn resolve_probe_targets(
+    config_text: &str,
+    requested: &[String],
+    probe_all: bool,
+) -> Result<BTreeMap<String, ProbeTarget>> {
+    let cleaned = strip_jsonc_simple(config_text);
+    let value: Value = serde_json::from_str(&cleaned)
+        .map_err(|e| anyhow!("could not parse config as JSON/JSONC: {e}"))?;
+    let servers_obj = locate_servers_object(&value)
+        .ok_or_else(|| anyhow!("no MCP servers section found in config"))?;
+
+    let mut out: BTreeMap<String, ProbeTarget> = BTreeMap::new();
+    let names: Vec<String> = servers_obj.keys().cloned().collect();
+    let wanted: BTreeSet<String> = if probe_all {
+        names.iter().cloned().collect()
+    } else {
+        requested.iter().cloned().collect()
+    };
+
+    for name in &wanted {
+        let Some(entry) = servers_obj.get(name) else {
+            bail!(
+                "--probe {name}: not in this config. Known servers: {}",
+                names.join(", ")
+            );
+        };
+        let target = extract_target(name, entry)?;
+        out.insert(name.clone(), target);
+    }
+    Ok(out)
+}
+
+/// Strip JSONC comments with a small inline pass so we do not need to
+/// re-export the core's strip_jsonc. Kept conservative: this is just for
+/// probe target extraction.
+fn strip_jsonc_simple(text: &str) -> String {
+    // Round-trip through the analyzer's server-name path: that already
+    // strips JSONC, so we can just re-parse via serde_json. But we need the
+    // raw values here, so we have to do it ourselves. Cheap approximation:
+    // line-comment removal only; block comments and trailing commas in MCP
+    // configs are rare enough that this covers the common cases. If parsing
+    // fails downstream the error is clear.
+    let mut out = String::with_capacity(text.len());
+    let mut in_str = false;
+    let mut esc = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_str {
+            out.push(c);
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            out.push(c);
+            continue;
+        }
+        if c == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            for n in chars.by_ref() {
+                if n == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Locate the server map under any known client key. Mirrors the core's
+/// `locate_servers` but returns the map directly so we can iterate keys.
+fn locate_servers_object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
+    if let Some(v) = value.get("mcpServers").and_then(Value::as_object) {
+        return Some(v);
+    }
+    if let Some(v) = value
+        .get("mcp")
+        .and_then(|m| m.get("servers"))
+        .and_then(Value::as_object)
+    {
+        return Some(v);
+    }
+    if let Some(v) = value.get("servers").and_then(Value::as_object) {
+        return Some(v);
+    }
+    if let Some(v) = value.get("context_servers").and_then(Value::as_object) {
+        return Some(v);
+    }
+    None
+}
+
+/// Build a ProbeTarget from one server entry. Reads url + headers when
+/// present (HTTP), command + args + env otherwise (stdio). Zed's command
+/// object form `{ "path": ..., "args": ... }` is honored.
+fn extract_target(name: &str, entry: &Value) -> Result<ProbeTarget> {
+    let url = entry.get("url").and_then(Value::as_str).map(String::from);
+    if let Some(url) = url {
+        let headers = entry
+            .get("headers")
+            .and_then(Value::as_object)
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        return Ok(ProbeTarget::Http(HttpTarget { url, headers }));
+    }
+
+    // stdio.
+    let (command, mut args) = if let Some(cmd_obj) = entry.get("command").and_then(Value::as_object)
+    {
+        let path = cmd_obj
+            .get("path")
+            .and_then(Value::as_str)
+            .map(String::from)
+            .ok_or_else(|| anyhow!("server {name}: command object has no path"))?;
+        let args = cmd_obj
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        (path, args)
+    } else if let Some(s) = entry.get("command").and_then(Value::as_str) {
+        (s.to_string(), Vec::new())
+    } else {
+        bail!("server {name}: no url or command, nothing to probe");
+    };
+    if args.is_empty() {
+        if let Some(a) = entry.get("args").and_then(Value::as_array) {
+            args = a
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+        }
+    }
+    let env = entry
+        .get("env")
+        .and_then(Value::as_object)
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    Ok(ProbeTarget::Stdio(StdioTarget {
+        command,
+        args,
+        env,
+    }))
+}
+
+/// Run the probe pipeline: confirm, probe, redact, save. Per-server output
+/// goes to stdout so the user sees exactly which servers were touched.
+fn run_probe_pipeline(
+    config_text: &str,
+    requested: &[String],
+    probe_all: bool,
+    timeout_secs: u64,
+    project_root: &Path,
+    yes: bool,
+) -> Result<()> {
+    let targets = resolve_probe_targets(config_text, requested, probe_all)?;
+    if targets.is_empty() {
+        bail!("--probe: no servers selected");
+    }
+
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    let _ = writeln!(out, "Probe plan: {} server(s)", targets.len());
+
+    for (name, target) in &targets {
+        let (transport_label, line) = match target {
+            ProbeTarget::Stdio(t) => ("stdio", mcp_probe::stdio_confirmation_line(t)),
+            ProbeTarget::Http(t) => ("http", mcp_probe::http_confirmation_line(t)),
+        };
+        let _ = writeln!(out, "\n  {name} ({transport_label}):");
+        let _ = writeln!(out, "    {line}");
+
+        if !yes {
+            let _ = write!(out, "Run this probe? [y/N] ");
+            let _ = out.flush();
+            let stdin = io::stdin();
+            let mut answer = String::new();
+            if stdin.lock().read_line(&mut answer).is_err() {
+                let _ = writeln!(out, "  {name}: skipped (no input)");
+                continue;
+            }
+            match answer.trim().to_ascii_lowercase().as_str() {
+                "y" | "yes" => {}
+                _ => {
+                    let _ = writeln!(out, "  {name}: skipped");
+                    continue;
+                }
+            }
+        }
+
+        let (transport_str, probe_outcome) = match target {
+            ProbeTarget::Stdio(t) => ("stdio", mcp_probe::probe_stdio(t, timeout_secs)),
+            ProbeTarget::Http(t) => ("http", mcp_probe::probe_http(t, timeout_secs)),
+        };
+        let probe = match probe_outcome {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = writeln!(out, "  {name}: probe failed: {e}");
+                continue;
+            }
+        };
+        save_and_report(&mut out, name, transport_str, probe, project_root)?;
+    }
+    let _ = writeln!(out);
+    Ok(())
+}
+
+fn save_and_report<W: Write>(
+    out: &mut W,
+    name: &str,
+    transport: &str,
+    probe: ProbeResult,
+    project_root: &Path,
+) -> Result<()> {
+    let manifest = mcp_manifests::build_manifest(
+        name,
+        transport,
+        "probe",
+        probe.protocol_version.clone(),
+        probe.tools.clone(),
+    )?;
+    let path = mcp_manifests::save_manifest(project_root, &manifest)?;
+    let _ = writeln!(
+        out,
+        "  {name}: captured {} tool(s); saved to {}",
+        manifest.tools.len(),
+        path.display()
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Cache resolution (every analysis run)
+// ---------------------------------------------------------------------------
+
+/// Load cached manifests for the named servers, tokenize each, and rewrite
+/// the basis to name the cache + capture date. This is the resolution rule
+/// "explicit flag wins, then cache, then catalog, then none" for every
+/// server whose cache hits (the caller still applies the flag-wins step).
+fn load_cached_inventories(
+    project_root: &Path,
+    server_names: &[String],
+    tok_provider: TokProvider,
+) -> BTreeMap<String, ToolInventory> {
+    let today = mcp_manifests::today_utc();
+    let mut out = BTreeMap::new();
+    for name in server_names {
+        let Some(manifest) = mcp_manifests::load_for(project_root, name) else {
+            continue;
+        };
+        let manifest_text = mcp_manifests::to_tools_list_text(&manifest);
+        let Ok(mut inventory) = tokenize_inventory(&manifest_text, tok_provider) else {
+            continue;
+        };
+        inventory.basis = cache_basis(&manifest, &today);
+        out.insert(name.clone(), inventory);
+    }
+    out
+}
+
+/// Basis string for a cache hit. Adds the staleness warning when the
+/// captured_at date is older than the threshold.
+pub(crate) fn cache_basis(manifest: &Manifest, today: &str) -> String {
+    let base = format!(
+        "measured (probed manifest, captured {})",
+        manifest.captured_at
+    );
+    match mcp_manifests::staleness(manifest, today) {
+        Some(warn) => format!("{base}; warning: {warn}"),
+        None => base,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_probe_targets_picks_named_servers() {
+        let cfg = r#"{
+            "mcpServers": {
+                "tracker": { "command": "node", "args": ["./srv.js"], "env": { "API": "x" } },
+                "github":  { "command": "npx", "args": ["@modelcontextprotocol/server-github"] }
+            }
+        }"#;
+        let targets = resolve_probe_targets(cfg, &["tracker".to_string()], false).unwrap();
+        assert_eq!(targets.len(), 1);
+        match targets.get("tracker").unwrap() {
+            ProbeTarget::Stdio(t) => {
+                assert_eq!(t.command, "node");
+                assert_eq!(t.args, vec!["./srv.js".to_string()]);
+                assert_eq!(t.env.get("API").map(|s| s.as_str()), Some("x"));
+            }
+            _ => panic!("expected stdio"),
+        }
+    }
+
+    #[test]
+    fn resolve_probe_targets_probe_all_returns_every_entry() {
+        let cfg = r#"{ "mcpServers": {
+            "a": { "url": "https://a.test/mcp", "headers": { "Authorization": "Bearer xyz" } },
+            "b": { "command": "x" }
+        } }"#;
+        let targets = resolve_probe_targets(cfg, &[], true).unwrap();
+        assert_eq!(targets.len(), 2);
+        match targets.get("a").unwrap() {
+            ProbeTarget::Http(t) => {
+                assert_eq!(t.url, "https://a.test/mcp");
+                assert!(t.headers.contains_key("Authorization"));
+            }
+            _ => panic!("expected http for a"),
+        }
+    }
+
+    #[test]
+    fn resolve_probe_targets_unknown_server_is_a_hard_error() {
+        let cfg = r#"{ "mcpServers": { "tracker": { "command": "x" } } }"#;
+        let err = resolve_probe_targets(cfg, &["nope".to_string()], false).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("nope"));
+        assert!(msg.contains("tracker"));
+    }
+
+    #[test]
+    fn cache_basis_includes_capture_date_and_optional_warning() {
+        let mut m = Manifest {
+            v: 1,
+            server: "x".to_string(),
+            captured_at: "2026-06-11".to_string(),
+            transport: "stdio".to_string(),
+            source: "probe".to_string(),
+            protocol_version: None,
+            tools: Vec::new(),
+        };
+        let fresh = cache_basis(&m, "2026-06-12");
+        assert!(fresh.contains("measured (probed manifest, captured 2026-06-11)"));
+        assert!(!fresh.contains("warning"), "{fresh}");
+
+        m.captured_at = "2025-01-01".to_string();
+        let stale = cache_basis(&m, "2026-06-11");
+        assert!(stale.contains("warning"));
+        assert!(stale.contains("re-probe"));
     }
 }
