@@ -19,7 +19,7 @@ export function BenchNav() {
       >
         <Link
           href="/"
-          className="font-display text-lg font-semibold tracking-tight text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lime-400/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0c0c0b]"
+          className="font-display text-lg font-semibold tracking-tight text-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lime-400/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0c0c0b]"
         >
           tolkin
         </Link>
