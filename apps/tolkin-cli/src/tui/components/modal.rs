@@ -67,22 +67,41 @@ pub fn apply_scrim(frame: &mut Frame, theme: &Theme) {
     }
 }
 
+/// Rows of `body` visible inside a dialog of `dialog_height` (the two
+/// border rows carry the title and the hints).
+fn visible_rows(dialog_height: u16) -> u16 {
+    dialog_height.saturating_sub(2)
+}
+
+/// The furthest `scroll` can go for a body of `lines` rows inside `area`:
+/// zero when everything fits. Shared by update (clamping the key) and
+/// render (clamping defensively), so the two can never disagree.
+pub fn max_scroll(area: Rect, width: ModalWidth, lines: u16) -> u16 {
+    let dialog = dialog_rect(area, width, lines);
+    lines.saturating_sub(visible_rows(dialog.height))
+}
+
 /// Render the dialog shell: scrim, centered box at height/4, title, body,
-/// esc hint. Overlay stacking is the caller's job (render each overlay
-/// bottom-up; each one dims what sits beneath it).
+/// esc hint. A body taller than the dialog scrolls by `scroll` rows and
+/// advertises j/k in the bottom border. Overlay stacking is the caller's
+/// job (render each overlay bottom-up; each one dims what sits beneath
+/// it).
 pub fn render_modal(
     frame: &mut Frame,
     title: &str,
     body: &[Line],
     width: ModalWidth,
+    scroll: u16,
     theme: &Theme,
 ) {
     apply_scrim(frame, theme);
     let area = frame.area();
     let dialog = dialog_rect(area, width, body.len() as u16);
+    let max = max_scroll(area, width, body.len() as u16);
+    let scroll = scroll.min(max);
 
     frame.render_widget(Clear, dialog);
-    let block = Block::new()
+    let mut block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border_active))
@@ -99,9 +118,21 @@ pub fn render_modal(
             ))
             .right_aligned(),
         );
+    if max > 0 {
+        let below = max.saturating_sub(scroll);
+        let hint = if below > 0 {
+            format!(" j/k scroll ({below} more) ")
+        } else {
+            " j/k scroll ".to_string()
+        };
+        block = block.title_bottom(Line::from(Span::styled(
+            hint,
+            Style::default().fg(theme.faint),
+        )));
+    }
     let inner = block.inner(dialog);
     frame.render_widget(block, dialog);
-    frame.render_widget(Paragraph::new(body.to_vec()), inner);
+    frame.render_widget(Paragraph::new(body.to_vec()).scroll((scroll, 0)), inner);
 }
 
 #[cfg(test)]
@@ -123,7 +154,7 @@ mod tests {
                 let bg = Paragraph::new("UNDERNEATH").style(Style::default().fg(painted));
                 f.render_widget(bg, f.area());
                 let body = vec![Line::from("body line one"), Line::from("body line two")];
-                render_modal(f, "detail", &body, ModalWidth::Medium, &t);
+                render_modal(f, "detail", &body, ModalWidth::Medium, 0, &t);
             })
             .unwrap();
         let buf = terminal.backend().buffer();
@@ -157,7 +188,7 @@ mod tests {
             .draw(|f| {
                 let bg = Paragraph::new("UNDERNEATH").style(Style::default().fg(painted));
                 f.render_widget(bg, f.area());
-                render_modal(f, "t", &[Line::from("x")], ModalWidth::Medium, &t);
+                render_modal(f, "t", &[Line::from("x")], ModalWidth::Medium, 0, &t);
             })
             .unwrap();
         let buf = terminal.backend().buffer();
@@ -172,9 +203,61 @@ mod tests {
         terminal
             .draw(|f| {
                 let body = vec![Line::from("x")];
-                render_modal(f, "t", &body, ModalWidth::XLarge, &t);
+                render_modal(f, "t", &body, ModalWidth::XLarge, 0, &t);
             })
             .unwrap();
         // No panic = pass; the dialog clamped to 38 cols.
+    }
+
+    #[test]
+    fn overflowing_body_scrolls_and_advertises_jk() {
+        let t = theme::by_name("tolkin-dark", true).unwrap();
+        let body: Vec<Line> = (0..40).map(|i| Line::from(format!("row {i}"))).collect();
+        let render = |scroll: u16| {
+            let backend = TestBackend::new(80, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| render_modal(f, "long", &body, ModalWidth::Medium, scroll, &t))
+                .unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let mut text = String::new();
+            for y in 0..24 {
+                for x in 0..80 {
+                    text.push_str(buf[(x, y)].symbol());
+                }
+                text.push('\n');
+            }
+            text
+        };
+        // 24-row frame: dialog clamps to 22, 20 visible rows of 40.
+        let area = Rect::new(0, 0, 80, 24);
+        assert_eq!(max_scroll(area, ModalWidth::Medium, 40), 20);
+        let top = render(0);
+        assert!(top.contains("row 0"), "unscrolled top:\n{top}");
+        assert!(!top.contains("row 39"), "tail clipped until scrolled");
+        assert!(top.contains("j/k scroll (20 more)"), "hint:\n{top}");
+        let bottom = render(20);
+        assert!(!bottom.contains("row 0"), "top scrolled away");
+        assert!(bottom.contains("row 39"), "tail reachable:\n{bottom}");
+        assert!(bottom.contains("j/k scroll"), "hint stays");
+        // Scroll past the end clamps instead of blanking the dialog.
+        let over = render(99);
+        assert!(over.contains("row 39"), "over-scroll clamps:\n{over}");
+        // A short body never advertises scrolling.
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                render_modal(f, "s", &[Line::from("x")], ModalWidth::Medium, 0, &t);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..24 {
+            for x in 0..80 {
+                text.push_str(buf[(x, y)].symbol());
+            }
+        }
+        assert!(!text.contains("j/k scroll"));
     }
 }

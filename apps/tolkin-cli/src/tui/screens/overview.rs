@@ -78,6 +78,7 @@ fn render_cards(frame: &mut Frame, area: Rect, model: &Model) {
     let today = if derived.ingestion_on {
         StatCard {
             title: "today",
+            // Cards keep rendering even at $0: measured zero is honest data.
             value: value_line(
                 format::usd(
                     model
@@ -91,7 +92,7 @@ fn render_cards(frame: &mut Frame, area: Rect, model: &Model) {
             hint: None,
         }
     } else {
-        no_data_card("today")
+        no_data_card("today", false)
     };
     render_stat_card(frame, cols[0], &today, theme);
 
@@ -111,11 +112,12 @@ fn render_cards(frame: &mut Frame, area: Rect, model: &Model) {
             hint: None,
         }
     } else {
-        no_data_card("30 days")
+        no_data_card("30 days", false)
     };
     render_stat_card(frame, cols[1], &last30, theme);
 
     let cache = match derived.cache_pct() {
+        None => no_data_card("cache hit", derived.ingestion_on),
         Some(pct) => {
             let sampled = model.animator.value(AnimKey::Card(2), pct as f32);
             let frac = model
@@ -136,7 +138,6 @@ fn render_cards(frame: &mut Frame, area: Rect, model: &Model) {
                 hint: None,
             }
         }
-        None => no_data_card("cache hit"),
     };
     render_stat_card(frame, cols[2], &cache, theme);
 
@@ -162,20 +163,27 @@ fn render_cards(frame: &mut Frame, area: Rect, model: &Model) {
             title: "reclaimable",
             value: Line::default(),
             tier: "",
-            hint: Some("run: tolkin project"),
+            // 18 chars: survives the narrowest card at 80 columns.
+            hint: Some("run tolkin project"),
         },
     };
     render_stat_card(frame, cols[3], &reclaimable, theme);
 }
 
-fn no_data_card(title: &str) -> StatCard<'_> {
+/// No-data card body: ingestion off names the consent command; ingestion
+/// on but empty says so honestly (sessions land after agent runs).
+fn no_data_card(title: &str, ingestion_on: bool) -> StatCard<'_> {
     StatCard {
         title,
         value: Line::default(),
         tier: "",
         // Short enough for a narrow card; the spark panel spells out the
         // full consent sentence.
-        hint: Some("off (tolkin init)"),
+        hint: Some(if ingestion_on {
+            "no sessions yet"
+        } else {
+            "off (tolkin init)"
+        }),
     }
 }
 
@@ -201,7 +209,13 @@ fn render_spark(frame: &mut Frame, area: Rect, model: &Model) {
         return;
     }
     if derived.day_details.is_empty() {
-        frame.render_widget(Paragraph::new(muted_line("no usage data", theme)), inner);
+        frame.render_widget(
+            Paragraph::new(muted_line(
+                "no usage in the last 30 days (sessions land after agent runs)",
+                theme,
+            )),
+            inner,
+        );
         return;
     }
     let len = derived.day_details.len();

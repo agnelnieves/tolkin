@@ -75,7 +75,7 @@ fn render_cards(frame: &mut Frame, area: Rect, model: &Model) {
             title: "identified",
             value: Line::default(),
             tier: "",
-            hint: Some("run: tolkin project"),
+            hint: Some("run tolkin project"),
         },
     };
     render_stat_card(frame, cols[0], &identified, theme);
@@ -124,7 +124,13 @@ fn render_cards(frame: &mut Frame, area: Rect, model: &Model) {
             title: "sessions",
             value: Line::default(),
             tier: "",
-            hint: Some("ingestion off"),
+            // Honest empty state: distinguish consent-off from no data.
+            // Both strings fit the narrowest card at 80 columns.
+            hint: Some(if model.derived.ingestion_on {
+                "none yet"
+            } else {
+                "tolkin init"
+            }),
         },
     };
     render_stat_card(frame, cols[3], &sessions, theme);

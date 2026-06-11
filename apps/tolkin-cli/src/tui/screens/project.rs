@@ -158,9 +158,9 @@ fn render_heavy_files(frame: &mut Frame, area: Rect, model: &Model) {
     if model.derived.heavy.is_empty() {
         let text = match &model.scan {
             ScanState::Scanning => "scanning...",
-            ScanState::Failed(_) => "scan failed",
+            ScanState::Failed(_) => "scan failed (press s to retry)",
             ScanState::Ready(_) => "no agent-context files found",
-            ScanState::Idle => "no live scan",
+            ScanState::Idle => "no scan yet (press s to scan this repo)",
         };
         frame.render_widget(Paragraph::new(muted_line(text, theme)), inner);
         return;
@@ -229,7 +229,10 @@ fn render_savings(frame: &mut Frame, area: Rect, model: &Model) {
                 ),
             ]));
         }
-        None => lines.push(muted_line("identified: nothing recorded yet", theme)),
+        None => lines.push(muted_line(
+            "identified: nothing recorded yet (run tolkin project)",
+            theme,
+        )),
     }
     match &report.realized {
         Some(r) => {

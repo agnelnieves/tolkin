@@ -376,6 +376,23 @@ pub static BINDINGS: &[Binding] = &[
         hint: "sort",
         group: Group::View,
     },
+    // Modal: j/k scroll long dialog bodies (help, big advisories).
+    Binding {
+        keys: &[(KeyCode::Char('j'), NONE), (KeyCode::Down, NONE)],
+        action: Action::Down,
+        context: Context::Modal,
+        keys_label: "j/k",
+        hint: "scroll",
+        group: Group::Navigate,
+    },
+    Binding {
+        keys: &[(KeyCode::Char('k'), NONE), (KeyCode::Up, NONE)],
+        action: Action::Up,
+        context: Context::Modal,
+        keys_label: "k",
+        hint: "scroll up",
+        group: Group::Navigate,
+    },
     Binding {
         keys: &[(KeyCode::Enter, NONE)],
         action: Action::OpenDetail,
@@ -543,7 +560,7 @@ pub fn footer_actions(context: Context) -> Vec<Action> {
             Action::Refresh,
             Action::Help,
         ],
-        Context::Modal => vec![Action::Back],
+        Context::Modal => vec![Action::Back, Action::Down],
         // Input contexts: printable keys type, so the only honest hint is
         // the way out.
         Context::PaletteInput | Context::FilterInput => vec![Action::Back],

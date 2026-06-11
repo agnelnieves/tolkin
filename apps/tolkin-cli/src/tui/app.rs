@@ -364,6 +364,9 @@ pub struct Model {
     pub theme_env: ThemeEnv,
     pub animator: Animator,
     pub overlays: Vec<Overlay>,
+    /// Scroll offset of the TOPMOST dialog (helps long help and advisory
+    /// bodies); reset whenever the overlay stack changes.
+    pub modal_scroll: u16,
     pub sel_overview: Selection,
     pub sel_heavy: Selection,
     pub sel_machine: Selection,
@@ -412,6 +415,7 @@ impl Model {
             theme_env,
             animator,
             overlays: Vec::new(),
+            modal_scroll: 0,
             sel_overview: Selection::default(),
             sel_heavy: Selection::default(),
             sel_machine: Selection::default(),
@@ -832,6 +836,51 @@ impl Model {
         }
     }
 
+    /// Push an overlay; the dialog scroll belongs to the topmost, so it
+    /// resets on every stack change.
+    fn push_overlay(&mut self, overlay: Overlay) {
+        self.modal_scroll = 0;
+        self.overlays.push(overlay);
+    }
+
+    /// Pop the topmost overlay, resetting the dialog scroll.
+    fn pop_overlay(&mut self) -> Option<Overlay> {
+        self.modal_scroll = 0;
+        self.overlays.pop()
+    }
+
+    /// True when a scrollable (non-palette) dialog is topmost.
+    fn dialog_open(&self) -> bool {
+        matches!(self.overlays.last(), Some(o) if !matches!(o, Overlay::Palette(_)))
+    }
+
+    /// Furthest the topmost dialog can scroll, computed from the same
+    /// geometry the render path uses. Zero without a scrollable overlay or
+    /// before the viewport is known.
+    fn modal_max_scroll(&self) -> u16 {
+        let Some(overlay) = self.overlays.last() else {
+            return 0;
+        };
+        if matches!(overlay, Overlay::Palette(_)) {
+            return 0;
+        }
+        let (w, h) = self.viewport;
+        if w == 0 || h == 0 {
+            return 0;
+        }
+        let area = Rect::new(0, 0, w, h);
+        let (_, width) = overlay_chrome(overlay);
+        let lines = overlay_body(overlay, area, self.now_epoch, &self.theme).len() as u16;
+        modal::max_scroll(area, width, lines)
+    }
+
+    /// Scroll the topmost dialog by `delta` rows (positive is down).
+    fn scroll_modal(&mut self, delta: i32) {
+        let max = self.modal_max_scroll();
+        let next = i64::from(self.modal_scroll) + i64::from(delta);
+        self.modal_scroll = next.clamp(0, i64::from(max)) as u16;
+    }
+
     /// Push a toast and fire its 150 ms OutCubic slide-in; an evicted
     /// toast's animator state goes with it.
     fn toast(&mut self, kind: ToastKind, text: String) {
@@ -982,7 +1031,7 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
         Action::Back => {
             // Pop the overlay stack, then clear an active filter; with
             // neither, esc is a no-op (it never quits).
-            if model.overlays.pop().is_none() {
+            if model.pop_overlay().is_none() {
                 model.clear_filter();
             }
         }
@@ -990,12 +1039,18 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
         Action::NextTab => model.set_tab(model.tab.next()),
         Action::PrevTab => model.set_tab(model.tab.prev()),
         Action::Down => {
-            if let Some((sel, len)) = model.active_list() {
+            // With a dialog on top, j/k scroll its body; otherwise they
+            // move the focused list's selection.
+            if model.dialog_open() {
+                model.scroll_modal(1);
+            } else if let Some((sel, len)) = model.active_list() {
                 sel.down(len);
             }
         }
         Action::Up => {
-            if let Some((sel, _)) = model.active_list() {
+            if model.dialog_open() {
+                model.scroll_modal(-1);
+            } else if let Some((sel, _)) = model.active_list() {
                 sel.up();
             }
         }
@@ -1071,14 +1126,12 @@ fn handle_action(model: &mut Model, action: Action) -> Vec<Cmd> {
             // Stack help over whatever is open (help over a detail modal
             // works); a second ? while it is topmost stays a single copy.
             if !matches!(model.overlays.last(), Some(Overlay::Help)) {
-                model.overlays.push(Overlay::Help);
+                model.push_overlay(Overlay::Help);
             }
         }
         Action::Palette => {
             let suggested = keymap::footer_actions(model.context());
-            model
-                .overlays
-                .push(Overlay::Palette(PaletteState::new(suggested)));
+            model.push_overlay(Overlay::Palette(PaletteState::new(suggested)));
         }
         Action::GenerateReport => {
             if !model.reporting {
@@ -1195,7 +1248,7 @@ fn handle_palette_key(model: &mut Model, key: &KeyEvent) -> Option<Vec<Cmd>> {
         }
         KeyCode::Enter => {
             let action = state.matches.get(state.sel).copied();
-            model.overlays.pop();
+            model.pop_overlay();
             match action {
                 Some(action) => Some(handle_action(model, action)),
                 None => Some(Vec::new()),
@@ -1245,6 +1298,13 @@ const WHEEL_LINES: usize = 3;
 /// the same layout math the screens render with.
 fn handle_mouse(model: &mut Model, mouse: &MouseEvent) -> Vec<Cmd> {
     match mouse.kind {
+        // The wheel scrolls a dialog body when one is on top.
+        MouseEventKind::ScrollDown if model.dialog_open() => {
+            model.scroll_modal(WHEEL_LINES as i32);
+        }
+        MouseEventKind::ScrollUp if model.dialog_open() => {
+            model.scroll_modal(-(WHEEL_LINES as i32));
+        }
         MouseEventKind::ScrollDown if model.overlays.is_empty() => {
             if let Some((sel, len)) = model.active_list() {
                 for _ in 0..WHEEL_LINES {
@@ -1279,7 +1339,7 @@ fn handle_click(model: &mut Model, x: u16, y: u16) -> Vec<Cmd> {
     // inside stay with the dialog.
     if !model.overlays.is_empty() {
         if !top_overlay_rect(model, area).contains(pos) {
-            model.overlays.pop();
+            model.pop_overlay();
         }
         return Vec::new();
     }
@@ -1364,13 +1424,13 @@ fn top_overlay_rect(model: &Model, area: Rect) -> Rect {
 /// Enter: with a dialog open it confirms (dismisses) it; otherwise it opens
 /// the detail for the focused list's selection.
 fn open_detail(model: &mut Model) -> Vec<Cmd> {
-    if model.overlays.pop().is_some() {
+    if model.pop_overlay().is_some() {
         return Vec::new();
     }
     match model.tab {
         TabId::Project => {
             if let Some(row) = model.selected_heavy().cloned() {
-                model.overlays.push(Overlay::File(FileDetailState {
+                model.push_overlay(Overlay::File(FileDetailState {
                     path: row.path,
                     tokens: row.tokens,
                     pct_always: row.pct_always,
@@ -1388,7 +1448,7 @@ fn open_detail(model: &mut Model) -> Vec<Cmd> {
                     .map(|s| s.records.as_slice())
                     .unwrap_or(&[]);
                 if let Some(h) = data::project_history(records, &p.key) {
-                    model.overlays.push(Overlay::Project(ProjectDetailState {
+                    model.push_overlay(Overlay::Project(ProjectDetailState {
                         key: p.key,
                         series: h.series,
                         first_ts: h.first_ts,
@@ -1416,7 +1476,7 @@ fn open_advisory_detail(model: &mut Model, idx: usize) {
     let mut sections = advisories::tui_detail_sections(block);
     if idx < sections.len() {
         let section = sections.swap_remove(idx);
-        model.overlays.push(Overlay::Advisory(AdvisoryDetailState {
+        model.push_overlay(Overlay::Advisory(AdvisoryDetailState {
             title: section.title,
             paragraphs: section.paragraphs,
         }));
@@ -1446,7 +1506,7 @@ fn audit_selected(model: &mut Model) -> Vec<Cmd> {
         return Vec::new();
     };
     let path = row.path.clone();
-    model.overlays.push(Overlay::File(FileDetailState {
+    model.push_overlay(Overlay::File(FileDetailState {
         path: path.clone(),
         tokens: row.tokens,
         pct_always: row.pct_always,
@@ -1530,14 +1590,18 @@ pub fn view(frame: &mut Frame, model: &Model) {
     };
     chrome::render_footer(frame, rows[2], &footer, &model.theme);
 
-    for overlay in &model.overlays {
+    let top = model.overlays.len().saturating_sub(1);
+    for (i, overlay) in model.overlays.iter().enumerate() {
         if let Overlay::Palette(state) = overlay {
             palette::render_palette(frame, state, &model.theme);
             continue;
         }
         let (title, width) = overlay_chrome(overlay);
         let body = overlay_body(overlay, area, model.now_epoch, &model.theme);
-        modal::render_modal(frame, &title, &body, width, &model.theme);
+        // The scroll offset belongs to the topmost dialog; buried ones
+        // render from their top (the stack reset their offset anyway).
+        let scroll = if i == top { model.modal_scroll } else { 0 };
+        modal::render_modal(frame, &title, &body, width, scroll, &model.theme);
     }
 
     // Toasts stack above everything, including dialog scrims.
@@ -2717,6 +2781,80 @@ mod tests {
     }
 
     #[test]
+    fn extreme_sizes_never_panic_and_tiny_frames_name_the_json_fallback() {
+        let (mut model, _clock) = populated_model("tolkin-dark", true);
+        // Sub-minimum sizes render the too-small card, never the dashboard.
+        for (w, h) in [(20u16, 5u16), (79, 24), (80, 23), (40, 10)] {
+            model.viewport = (w, h);
+            let (text, _) = render_at(&model, w, h);
+            assert!(
+                text.contains("tolkin stats --json") || text.contains("stats"),
+                "{w}x{h} must name the JSON fallback:\n{text}"
+            );
+            assert!(
+                !text.contains("input savings"),
+                "{w}x{h} too small for the dashboard footer"
+            );
+        }
+        // The 80x24 floor and a huge frame render the full dashboard.
+        for (w, h) in [(80u16, 24u16), (200, 60)] {
+            model.viewport = (w, h);
+            let (text, _) = render_at(&model, w, h);
+            assert!(
+                text.contains("input savings, output may vary"),
+                "{w}x{h} renders the dashboard:\n{text}"
+            );
+        }
+        // Overlays and toasts atop a tiny frame stay panic-free too.
+        model.toast(ToastKind::Ok, "copied".to_string());
+        update(&mut model, key(KeyCode::Char('?')));
+        model.viewport = (20, 5);
+        let _ = render_at(&model, 20, 5);
+    }
+
+    #[test]
+    fn help_overlay_scrolls_to_its_agents_tail_on_a_24_row_terminal() {
+        let (mut model, _clock) = test_model();
+        model.viewport = (80, 24);
+        update(&mut model, key(KeyCode::Char('?')));
+        let (text, _) = render_at(&model, 80, 24);
+        assert!(text.contains("navigate"), "help top visible:\n{text}");
+        assert!(
+            !text.contains("TOLKIN_REDUCED_MOTION"),
+            "the env tail cannot fit a 24-row frame unscrolled"
+        );
+        assert!(text.contains("j/k scroll"), "scroll affordance:\n{text}");
+        // j scrolls the dialog (not a list behind it) until the tail shows.
+        for _ in 0..get_max(&model) {
+            update(&mut model, key(KeyCode::Char('j')));
+        }
+        let (text, _) = render_at(&model, 80, 24);
+        assert!(
+            text.contains("TOLKIN_REDUCED_MOTION"),
+            "agents tail reachable by scrolling:\n{text}"
+        );
+        // k scrolls back up; over-scrolling clamps at the top.
+        for _ in 0..99 {
+            update(&mut model, key(KeyCode::Up));
+        }
+        assert_eq!(model.modal_scroll, 0);
+        let (text, _) = render_at(&model, 80, 24);
+        assert!(text.contains("navigate"));
+        // The wheel scrolls the dialog too.
+        update(&mut model, wheel(true));
+        assert_eq!(model.modal_scroll, 3);
+        // Esc closes; reopening starts back at the top.
+        update(&mut model, key(KeyCode::Char('j')));
+        update(&mut model, key(KeyCode::Esc));
+        update(&mut model, key(KeyCode::Char('?')));
+        assert_eq!(model.modal_scroll, 0, "scroll resets with the stack");
+    }
+
+    fn get_max(model: &Model) -> u16 {
+        model.modal_max_scroll()
+    }
+
+    #[test]
     fn mono_theme_carries_every_tab_and_overlay_without_color() {
         use ratatui::style::Color;
         let mono_ok = |c: Color| {
@@ -2803,6 +2941,58 @@ mod tests {
         let (text, _) = render_at(&model, 110, 30);
         assert!(text.contains("scanning repo"), "project sweep fallback");
         assert!(text.contains("rules.md"), "heavy rows visible instantly");
+    }
+
+    #[test]
+    #[ignore = "visual self-check dump, run manually with --nocapture"]
+    fn dump_frames_for_visual_check() {
+        let dump = |label: &str, model: &Model, w: u16, h: u16| {
+            let (text, _) = render_at(model, w, h);
+            println!("===== {label} {w}x{h} =====\n{text}");
+        };
+        for (w, h) in [(110u16, 30u16), (80, 24)] {
+            let (mut model, clock) = populated_model("tolkin-dark", true);
+            model.viewport = (w, h);
+            // Settle all tweens for the steady-state shots.
+            clock.advance(Duration::from_millis(5_000));
+            for tab in TabId::ALL {
+                model.tab = tab;
+                dump(&format!("{tab:?}"), &model, w, h);
+            }
+            // Overlays.
+            model.tab = TabId::Project;
+            update(&mut model, key(KeyCode::Enter));
+            dump("file-detail", &model, w, h);
+            update(&mut model, key(KeyCode::Char('?')));
+            dump("help-over-detail", &model, w, h);
+            update(&mut model, key(KeyCode::Esc));
+            update(&mut model, key(KeyCode::Esc));
+            update(&mut model, ctrl('k'));
+            dump("palette", &model, w, h);
+            update(&mut model, key(KeyCode::Esc));
+            // Busy + toast + scanner.
+            model.scan = ScanState::Scanning;
+            model.busy_ms = 10 * 33;
+            model.toast(ToastKind::Ok, "scanned 312 files in 1.2s".to_string());
+            clock.advance(Duration::from_millis(75));
+            dump("scanning-toast-mid-slide", &model, w, h);
+            model.scan = ScanState::Idle;
+            // Mid-animation: refire and step to 50 percent.
+            let (mut model, clock) = populated_model("tolkin-dark", true);
+            model.viewport = (w, h);
+            model.derived.today_cost = 4.12;
+            model.derived.last30_cost = 61.55;
+            model.fire_data_animations();
+            clock.advance(Duration::from_millis(150));
+            model.tab = TabId::Overview;
+            dump("overview-mid-anim", &model, w, h);
+            model.tab = TabId::Machine;
+            dump("machine-mid-anim", &model, w, h);
+            // Setup card and too-small card.
+            let (model, _clock) = test_model();
+            dump("setup", &model, w, h);
+            dump("too-small", &model, 20, 5);
+        }
     }
 
     #[test]

@@ -81,7 +81,13 @@ fn render_day_strip(frame: &mut Frame, area: Rect, model: &Model) {
     frame.render_widget(block, area);
 
     if derived.day_details.is_empty() {
-        frame.render_widget(Paragraph::new(muted_line("no usage data", theme)), inner);
+        frame.render_widget(
+            Paragraph::new(muted_line(
+                "no usage in the last 30 days (sessions land after agent runs)",
+                theme,
+            )),
+            inner,
+        );
         return;
     }
     let len = derived.day_details.len();
