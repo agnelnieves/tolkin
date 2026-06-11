@@ -6,7 +6,7 @@ description: |
   CLI equivalent, or verify the delta after slimming. Also triggers on: "slim my MCP",
   "reduce MCP tokens", "tolkin mcp", "apply slim snippets", "MCP tool-definition cost".
 metadata:
-  version: 0.12.0
+  version: 0.13.0
 ---
 
 # tolkin-slim
