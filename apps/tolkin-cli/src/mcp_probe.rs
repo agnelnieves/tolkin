@@ -434,24 +434,23 @@ pub fn probe_http(target: &HttpTarget, timeout_secs: u64) -> Result<ProbeResult>
     // tools/list pages.
     let mut tools: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
-    let mut next_id: u64 = 2;
-    for _ in 0..MAX_PAGES {
+    for page in 0..MAX_PAGES {
+        let request_id = 2 + page as u64;
         let params = match &cursor {
             Some(c) => json!({ "cursor": c }),
             None => json!({}),
         };
         let req = json!({
             "jsonrpc": "2.0",
-            "id": next_id,
+            "id": request_id,
             "method": "tools/list",
             "params": params,
         });
-        let (resp, _sid) = http_round_trip(&agent, target, &session_id, &req, next_id)?;
+        let (resp, _sid) = http_round_trip(&agent, target, &session_id, &req, request_id)?;
         let result = resp
             .get("result")
             .ok_or_else(|| anyhow!("tools/list returned no result"))?;
         cursor = merge_tools_page(&mut tools, result);
-        next_id += 1;
         if cursor.is_none() {
             break;
         }
