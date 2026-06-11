@@ -435,7 +435,11 @@ mod tests {
     #[test]
     fn refresh_fires_at_most_once_a_day() {
         let day = 86_400u64;
-        assert!(!should_refresh(Some(true), Some(1_000_000), 1_000_000 + day - 1));
+        assert!(!should_refresh(
+            Some(true),
+            Some(1_000_000),
+            1_000_000 + day - 1
+        ));
         assert!(should_refresh(Some(true), Some(1_000_000), 1_000_000 + day));
     }
 
