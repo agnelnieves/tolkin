@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tolkin_core::pricing;
 use tolkin_core::Provider;
 
+use crate::advisories;
 use crate::cache_analysis;
 use crate::ledger::{self, Config, LedgerRecord};
 use crate::tiers::{self, TierReport};
@@ -126,6 +127,27 @@ impl StatsSnapshot {
             scope_project,
             sessions: &usage.sessions,
             rate_fn: &cost::cache_rates,
+        }))
+    }
+
+    /// Advisory block for the given scope. `None` is returned when the
+    /// measured tier is absent (ingestion off), mirroring the cache gate.
+    /// Computed in the shared snapshot path so stats/TUI/report all agree.
+    pub fn compute_advisories(&self, report: &TierReport) -> Option<advisories::AdvisoryBlock> {
+        let measured = report.measured.as_ref()?;
+        let sessions = self
+            .usage_data
+            .as_ref()
+            .map(|d| d.sessions.as_slice())
+            .unwrap_or(&[]);
+        let monthly_cap_usd = self.config.as_ref().and_then(|c| c.monthly_cap_usd);
+        Some(advisories::compute(&advisories::AdvisoryInputs {
+            measured,
+            sessions,
+            cost_fn: &cost::cost_usd,
+            input_rate_fn: &cost::input_rate_usd_per_mtok,
+            monthly_cap_usd,
+            now: self.now,
         }))
     }
 }

@@ -62,6 +62,14 @@ fn cost_of(tokens: u64, rate_usd_per_million: f64) -> f64 {
     (tokens as f64) * rate_usd_per_million / 1_000_000.0
 }
 
+/// Base input rate in USD per million tokens for the given raw model id.
+/// Returns None for unknown or unrecognized ids. Used by the model-mix
+/// advisory to identify the cheapest-tier model by its input price.
+pub fn input_rate_usd_per_mtok(raw_model: &str) -> Option<f64> {
+    let id = normalize_model_id(raw_model);
+    pricing::find(&id).map(|m| m.input)
+}
+
 /// Input-side rates for the cache analysis, resolved with exactly the same
 /// normalization and missing-rate fallbacks as [`cost_usd`] so the two
 /// surfaces can never disagree on what a model's cache tokens cost. Returns

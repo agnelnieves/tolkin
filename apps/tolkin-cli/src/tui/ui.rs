@@ -11,6 +11,7 @@ use ratatui::{
     Frame,
 };
 
+use crate::advisories::AdvisoryBlock;
 use crate::cache_analysis::CacheReport;
 use crate::ledger::LedgerRecord;
 use crate::project::ProjectReport;
@@ -77,6 +78,9 @@ pub struct DashboardView<'a> {
     pub spend_models: &'a [data::ModelRow],
     /// Global cache health report; `None` exactly when ingestion is off.
     pub cache: Option<&'a CacheReport>,
+    /// Advisory block (model mix, output share, cap runway); `None` when
+    /// ingestion is off or measured tier is absent.
+    pub advisories: Option<&'a AdvisoryBlock>,
     pub ingestion_on: bool,
     /// True when the data dir has neither a config nor any ledger records;
     /// the dashboard renders a friendly setup card across every tab.
@@ -577,12 +581,14 @@ fn render_spend_tab(frame: &mut Frame, view: &DashboardView, area: Rect) {
             Constraint::Length(7), // daily bars
             Constraint::Length(9), // model table
             Constraint::Length(5), // cache hit rate + health + cost
+            Constraint::Min(2),    // advisories compact lines
         ])
         .split(area);
 
     render_daily_bars(frame, view, rows[0]);
     render_model_table(frame, view, rows[1]);
     render_cache_and_cost(frame, view, rows[2]);
+    render_advisories_compact(frame, view, rows[3]);
 }
 
 /// The one-line cache health row for the Spend tab: the broken-cache
@@ -728,6 +734,21 @@ fn render_cache_and_cost(frame: &mut Frame, view: &DashboardView, area: Rect) {
         )));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_advisories_compact(frame: &mut Frame, view: &DashboardView, area: Rect) {
+    let Some(block) = view.advisories else {
+        return;
+    };
+    let compact = crate::advisories::tui_compact_lines(block);
+    if compact.is_empty() {
+        return;
+    }
+    let lines: Vec<Line> = compact
+        .iter()
+        .map(|l| Line::from(Span::styled(l.as_str(), Style::default().fg(Color::White))))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn commas(n: u64) -> String {
