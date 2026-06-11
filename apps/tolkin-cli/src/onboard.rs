@@ -52,9 +52,12 @@ pub fn run(force: bool, yes: bool) -> Result<()> {
     // Consents.
     let consent_ledger;
     let consent_ingestion;
+    let consent_update_check;
     if yes {
         consent_ledger = true;
         consent_ingestion = false;
+        // Non-interactive: never silently consent to network checks.
+        consent_update_check = None;
         let _ = writeln!(out, "Accepting defaults: ledger on, log ingestion off.");
     } else {
         let _ = writeln!(out);
@@ -72,9 +75,16 @@ pub fn run(force: bool, yes: bool) -> Result<()> {
         } else {
             false
         };
+        let answered = prompt_yes_no(
+            &mut out,
+            "Allow tolkin to check for new versions once a day? This sends one plain HTTPS request to the npm registry and nothing else.",
+            false,
+        );
+        consent_update_check = Some(answered);
     }
 
-    let cfg = Config::new(consent_ledger, consent_ingestion);
+    let mut cfg = Config::new(consent_ledger, consent_ingestion);
+    cfg.consent_update_check = consent_update_check;
     if let Err(e) = ledger::save_config(&cfg) {
         let _ = writeln!(out, "warn: could not save config: {e}");
     }
