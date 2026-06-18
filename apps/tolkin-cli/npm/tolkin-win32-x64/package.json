@@ -1,8 +1,11 @@
 {
-  "name": "tolkin-win32-x64",
+  "name": "@tolkin/win32-x64",
   "version": "0.15.1",
   "description": "Tolkin CLI binary for Windows x64.",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "os": [
     "win32"
   ],

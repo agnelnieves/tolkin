@@ -4,7 +4,7 @@ const PRODUCT_LINKS = [
   { label: "Analyzer", href: "/analyzer" },
   { label: "Bench", href: "/bench" },
   { label: "GitHub", href: "https://github.com/agnelnieves/tolkin", external: true },
-  { label: "npm", href: "https://www.npmjs.com/package/tolkin-cli", external: true },
+  { label: "npm", href: "https://www.npmjs.com/package/@tolkin/cli", external: true },
 ] as const;
 
 const TRUST_LINKS = [

@@ -14,19 +14,19 @@ has not been measured.
 
 ```sh
 # Scan local agent configs (MCP, instruction files, shell) for token waste
-npx tolkin-cli scan
+npx @tolkin/cli scan
 
 # Audit one file for token waste
-npx tolkin-cli audit CLAUDE.md
+npx @tolkin/cli audit CLAUDE.md
 
 # Repo-wide audit with load profiles
-npx tolkin-cli project .
+npx @tolkin/cli project .
 
 # Stats (local ledger summary)
-npx tolkin-cli stats
+npx @tolkin/cli stats
 ```
 
-All commands accept `--json` for machine-readable output. `bunx tolkin-cli` works
+All commands accept `--json` for machine-readable output. `bunx @tolkin/cli` works
 identically everywhere `npx` does.
 
 ## Install paths
@@ -83,7 +83,7 @@ must run `brew trust agnelnieves/tolkin` once before `brew install`.
 
 The tap is at `agnelnieves/homebrew-tolkin`. Homebrew covers macOS arm64
 (Apple Silicon), macOS x64 (Intel), Linux x64, and Linux arm64. Windows
-users should use `npx tolkin-cli` instead. Bottles and source builds from
+users should use `npx @tolkin/cli` instead. Bottles and source builds from
 homebrew-core are out of scope until the project reaches the OSS extraction
 milestone; this tap provides pre-built binary installs only.
 
@@ -97,7 +97,7 @@ Always run the two commands together. Third-party taps only refresh during
 `brew update`, so `brew upgrade tolkin` on its own can answer "already
 installed" even when a newer release exists (Homebrew's auto-update may sit
 on tap metadata for up to a day). If tolkin came from npm instead, the
-command is `npm update -g tolkin-cli`. Not sure which one applies? Run
+command is `npm update -g @tolkin/cli`. Not sure which one applies? Run
 `tolkin update`: it checks the registry once, detects the install channel,
 and prints the exact command to copy.
 
@@ -128,7 +128,7 @@ jobs:
         with:
           fail-on: none        # none | low | medium | high
           comment-mode: sticky # sticky | new | off
-          version: "0.9.0"
+          version: "0.15.1"
 ```
 
 #### Action inputs
@@ -138,7 +138,7 @@ jobs:
 | `fail-on` | `none` | Exit 2 when findings at or above this severity exist. `none` always succeeds. |
 | `working-directory` | `.` | Directory to audit. |
 | `comment-mode` | `sticky` | `sticky`: upsert one comment per PR. `new`: always post fresh. `off`: no comment. |
-| `version` | `0.9.0` | tolkin-cli version pinned for this action. |
+| `version` | `0.15.1` | @tolkin/cli version pinned for this action. |
 
 The `permissions: pull-requests: write` block is required for `sticky` and `new`
 comment modes. For `comment-mode: off` or non-PR events, `contents: read` is sufficient.

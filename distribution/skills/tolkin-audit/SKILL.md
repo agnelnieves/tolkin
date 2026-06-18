@@ -24,14 +24,14 @@ that gets loaded into the model context.
 ## Step 1: Run the audit
 
 ```bash
-npx tolkin-cli@latest project . --json
+npx @tolkin/cli@latest project . --json
 # bunx works identically:
-# bunx tolkin-cli@latest project . --json
+# bunx @tolkin/cli@latest project . --json
 ```
 
 If a local release binary is available (e.g. during CI dry-runs), set
 `TOLKIN_BIN=/path/to/tolkin` and the action uses it. The skill always prefers
-`npx tolkin-cli@latest` in end-user sessions.
+`npx @tolkin/cli@latest` in end-user sessions.
 
 The command walks the repo (gitignore-aware), classifies every agent-context file by
 load profile, and emits a JSON report.
@@ -130,7 +130,7 @@ genuinely redundant boilerplate.
 After the user applies edits, re-run:
 
 ```bash
-npx tolkin-cli@latest project . --json
+npx @tolkin/cli@latest project . --json
 ```
 
 Compare `totals.context_tokens` before and after. The delta is the **realized savings

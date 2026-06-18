@@ -1,0 +1,25 @@
+{
+  "name": "tolkin",
+  "version": "0.15.1",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "start": "turbo run start",
+    "lint": "turbo run lint",
+    "lint:fast": "turbo run lint:fast",
+    "lint:rust": "turbo run lint:rust",
+    "format": "turbo run format",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.15",
+    "@typescript/native-preview": "7.0.0-dev.20260421.2",
+    "oxlint": "1.64.0",
+    "turbo": "2.9.16",
+    "typescript": "5.9.3"
+  }
+}

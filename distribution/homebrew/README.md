@@ -30,7 +30,7 @@ must run `brew trust agnelnieves/tolkin` once before `brew install`.
 | macOS | x64 (Intel) | Supported |
 | Linux | x64 | Supported |
 | Linux | arm64 | Supported |
-| Windows | x64 | Use `npx tolkin-cli` instead |
+| Windows | x64 | Use `npx @tolkin/cli` instead |
 
 Pre-built binaries are hosted on GitHub Releases at
 https://github.com/agnelnieves/tolkin. Bottles and source builds from

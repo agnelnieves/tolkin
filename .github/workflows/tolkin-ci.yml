@@ -4,7 +4,7 @@ name: tolkin CI
 # binary, and the Next.js web app (which consumes the wasm pkg).
 on:
   push:
-    branches: [main, feat/tokenly]
+    branches: [main]
     paths:
       - "apps/tolkin-cli/**"
       - "packages/tolkin-core/**"

@@ -1,8 +1,11 @@
 {
-  "name": "tolkin-linux-arm64",
+  "name": "@tolkin/linux-arm64",
   "version": "0.15.1",
   "description": "Tolkin CLI binary for Linux arm64.",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "os": [
     "linux"
   ],

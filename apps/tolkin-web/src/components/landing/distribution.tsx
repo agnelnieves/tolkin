@@ -4,7 +4,7 @@ import { SectionHeading } from "./section-heading";
 
 const COMMANDS = [
   { label: "Homebrew", command: "brew install agnelnieves/tolkin/tolkin" },
-  { label: "npm", command: "npm install -g tolkin-cli" },
+  { label: "npm", command: "npm install -g @tolkin/cli" },
   { label: "bunx", command: "bunx tolkin" },
 ] as const;
 

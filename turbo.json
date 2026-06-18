@@ -1,0 +1,22 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "futureFlags": { "globalConfiguration": true },
+  "global": {
+    "ui": "stream",
+    "env": ["NODE_ENV", "VERCEL", "VERCEL_ENV", "VERCEL_URL"],
+    "inputs": [".env", "biome.json", ".oxlintrc.json"]
+  },
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**", "pkg/**"]
+    },
+    "dev": { "cache": false, "persistent": true },
+    "start": { "dependsOn": ["build"], "cache": false, "persistent": true },
+    "lint": {},
+    "lint:fast": {},
+    "lint:rust": {},
+    "typecheck": { "dependsOn": ["^build"], "outputs": ["tsconfig.tsbuildinfo"] },
+    "test": { "dependsOn": ["^build"] }
+  }
+}

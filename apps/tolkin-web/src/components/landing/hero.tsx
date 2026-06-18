@@ -21,7 +21,7 @@ const INTRO_KEY = "tolkin-hero-intro";
 
 const INSTALLS = [
   { id: "brew", label: "brew", command: "brew install agnelnieves/tolkin/tolkin" },
-  { id: "npm", label: "npm", command: "npm install -g tolkin-cli" },
+  { id: "npm", label: "npm", command: "npm install -g @tolkin/cli" },
   { id: "bunx", label: "bunx", command: "bunx tolkin" },
 ] as const;
 

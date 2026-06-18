@@ -32,9 +32,9 @@ inputs:
     required: false
     default: sticky
   version:
-    description: tolkin-cli version to install via npx. Pin to a known-good release.
+    description: '@tolkin/cli version to install via npx. Pin to a known-good release.'
     required: false
-    default: "0.9.0"
+    default: "0.15.1"
   max-always-delta-tokens:
     description: >
       Fail the job (exit 3) when always-loaded context grew by more than N
@@ -90,7 +90,7 @@ runs:
         if [ -n "${TOLKIN_BIN:-}" ] && [ -x "$TOLKIN_BIN" ]; then
           TOLKIN="$TOLKIN_BIN"
         else
-          TOLKIN="npx --yes tolkin-cli@${TOLKIN_VERSION}"
+          TOLKIN="npx --yes @tolkin/cli@${TOLKIN_VERSION}"
         fi
 
         REPORT_JSON="$(mktemp)"
@@ -267,6 +267,6 @@ runs:
         if [ -n "${TOLKIN_BIN:-}" ] && [ -x "$TOLKIN_BIN" ]; then
           TOLKIN="$TOLKIN_BIN"
         else
-          TOLKIN="npx --yes tolkin-cli@${TOLKIN_VERSION}"
+          TOLKIN="npx --yes @tolkin/cli@${TOLKIN_VERSION}"
         fi
         $TOLKIN project . --fail-on "${{ inputs.fail-on }}"

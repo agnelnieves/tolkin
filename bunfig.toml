@@ -1,0 +1,15 @@
+# Bun install configuration.
+# Docs: https://bun.com/docs/runtime/bunfig
+
+[install]
+# Pin new dependencies to exact versions instead of caret ranges.
+exact = true
+
+# Use the text-format bun.lock (since 1.2). Keeps the lockfile diffable
+# in PRs and reviewable in code search, unlike the older bun.lockb binary.
+saveTextLockfile = true
+
+# Bun blocks postinstall scripts by default and only runs them for packages
+# listed in package.json `trustedDependencies`. We intentionally keep
+# trustedDependencies empty — the two currently blocked postinstalls
+# (@vercel/speed-insights, @coinbase/x402) are informational only.

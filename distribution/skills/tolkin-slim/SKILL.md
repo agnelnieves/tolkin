@@ -24,7 +24,7 @@ Use this skill when the user wants to reduce what MCP servers cost at context lo
 
 ```bash
 # tolkin-schema: scan --json
-npx tolkin-cli@latest scan --json
+npx @tolkin/cli@latest scan --json
 # bunx works identically
 ```
 
@@ -65,7 +65,7 @@ If the config path is already known, skip directly to Step 2.
 
 ```bash
 # tolkin-schema: mcp --json
-npx tolkin-cli@latest mcp <path-to-config> --json
+npx @tolkin/cli@latest mcp <path-to-config> --json
 ```
 
 Key fields from `tolkin mcp <config> --json` (shape: `McpAnalysis`):
@@ -156,7 +156,7 @@ file. The snippet is the exact JSON or JSONC fragment to add or replace.
 After applying, re-run:
 
 ```bash
-npx tolkin-cli@latest mcp <path-to-config> --json
+npx @tolkin/cli@latest mcp <path-to-config> --json
 ```
 
 Compare `totals.cold` before and after. The delta is the **realized savings (Tier 2)**

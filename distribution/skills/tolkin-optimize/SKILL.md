@@ -23,7 +23,7 @@ is: audit -> propose -> confirm -> apply -> re-measure -> summarize.
 ## Step 1: Baseline audit
 
 ```bash
-npx tolkin-cli@latest project . --json
+npx @tolkin/cli@latest project . --json
 # bunx works identically
 ```
 
@@ -36,7 +36,7 @@ Also check stats if the ledger is available:
 
 ```bash
 # tolkin-schema: stats --json
-npx tolkin-cli@latest stats --json
+npx @tolkin/cli@latest stats --json
 ```
 
 Key fields from `tolkin stats --json`:
@@ -150,7 +150,7 @@ Never batch-apply changes across multiple files without per-file confirmation.
 After applying all approved fixes:
 
 ```bash
-npx tolkin-cli@latest project . --json
+npx @tolkin/cli@latest project . --json
 ```
 
 Compare new `totals.context_tokens` against the baseline. This is the **realized

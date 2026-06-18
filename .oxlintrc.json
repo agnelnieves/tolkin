@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "**/.next/**",
+    "**/out/**",
+    "**/build/**",
+    "**/node_modules/**",
+    "**/.turbo/**",
+    "**/target/**",
+    "**/next-env.d.ts",
+    ".claude/**",
+    ".agents/**"
+  ]
+}

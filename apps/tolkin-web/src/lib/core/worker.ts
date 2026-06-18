@@ -72,7 +72,7 @@ let corePromise: Promise<CoreModule> | null = null;
 function loadCore(): Promise<CoreModule> {
   if (corePromise) return corePromise;
   corePromise = (async () => {
-    const mod = (await import("tolkin-core-wasm")) as unknown as CoreModule;
+    const mod = (await import("@tolkin/core-wasm")) as unknown as CoreModule;
     await mod.default();
     return mod;
   })();

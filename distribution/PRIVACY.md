@@ -34,7 +34,7 @@ other outbound endpoint in the binary.
 ## The update check
 
 `tolkin update` issues exactly one HTTPS GET to
-`https://registry.npmjs.org/tolkin-cli/latest` and compares the returned
+`https://registry.npmjs.org/@tolkin/cli/latest` and compares the returned
 version string against the running binary. The request carries no
 authentication, no cookies, and no identifying parameters; running the
 command is the consent (the same doctrine as `--verify`). Setting

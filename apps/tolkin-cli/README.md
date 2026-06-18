@@ -44,7 +44,7 @@ so `brew upgrade` alone can report "already installed" minutes after a release:
 
 ```sh
 brew update && brew upgrade tolkin   # Homebrew installs
-npm update -g tolkin-cli             # npm installs
+npm update -g @tolkin/cli             # npm installs
 ```
 
 Not sure which channel installed tolkin? `tolkin update` detects it and prints

@@ -10,7 +10,7 @@ export function CoreVersion() {
     let cancelled = false;
     (async () => {
       try {
-        const mod = await import("tolkin-core-wasm");
+        const mod = await import("@tolkin/core-wasm");
         await mod.default();
         if (!cancelled) setVersion(mod.version());
       } catch (e) {

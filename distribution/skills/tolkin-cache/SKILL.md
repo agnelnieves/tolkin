@@ -27,9 +27,9 @@ be on; the skill explains what to do when it is off.
 ## Step 1: Run the cache health report
 
 ```bash
-npx tolkin-cli@latest cache --json
+npx @tolkin/cli@latest cache --json
 # bunx works identically; add --global for machine-wide scope
-# npx tolkin-cli@latest cache --global --json
+# npx @tolkin/cli@latest cache --global --json
 ```
 
 The command reads ingested Claude Code session logs from the local ledger and
@@ -268,7 +268,7 @@ improving prefix stability. This means:
 To find specific volatile-prefix findings, run:
 
 ```bash
-npx tolkin-cli@latest audit <file> --json
+npx @tolkin/cli@latest audit <file> --json
 ```
 
 Look for findings with `rule: "volatile-prefix"` in the output.
@@ -283,7 +283,7 @@ settings and outside this skill's scope.
 After the user applies prefix-stability edits:
 
 ```bash
-npx tolkin-cli@latest cache --json
+npx @tolkin/cli@latest cache --json
 ```
 
 Compare `hit_rate.rate` and `write_churn.share` before and after. These are

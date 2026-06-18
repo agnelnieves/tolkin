@@ -3,11 +3,12 @@
 #   - apps/tolkin-cli/Cargo.toml            [package] version
 #   - apps/tolkin-cli/package.json          Turbo workspace stub
 #   - npm/tolkin/package.json               version + optionalDependencies pins
-#   - npm/tolkin-darwin-arm64/package.json  version
-#   - npm/tolkin-darwin-x64/package.json    version
-#   - npm/tolkin-linux-x64/package.json     version
-#   - npm/tolkin-linux-arm64/package.json   version
-#   - npm/tolkin-win32-x64/package.json     version
+#                                           (publishes as @tolkin/cli)
+#   - npm/tolkin-darwin-arm64/package.json  version (@tolkin/darwin-arm64)
+#   - npm/tolkin-darwin-x64/package.json    version (@tolkin/darwin-x64)
+#   - npm/tolkin-linux-x64/package.json     version (@tolkin/linux-x64)
+#   - npm/tolkin-linux-arm64/package.json   version (@tolkin/linux-arm64)
+#   - npm/tolkin-win32-x64/package.json     version (@tolkin/win32-x64)
 #   - Cargo.lock                            refreshed via cargo metadata
 #
 # Usage: scripts/bump-version.sh patch|minor|major|<x.y.z>
@@ -58,7 +59,7 @@ for f in "$SKILL_AUDIT" "$SKILL_OPTIMIZE" "$SKILL_SLIM" "$SKILL_CACHE"; do
   CURRENT="$current" NEXT="$next" perl -pi -e \
     's/^  version: \Q$ENV{CURRENT}\E$/  version: $ENV{NEXT}/' "$f"
 done
-for pkg in tolkin-darwin-arm64 tolkin-darwin-x64 tolkin-linux-x64 tolkin-linux-arm64 tolkin-win32-x64; do
+for pkg in '@tolkin/darwin-arm64' '@tolkin/darwin-x64' '@tolkin/linux-x64' '@tolkin/linux-arm64' '@tolkin/win32-x64'; do
   CURRENT="$current" NEXT="$next" PKG="$pkg" perl -pi -e \
     's/"\Q$ENV{PKG}\E": "\Q$ENV{CURRENT}\E"/"$ENV{PKG}": "$ENV{NEXT}"/' "$WRAPPER"
 done
@@ -75,7 +76,7 @@ grep -q "\"version\": \"$next\"" "$X64" || { echo "$X64 did not update" >&2; fai
 grep -q "\"version\": \"$next\"" "$LINUX_X64" || { echo "$LINUX_X64 did not update" >&2; fail=1; }
 grep -q "\"version\": \"$next\"" "$LINUX_ARM64" || { echo "$LINUX_ARM64 did not update" >&2; fail=1; }
 grep -q "\"version\": \"$next\"" "$WIN32_X64" || { echo "$WIN32_X64 did not update" >&2; fail=1; }
-for pkg in tolkin-darwin-arm64 tolkin-darwin-x64 tolkin-linux-x64 tolkin-linux-arm64 tolkin-win32-x64; do
+for pkg in '@tolkin/darwin-arm64' '@tolkin/darwin-x64' '@tolkin/linux-x64' '@tolkin/linux-arm64' '@tolkin/win32-x64'; do
   grep -q "\"$pkg\": \"$next\"" "$WRAPPER" || { echo "optionalDependencies $pkg pin did not update" >&2; fail=1; }
 done
 grep -q "^  version: $next$" "$SKILL_AUDIT" || { echo "$SKILL_AUDIT did not update" >&2; fail=1; }

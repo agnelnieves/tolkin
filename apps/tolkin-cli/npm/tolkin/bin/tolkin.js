@@ -6,11 +6,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const PLATFORMS = {
-  "darwin-arm64": "tolkin-darwin-arm64",
-  "darwin-x64": "tolkin-darwin-x64",
-  "linux-x64": "tolkin-linux-x64",
-  "linux-arm64": "tolkin-linux-arm64",
-  "win32-x64": "tolkin-win32-x64",
+  "darwin-arm64": "@tolkin/darwin-arm64",
+  "darwin-x64": "@tolkin/darwin-x64",
+  "linux-x64": "@tolkin/linux-x64",
+  "linux-arm64": "@tolkin/linux-arm64",
+  "win32-x64": "@tolkin/win32-x64",
 };
 
 const key = `${process.platform}-${process.arch}`;
@@ -29,7 +29,8 @@ if (!pkg) fail();
 let binPath = null;
 
 // Development mode: sibling platform package in the source tree.
-const devPath = path.join(__dirname, "..", "..", pkg, "bin", binName);
+const folderName = pkg.startsWith("@tolkin/") ? "tolkin-" + pkg.slice("@tolkin/".length) : pkg;
+const devPath = path.join(__dirname, "..", "..", folderName, "bin", binName);
 if (fs.existsSync(devPath)) {
   binPath = devPath;
 } else {
@@ -38,7 +39,7 @@ if (fs.existsSync(devPath)) {
   } catch {
     console.error(`tolkin: could not find the ${pkg} package.`);
     console.error("It ships as an optionalDependency of tolkin; your installer may have skipped it.");
-    console.error("Try reinstalling: npm install tolkin (or bun add tolkin).");
+    console.error("Try reinstalling: npm install @tolkin/cli (or bun add @tolkin/cli).");
     console.error("Supported today: macOS arm64, macOS x64, Linux x64, Linux arm64, and Windows x64.");
     process.exit(1);
   }
