@@ -14,7 +14,7 @@
   },
   "files": ["pkg"],
   "scripts": {
-    "build": "wasm-pack build crates/wasm --target web --out-dir ../../pkg --release",
+    "build": "wasm-pack build crates/wasm --target web --out-dir ../../pkg --release && rm -f ../../pkg/.gitignore",
     "lint:rust": "cargo clippy --all-targets -- -D warnings",
     "test": "cargo test"
   }
