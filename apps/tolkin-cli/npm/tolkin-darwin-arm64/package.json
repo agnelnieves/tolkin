@@ -1,6 +1,6 @@
 {
   "name": "@tolkin/darwin-arm64",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "description": "Tolkin CLI binary for macOS arm64.",
   "license": "MIT",
   "publishConfig": {

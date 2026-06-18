@@ -199,56 +199,56 @@ jobs:
       # owner configured trusted publishers for all six against this workflow
       # file, so every publish step is strict. The only tolerated absence is
       # linux-arm64 when its runner was unavailable (handled in-script).
-      - name: Publish tolkin-darwin-arm64
+      - name: Publish @tolkin/darwin-arm64
         run: |
           V="${{ needs.gate.outputs.local }}"
-          if npm view "tolkin-darwin-arm64@$V" version > /dev/null 2>&1; then
-            echo "tolkin-darwin-arm64@$V already published; skipping."
+          if npm view "@tolkin/darwin-arm64@$V" version > /dev/null 2>&1; then
+            echo "@tolkin/darwin-arm64@$V already published; skipping."
           else
             (cd npm/tolkin-darwin-arm64 && npm publish --access public)
           fi
 
-      - name: Publish tolkin-darwin-x64
+      - name: Publish @tolkin/darwin-x64
         run: |
           V="${{ needs.gate.outputs.local }}"
-          if npm view "tolkin-darwin-x64@$V" version > /dev/null 2>&1; then
-            echo "tolkin-darwin-x64@$V already published; skipping."
+          if npm view "@tolkin/darwin-x64@$V" version > /dev/null 2>&1; then
+            echo "@tolkin/darwin-x64@$V already published; skipping."
           else
             (cd npm/tolkin-darwin-x64 && npm publish --access public)
           fi
 
-      - name: Publish tolkin-linux-x64
+      - name: Publish @tolkin/linux-x64
         run: |
           V="${{ needs.gate.outputs.local }}"
-          if npm view "tolkin-linux-x64@$V" version > /dev/null 2>&1; then
-            echo "tolkin-linux-x64@$V already published; skipping."
+          if npm view "@tolkin/linux-x64@$V" version > /dev/null 2>&1; then
+            echo "@tolkin/linux-x64@$V already published; skipping."
           else
             (cd npm/tolkin-linux-x64 && npm publish --access public)
           fi
 
-      - name: Publish tolkin-linux-arm64 (skips when the arm build was unavailable)
+      - name: Publish @tolkin/linux-arm64 (skips when the arm build was unavailable)
         run: |
           V="${{ needs.gate.outputs.local }}"
           if [ ! -f npm/tolkin-linux-arm64/bin/tolkin ]; then
-            echo "linux-arm64 binary artifact absent (arm runner unavailable or build failed); skipping tolkin-linux-arm64@$V."
-          elif npm view "tolkin-linux-arm64@$V" version > /dev/null 2>&1; then
-            echo "tolkin-linux-arm64@$V already published; skipping."
+            echo "linux-arm64 binary artifact absent (arm runner unavailable or build failed); skipping @tolkin/linux-arm64@$V."
+          elif npm view "@tolkin/linux-arm64@$V" version > /dev/null 2>&1; then
+            echo "@tolkin/linux-arm64@$V already published; skipping."
           else
             (cd npm/tolkin-linux-arm64 && npm publish --access public)
           fi
 
-      - name: Publish tolkin-win32-x64
+      - name: Publish @tolkin/win32-x64
         run: |
           V="${{ needs.gate.outputs.local }}"
           if [ ! -f npm/tolkin-win32-x64/bin/tolkin.exe ]; then
-            echo "win32-x64 binary artifact absent (windows build failed); skipping tolkin-win32-x64@$V."
-          elif npm view "tolkin-win32-x64@$V" version > /dev/null 2>&1; then
-            echo "tolkin-win32-x64@$V already published; skipping."
+            echo "win32-x64 binary artifact absent (windows build failed); skipping @tolkin/win32-x64@$V."
+          elif npm view "@tolkin/win32-x64@$V" version > /dev/null 2>&1; then
+            echo "@tolkin/win32-x64@$V already published; skipping."
           else
             (cd npm/tolkin-win32-x64 && npm publish --access public)
           fi
 
-      - name: Publish tolkin-cli (wrapper, last)
+      - name: Publish @tolkin/cli (wrapper, last)
         run: (cd npm/tolkin && npm publish --access public)
 
       - name: Verify from the registry
@@ -270,16 +270,16 @@ jobs:
             return 1
           }
           # Five packages are hard-required; a miss fails the run.
-          require tolkin-cli
-          for pkg in tolkin-darwin-arm64 tolkin-darwin-x64 tolkin-linux-x64 tolkin-win32-x64; do
+          require @tolkin/cli
+          for pkg in @tolkin/darwin-arm64 @tolkin/darwin-x64 @tolkin/linux-x64 @tolkin/win32-x64; do
             require "$pkg"
           done
           # linux-arm64 stays warning-only: its runner availability varies by
           # plan, and an unavailable runner means a legitimately absent leg.
-          if npm view "tolkin-linux-arm64@$V" version > /dev/null 2>&1; then
-            echo "tolkin-linux-arm64@$V verified."
+          if npm view "@tolkin/linux-arm64@$V" version > /dev/null 2>&1; then
+            echo "@tolkin/linux-arm64@$V verified."
           else
-            echo "::warning::tolkin-linux-arm64@$V is not on the registry (arm runner unavailable this run, or its publish failed)."
+            echo "::warning::@tolkin/linux-arm64@$V is not on the registry (arm runner unavailable this run, or its publish failed)."
           fi
 
   homebrew-release:
