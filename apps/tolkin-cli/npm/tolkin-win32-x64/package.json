@@ -16,5 +16,10 @@
     "bin/tolkin.exe",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agnelnieves/tolkin.git",
+    "directory": "apps/tolkin-cli/npm/tolkin-win32-x64"
+  }
 }
