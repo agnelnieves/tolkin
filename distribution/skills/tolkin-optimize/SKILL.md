@@ -7,7 +7,7 @@ description: |
   footprint", "tolkin optimize loop", "full token audit and fix", "run tolkin and
   fix issues", "end-to-end token savings".
 metadata:
-  version: 0.15.1
+  version: 0.15.2
 ---
 
 # tolkin-optimize
